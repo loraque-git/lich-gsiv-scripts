@@ -1,0 +1,152 @@
+=begin
+
+  Aimed attack at the right arm. Does not change stance.
+
+  Usage:
+    ;ra                     - attack current/best target in the right arm
+    ;ra <name>              - prefer a living NPC whose name matches
+
+       creator: loraque (loraque@gmail.com)
+        author: loraque (loraque@gmail.com)
+          game: Gemstone
+          tags: attack, combat, aim
+      required: Lich >= 5.12.0
+       version: 0.7.0
+
+  changelog:
+    0.7.0 (2026-09-09)
+      lock: kill stale same-name copy after 5s instead of overlapping
+      action: re-check target is still living before the swing
+      creator: loraque (loraque@gmail.com)
+    0.6.0 (2026-09-09)
+      stance: cap attempts; bail if dead/stunned/webbed; re-check target
+    0.5.0 (2026-09-09)
+      waitrt after targeting; waitcastrt?; re-check the same id is still living
+    0.4.0 (2026-09-09)
+      targeting: shared living-foe check; named miss exits; no random sample
+    0.3.0 (2026-09-09)
+      named BEGIN/END blocks: config, lock, waitrt, targeting, stance, action
+    0.2.0 (2026-09-09)
+      EO header and family tags
+      Char.stance instead of checkstance
+      nil-safe GameObj.target; Regexp.escape on name match
+      Script.current.vars[0] for the full argument string
+    0.1.0
+      initial clone
+
+=end
+
+# BEGIN config
+AIM_LOCATION = "right arm"
+STANCE_DANCE = false
+# END config
+
+# BEGIN lock
+LOCK_TIMEOUT = 5.0
+
+elapsed = 0.0
+while (stale = Script.list.find { |s| s.name == Script.current.name && s != Script.current })
+  pause 0.1
+  elapsed += 0.1
+  if elapsed >= LOCK_TIMEOUT
+    stale.kill
+    break
+  end
+end
+# END lock
+
+# BEGIN targeting
+living_foe = lambda { |obj|
+  obj && obj.id &&
+    obj.status !~ /dead|gone/ &&
+    obj.name !~ /^animated /
+}
+
+if dead? || checkstunned || checkwebbed
+  echo "Cannot choose a target right now."
+  exit
+end
+
+manual_input = Script.current.vars[0].to_s.strip
+target_obj = nil
+
+living = []
+seen = {}
+(GameObj.npcs + GameObj.targets).each do |obj|
+  next unless living_foe.call(obj)
+  next if seen[obj.id]
+  seen[obj.id] = true
+  living << obj
+end
+
+if !manual_input.empty?
+  name_re = /#{Regexp.escape(manual_input)}/i
+  target_obj = living.find { |obj| obj.name =~ name_re }
+  unless target_obj
+    echo "No living NPC matching #{manual_input.inspect}."
+    exit
+  end
+else
+  current_target = GameObj.target
+  if living_foe.call(current_target)
+    room_npc = GameObj.npcs.find { |npc| npc.id == current_target.id }
+    target_obj = current_target if room_npc.nil? || living_foe.call(room_npc)
+  end
+  target_obj ||= living.find { |obj| obj.type.to_s =~ /aggro|monster/ }
+  target_obj ||= GameObj.targets.find { |obj| living_foe.call(obj) }
+end
+
+unless living_foe.call(target_obj)
+  echo "No valid living targets found."
+  exit
+end
+
+put "target ##{target_obj.id}" unless GameObj.target&.id == target_obj.id
+# END targeting
+
+# BEGIN waitrt
+waitrt?
+waitcastrt?
+if target_obj.nil? || !target_obj.id ||
+    target_obj.status =~ /dead|gone/ ||
+    target_obj.name =~ /^animated /
+  echo "Target is no longer valid."
+  exit
+end
+# END waitrt
+
+# BEGIN stance
+if STANCE_DANCE
+  stance_tries = 0
+  while Char.stance !~ /^offensive$/i
+    if dead? || checkstunned || checkwebbed
+      echo "Cannot change stance right now."
+      exit
+    end
+    stance_tries += 1
+    if stance_tries > 8
+      echo "Could not reach offensive stance."
+      exit
+    end
+    fput "stance offensive"
+  end
+end
+
+if target_obj.nil? || !target_obj.id ||
+    target_obj.status =~ /dead|gone/ ||
+    target_obj.name =~ /^animated /
+  echo "Target is no longer valid."
+  exit
+end
+# END stance
+
+# BEGIN action
+if target_obj.nil? || !target_obj.id ||
+    target_obj.status =~ /dead|gone/ ||
+    target_obj.name =~ /^animated /
+  echo "Target is no longer valid."
+  exit
+end
+
+fput "attack ##{target_obj.id} #{AIM_LOCATION}"
+# END action

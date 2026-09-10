@@ -1,0 +1,85 @@
+=begin
+
+  Keeps Blink (1215) and Focus Barrier (1216) up. Blink is recast first
+  because it drops on a successful avoidance.
+
+  Recasts wait for roundtime and use Spell#cast (incant + type-ahead retry)
+  so the command is not buried behind combat input. There is no Lich call
+  that inserts in front of the game's type-ahead queue.
+
+  After a cast, waits until Infomon shows the spell active instead of a
+  fixed pause. Prep refusals (can't think clearly, etc.) back off instead
+  of hammering incant.
+
+  Usage:
+    ;monks_keeper            - start
+    ;monks_keeper kill       - stop (or ;kill monks_keeper)
+
+        author: loraque (loraque@gmail.com)
+          game: Gemstone
+          tags: monk, magic, utility
+      required: Lich >= 5.12.0
+       version: 0.3.0
+
+  changelog:
+    0.3.0 (2026-09-09)
+      wait until Spell#active? after a successful cast
+      back off on "can't think clearly enough" and similar prep refusals
+    0.2.0 (2026-09-09)
+      waitcastrt? + waitrt? instead of nonexistent wait_castrt (script was
+        crashing when Blink dropped)
+      Spell#cast instead of nonexistent putbeforerequest
+      Spell.affordable? / Char.mana (mental acuity spends stamina)
+      skip recast while dead, stunned, or webbed
+    0.1.0
+      initial keep-alive loop for 1215/1216
+
+=end
+
+POLL = 0.1
+LOW_ENERGY_PAUSE = 5
+ACTIVE_WAIT = 3.0
+PREP_REFUSED = /
+  can't think clearly enough to prepare a spell|
+  concentrating too intently|
+  unable to do that right now|
+  don't seem to be able to move|
+  All you manage to do is cough up some blood
+/ix
+
+SPELLS = [
+  Spell[1215], # Blink -- drops on a successful avoidance
+  Spell[1216], # Focus Barrier
+].freeze
+
+loop do
+  if dead? || checkstunned || checkwebbed
+    pause POLL
+    next
+  end
+
+  need = SPELLS.find { |spell| !spell.active? }
+  unless need
+    pause POLL
+    next
+  end
+
+  unless need.affordable?
+    echo "Warning: not enough energy to refresh #{need.name} (#{need.num})."
+    pause LOW_ENERGY_PAUSE
+    next
+  end
+
+  waitrt?
+  waitcastrt?
+
+  result = need.cast
+  if result == false || (result.is_a?(String) && result =~ PREP_REFUSED)
+    pause LOW_ENERGY_PAUSE
+    next
+  end
+
+  deadline = Time.now + ACTIVE_WAIT
+  pause POLL until need.active? || Time.now >= deadline
+  pause LOW_ENERGY_PAUSE unless need.active?
+end

@@ -1,0 +1,806 @@
+=begin
+  gemstone_sagapanel.lic
+
+  Saga-only companion panel for Dreaven's ;gemstone-tracker. Reads the
+  same Gemstone Info.json that ;send show uses, plus live hunt globals
+  when the tracker is running. Does not replace the GTK window: Add Jewel
+  and Group still live there.
+
+  REQUIRED: ;gemstone-tracker (Dreaven) must be installed. Keep it running
+  for hunt length, kills-this-hunt, KPM, ETA, and live JSON updates. Without
+  it this panel can only show whatever was last saved to Gemstone Info.json
+  and cannot restart/pause the hunt timer.
+
+  gemstone-tracker is Dreaven's script (in-game: Dreaven, Discord: dreaven,
+  email: LordDreaven@gmail.com). This panel only displays that data.
+
+  Usage:
+    ;gemstone_sagapanel      - Start the panel
+
+  Commands:
+    *gs help                 - This command list in Story
+    *gs char <name>          - Show that character (same as clicking a
+                                roster name). *gs char main for the roster.
+    *gs refresh              - Reload Gemstone Info.json now
+    *gs restart              - Reset the tracker hunt timer (tracker must
+                                be running). Also the Hunt "Restart" row.
+    *gs pause                - Toggle the tracker hunt timer pause
+    *gs status               - Send GEM STATUS and refresh Available/Fixate
+                                lights (also runs on *gs refresh)
+    *gs ignore <field>       - Hide a row (also: click its red triangle)
+    *gs unignore <field>     - Unhide a row
+    *gs unignore all         - Unhide everything
+    *gs ignored              - List hidden rows
+    *gs width <N>            - Value column width (gap before the triangle).
+                                Default 75, same idea as *exp width / *tm width
+    *gs hidearrows           - Toggle red hide-triangles
+    *gs toggle <section>     - Collapse/expand a section (same as clicking
+                                its header). Sections: hunt, char, critters,
+                                roster
+    *gs collapse all         - Collapse every section
+    *gs expand all           - Expand every section
+
+  Tags: saga, frontend, gemstone, panel
+  Requires: gemstone-tracker (Dreaven)
+  Credits: gemstone-tracker by Dreaven
+  Creator: loraque (loraque@gmail.com)
+  Author: loraque (loraque@gmail.com)
+  Version: 0.3.2
+  Recently changed:
+    0.3.2 - Available TRUE/FALSE; Fixate ON/OFF; parse "GEM FIXATE is active until..."
+    0.3.1 - Header credits Dreaven / gemstone-tracker; tracker required
+    0.3.0 - Hunt Restart control; Available/Fixate mock lights from GEM STATUS
+    0.2.0 - Section headers click to collapse/expand; persisted
+    0.1.0 - Initial docked panel from gemstone-tracker JSON / live globals
+=end
+
+no_kill_all
+
+require "json"
+require "yaml"
+require "date"
+
+begin
+  require "tzinfo"
+rescue LoadError
+end
+
+module GemstonePanel
+  extend self
+  include Lich::Common if defined?(Lich::Common)
+
+  ROW_HEIGHT = 18
+  LABEL_LEFT = 2
+  LABEL_WIDTH = 134
+  VALUE_LEFT = 142
+  DEFAULT_VALUE_WIDTH = 75
+  REMOVE_WIDTH = 20
+  REMOVE_ICON = "&#x1F53B;".freeze
+  FIND_RATE = 1500
+  SECOND_THIRD_RATE = 3500
+  DIALOG_ID = "GemstonePanel"
+  SECTION_IDS = %w[hunt char critters roster].freeze
+
+  HUNT_KEYS = %i[restart available fixate tracker hunt_length hunt_kills kpm remaining eta next_pct cumul_pct].freeze
+  UNK = "?".freeze
+  ELIGIBLE_RX = /You are eligible to find Gemstones/i
+  INELIGIBLE_RX = /not eligible to find Gemstones|ineligible to find Gemstones|unable to find (any more )?Gemstones/i
+  FIXATE_ON_RX = /GEM FIXATE is active|under the effects of GEM FIXATE/i
+  FIXATE_OFF_RX = /GEM FIXATE is not active|not under the effects of GEM FIXATE/i
+  CHAR_KEYS = %i[character total_kills month_gems week_found last_when last_on last_kills last_rarity last_props].freeze
+
+  class << self
+    attr_accessor :ignored, :value_width, :hide_arrows, :selected_char, :data, :file_mtime, :collapsed
+    attr_accessor :gem_eligible, :gem_fixated, :status_requested
+  end
+
+  def self.remove_left
+    VALUE_LEFT + value_width + 2
+  end
+
+  def self.now
+    if defined?(TZInfo::Timezone)
+      TZInfo::Timezone.get("America/New_York").now
+    else
+      Time.now
+    end
+  end
+
+  def self.data_file
+    base = defined?(LICH_DIR) ? LICH_DIR : Dir.pwd
+    File.join(base, "Gemstone Info.json")
+  end
+
+  def self.settings_path
+    base_dir = "#{$data_dir}#{XMLData.game}/#{Char.name}"
+    Dir.mkdir("#{$data_dir}#{XMLData.game}") unless File.exist?("#{$data_dir}#{XMLData.game}")
+    Dir.mkdir(base_dir) unless File.exist?(base_dir)
+    File.join(base_dir, "lichwindows.yaml")
+  end
+
+  def self.load_settings
+    filename = settings_path
+    settings_hash = File.exist?(filename) ? YAML.load_file(filename) : {}
+    settings_hash = {} unless settings_hash.is_a?(Hash)
+    settings_hash["gemstone"] = {} unless settings_hash["gemstone"].is_a?(Hash)
+    gs = settings_hash["gemstone"]
+    gs["ignored"] = Array(gs["ignored"]).map(&:to_s).uniq
+    width = gs["value_width"].to_i
+    gs["value_width"] = width.positive? ? width : DEFAULT_VALUE_WIDTH
+    gs["hide_arrows"] = !!gs["hide_arrows"]
+    gs["selected_char"] = gs["selected_char"].to_s
+    gs["collapsed"] = Array(gs["collapsed"]).map(&:to_s) & SECTION_IDS
+    settings_hash
+  end
+
+  def self.save_settings(settings)
+    File.write(settings_path, settings.to_yaml)
+  end
+
+  def self.persist!
+    settings = load_settings
+    settings["gemstone"]["ignored"] = ignored
+    settings["gemstone"]["value_width"] = value_width
+    settings["gemstone"]["hide_arrows"] = hide_arrows
+    settings["gemstone"]["selected_char"] = selected_char.to_s
+    settings["gemstone"]["collapsed"] = collapsed
+    save_settings(settings)
+  end
+
+  def self.set_value_width!(width)
+    return false unless width.positive?
+
+    self.value_width = width
+    persist!
+    true
+  end
+
+  def self.toggle_hide_arrows!
+    self.hide_arrows = !hide_arrows
+    persist!
+    hide_arrows
+  end
+
+  def self.collapsed?(id)
+    collapsed.include?(id.to_s)
+  end
+
+  def self.toggle_collapsed!(id)
+    id = id.to_s.downcase
+    return nil unless SECTION_IDS.include?(id)
+
+    if collapsed.include?(id)
+      collapsed.delete(id)
+    else
+      collapsed << id
+    end
+    persist!
+    collapsed?(id)
+  end
+
+  def self.set_all_collapsed!(yes)
+    self.collapsed = yes ? SECTION_IDS.dup : []
+    persist!
+  end
+
+  def self.add_ignored!(key)
+    key = key.to_s
+    return false if ignored.include?(key)
+
+    ignored << key
+    persist!
+    true
+  end
+
+  def self.remove_ignored!(key)
+    key = key.to_s
+    return false unless ignored.include?(key)
+
+    ignored.delete(key)
+    persist!
+    true
+  end
+
+  def self.unignore_all!
+    ignored.clear
+    persist!
+  end
+
+  def self.sanitize_xml(value)
+    value.to_s.gsub("&", "&amp;").gsub("<", "&lt;").gsub(">", "&gt;").gsub("'", "&apos;").gsub('"', "&quot;")
+  end
+
+  def self.tracker_running?
+    Script.running?("gemstone-tracker")
+  end
+
+  def self.observe_status(server_string)
+    line = server_string.to_s.gsub(/<[^>]+>/, " ")
+    if line =~ ELIGIBLE_RX
+      self.gem_eligible = true
+    elsif line =~ INELIGIBLE_RX
+      self.gem_eligible = false
+      self.gem_fixated = false
+    end
+    if line =~ FIXATE_ON_RX
+      self.gem_fixated = true
+    elsif line =~ FIXATE_OFF_RX
+      self.gem_fixated = false
+    end
+  end
+
+  def self.inferred_eligible?
+    name = viewing_main? ? looter_name : selected_char
+    return nil if name.to_s.empty? || characters[name].nil?
+
+    !(found_this_week?(name) || month_gems_for(name) >= 3)
+  end
+
+  def self.available_lit?
+    gem_eligible.nil? ? inferred_eligible? : gem_eligible
+  end
+
+  def self.load_data!(force: false)
+    if tracker_running? && defined?($gemstone_tracker_gemstone_data) && $gemstone_tracker_gemstone_data.is_a?(Hash)
+      self.data = $gemstone_tracker_gemstone_data
+      return data
+    end
+
+    path = data_file
+    unless File.exist?(path)
+      self.data = {}
+      return data
+    end
+
+    mtime = File.mtime(path).to_f
+    if !force && data.is_a?(Hash) && !data.empty? && file_mtime == mtime
+      return data
+    end
+
+    parsed = JSON.parse(File.read(path))
+    self.data = parsed.is_a?(Hash) ? parsed : {}
+    self.file_mtime = mtime
+    data
+  rescue StandardError
+    self.data = {} unless data.is_a?(Hash)
+    data
+  end
+
+  def self.characters
+    info = data.dig("Character Info")
+    info.is_a?(Hash) ? info : {}
+  end
+
+  def self.resolve_char(name)
+    name = name.to_s.strip
+    return "Main" if name.empty? || name =~ /^main$/i
+
+    characters.keys.find { |n| n.casecmp?(name) } || name
+  end
+
+  def self.set_char!(name)
+    self.selected_char = resolve_char(name)
+    persist!
+    selected_char
+  end
+
+  def self.viewing_main?
+    selected_char.to_s.empty? || selected_char.to_s =~ /^main$/i
+  end
+
+  def self.char_hash
+    return {} if viewing_main?
+
+    h = characters[selected_char]
+    h.is_a?(Hash) ? h : {}
+  end
+
+  def self.critter_kills
+    kills = char_hash["Critter Kills"]
+    kills.is_a?(Hash) ? kills : {}
+  end
+
+  def self.gem_finds
+    finds = char_hash["Gemstone Finds"]
+    finds.is_a?(Hash) ? finds : {}
+  end
+
+  def self.total_kills_for(name)
+    kills = characters.dig(name, "Critter Kills")
+    return 0 unless kills.is_a?(Hash)
+
+    kills.values.sum { |n| n.to_i }
+  end
+
+  def self.month_gems_for(name)
+    finds = characters.dig(name, "Gemstone Finds")
+    return 0 unless finds.is_a?(Hash)
+
+    month = now.month
+    finds.to_a.last(3).count do |date_key, _|
+      date_key.to_s.split("/")[0].to_i == month
+    end
+  end
+
+  def self.last_find(name)
+    finds = characters.dig(name, "Gemstone Finds")
+    return nil unless finds.is_a?(Hash) && !finds.empty?
+
+    key = finds.keys.last
+    rec = finds[key]
+    rec.is_a?(Hash) ? rec.merge("Date Key" => key) : nil
+  end
+
+  def self.found_this_week?(name)
+    rec = last_find(name)
+    return false unless rec
+
+    parts = rec["Date Key"].to_s.split("/").map(&:to_i)
+    return false unless parts.length == 3
+
+    month, day, year = parts
+    found = Date.new(year, month, day)
+    today = now.to_date
+    sunday = today - today.wday
+    (sunday..(sunday + 6)).cover?(found)
+  rescue ArgumentError
+    false
+  end
+
+  def self.pity(total_kills, gems_this_month)
+    first = FIND_RATE
+    second = SECOND_THIRD_RATE
+    if gems_this_month.to_i <= 0
+      first = total_kills + 100 if total_kills >= first
+      remaining = [first - total_kills, 0].max
+      next_pct = remaining.positive? ? ((1.0 / remaining) * 100).round(3) : 100.0
+      cumul = first.positive? ? ((total_kills.to_f / first) * 100).round(2) : 0.0
+      { remaining: remaining, next_pct: next_pct, cumul: cumul }
+    else
+      second = total_kills + 100 if total_kills >= second
+      remaining = [second - total_kills, 0].max
+      x = 1.0 / FIND_RATE
+      chance = 1 - (1 - x)**[total_kills, 0].max
+      { remaining: remaining, next_pct: ((1.0 / FIND_RATE) * 100).round(3), cumul: (chance * 100).round(3) }
+    end
+  end
+
+  def self.fmt_hms(seconds)
+    seconds = seconds.to_i
+    seconds = 0 if seconds.negative?
+    format("%02d:%02d:%02d", seconds / 3600, (seconds % 3600) / 60, seconds % 60)
+  end
+
+  def self.hunt_stats
+    return nil unless tracker_running?
+    return nil unless defined?($gemstone_tracker_start_time) && $gemstone_tracker_start_time
+
+    pause = 0
+    if defined?($gemstone_tracker_info) && $gemstone_tracker_info.is_a?(Hash)
+      pause = $gemstone_tracker_info["Pause Seconds"].to_f
+    end
+    seconds = (now - $gemstone_tracker_start_time) - pause
+    seconds = 0 if seconds.negative?
+    kills = defined?($gemstone_tracker_kills_this_hunt) ? $gemstone_tracker_kills_this_hunt.to_i : 0
+    paused = defined?($gemstone_tracker_pause_timer) && !$gemstone_tracker_pause_timer.nil?
+    kps = seconds > 1 && kills.positive? ? kills / seconds.to_f : 0.0
+    { seconds: seconds, kills: kills, kpm: (kps * 60).round(2), kps: kps, paused: paused }
+  end
+
+  def self.looter_name
+    if tracker_running? && defined?($gemstone_tracker_info) && $gemstone_tracker_info.is_a?(Hash)
+      name = $gemstone_tracker_info["Current Looter"]
+      return name if name.to_s != ""
+    end
+    viewing_main? ? Char.name : selected_char
+  end
+
+  def self.row_value(key)
+    hunt = hunt_stats
+    name = viewing_main? ? looter_name : selected_char
+    total = total_kills_for(name)
+    gems = month_gems_for(name)
+    pity_h = pity(total, gems)
+    rec = last_find(name)
+
+    case key
+    when :restart
+      tracker_running? ? "click" : "need tracker"
+    when :available
+      case available_lit?
+      when true then "TRUE"
+      when false then "FALSE"
+      else UNK
+      end
+    when :fixate
+      case gem_fixated
+      when true then "ON"
+      when false then "OFF"
+      else UNK
+      end
+    when :tracker
+      tracker_running? ? "running" : "not running -- start ;gemstone-tracker"
+    when :hunt_length
+      return "--" unless hunt
+
+      hunt[:paused] ? "#{fmt_hms(hunt[:seconds])} (paused)" : fmt_hms(hunt[:seconds])
+    when :hunt_kills
+      hunt ? hunt[:kills].to_s : "--"
+    when :kpm
+      hunt && hunt[:kills].positive? ? hunt[:kpm].to_s : "--"
+    when :remaining
+      pity_h[:remaining].to_s
+    when :eta
+      return "--" unless hunt && hunt[:kps].positive?
+
+      fmt_hms(pity_h[:remaining] / hunt[:kps])
+    when :next_pct
+      "#{pity_h[:next_pct]}%"
+    when :cumul_pct
+      "#{pity_h[:cumul]}%"
+    when :character
+      viewing_main? ? "Main (all characters)" : selected_char.to_s
+    when :total_kills
+      viewing_main? ? "--" : total.to_s
+    when :month_gems
+      viewing_main? ? "--" : gems.to_s
+    when :week_found
+      viewing_main? ? "--" : (found_this_week?(name) ? "yes" : "no")
+    when :last_when
+      rec ? rec["Date Key"].to_s : "--"
+    when :last_on
+      rec ? rec["Critter Found On"].to_s : "--"
+    when :last_kills
+      rec ? rec["Total Kills"].to_s : "--"
+    when :last_rarity
+      rec ? (rec["Gemstone Rarity"] || rec["Gemstone Found This Month"] || "--").to_s : "--"
+    when :last_props
+      return "--" unless rec
+
+      props = (1..3).map { |i| rec["Property #{%w[One Two Three][i - 1]} Text"] }.compact.reject { |t| t.to_s.empty? || t.to_s == "None" }
+      props.empty? ? "--" : props.join(" / ")
+    else
+      "--"
+    end
+  end
+
+  def self.row_label(key)
+    {
+      restart: "Restart hunt",
+      available: "Gemstone available",
+      fixate: "Fixate",
+      tracker: "Tracker",
+      hunt_length: "Hunt length",
+      hunt_kills: "Hunt kills",
+      kpm: "Kills/min",
+      remaining: "Kills remaining",
+      eta: "ETA",
+      next_pct: "Next kill",
+      cumul_pct: "Cumulative",
+      character: "Character",
+      total_kills: "Total kills",
+      month_gems: "Gems this month",
+      week_found: "Found this week",
+      last_when: "Last find",
+      last_on: "Found on",
+      last_kills: "Kills at find",
+      last_rarity: "Rarity",
+      last_props: "Properties"
+    }[key] || key.to_s
+  end
+
+  def self.emit_row(out, id, label, value, cmd, top, triangle_cmd)
+    out << "<label id='gs_lbl_#{id}' value='#{sanitize_xml("#{label}:")}' justify='left' left='#{LABEL_LEFT}' top='#{top}' width='#{LABEL_WIDTH}' height='#{ROW_HEIGHT}' />"
+    if cmd
+      out << "<link id='gs_val_#{id}' value='#{sanitize_xml(value)}' cmd='#{sanitize_xml(cmd)}' justify='left' left='#{VALUE_LEFT}' top='#{top}' width='#{value_width}' height='#{ROW_HEIGHT}' />"
+    else
+      out << "<label id='gs_val_#{id}' value='#{sanitize_xml(value)}' justify='left' left='#{VALUE_LEFT}' top='#{top}' width='#{value_width}' height='#{ROW_HEIGHT}' />"
+    end
+    unless hide_arrows
+      out << "<link id='gs_x_#{id}' value='#{REMOVE_ICON}' cmd='#{sanitize_xml(triangle_cmd)}' justify='left' left='#{remove_left}' top='#{top}' width='#{REMOVE_WIDTH}' height='#{ROW_HEIGHT}' />"
+    end
+  end
+
+  def self.emit_header(out, id, title, top)
+    mark = collapsed?(id) ? "[+]" : "[-]"
+    out << "<link id='gs_hdr_#{id}' value='#{sanitize_xml("-- #{mark} #{title} --")}' cmd='*gs toggle #{id}' justify='left' left='0' top='#{top}' width='#{LABEL_WIDTH + value_width + REMOVE_WIDTH}' height='#{ROW_HEIGHT}' />"
+  end
+
+  def self.build_dialog
+    load_data!
+    out = String.new("<dialogData id='#{DIALOG_ID}' clear='t'>")
+    top = 0
+
+    unless ignored.include?("section_hunt")
+      emit_header(out, "hunt", "Hunt", top)
+      top += ROW_HEIGHT
+      unless collapsed?("hunt")
+        HUNT_KEYS.each do |key|
+          next if ignored.include?(key.to_s)
+
+          cmd = case key
+                when :restart then "*gs restart"
+                when :available, :fixate, :tracker then "*gs status"
+                end
+          emit_row(out, key, row_label(key), row_value(key), cmd, top, "*gs ignore #{key}")
+          top += ROW_HEIGHT
+        end
+        top += ROW_HEIGHT unless ignored.include?("spacer_hunt")
+      end
+    end
+
+    unless ignored.include?("section_char")
+      emit_header(out, "char", "Character", top)
+      top += ROW_HEIGHT
+      unless collapsed?("char")
+        CHAR_KEYS.each do |key|
+          next if ignored.include?(key.to_s)
+          next if viewing_main? && %i[total_kills month_gems week_found last_when last_on last_kills last_rarity last_props].include?(key)
+
+          cmd = (key == :character ? "*gs char main" : nil)
+          emit_row(out, key, row_label(key), row_value(key), cmd, top, "*gs ignore #{key}")
+          top += ROW_HEIGHT
+        end
+        top += ROW_HEIGHT unless ignored.include?("spacer_char")
+      end
+    end
+
+    unless viewing_main? || ignored.include?("section_critters")
+      kills = critter_kills.sort_by { |_, n| -n.to_i }
+      unless kills.empty?
+        emit_header(out, "critters", "Critter kills", top)
+        top += ROW_HEIGHT
+        unless collapsed?("critters")
+          total = 0
+          kills.each do |critter, count|
+            slug = critter_key(critter)
+            total += count.to_i
+            next if ignored.include?(slug)
+
+            emit_row(out, slug, critter, count.to_s, nil, top, "*gs ignore #{slug}")
+            top += ROW_HEIGHT
+          end
+          unless ignored.include?("critter_total")
+            emit_row(out, "critter_total", "Total", total.to_s, nil, top, "*gs ignore critter_total")
+            top += ROW_HEIGHT
+          end
+          top += ROW_HEIGHT unless ignored.include?("spacer_critters")
+        end
+      end
+    end
+
+    unless ignored.include?("section_roster")
+      names = characters.keys.sort
+      unless names.empty?
+        emit_header(out, "roster", "Roster (click a name)", top)
+        top += ROW_HEIGHT
+        unless collapsed?("roster")
+          names.each do |name|
+            slug = "roster_#{name.downcase}"
+            next if ignored.include?(slug)
+
+            week = found_this_week?(name) ? "week" : "-"
+            value = "#{total_kills_for(name)} kills, #{month_gems_for(name)}/mo, #{week}"
+            emit_row(out, slug, name, value, "*gs char #{name}", top, "*gs ignore #{slug}")
+            top += ROW_HEIGHT
+          end
+        end
+      end
+    end
+
+    out << "</dialogData>"
+    out
+  end
+
+  def self.critter_key(name)
+    "c_#{name.to_s.downcase.gsub(/[^a-z0-9]+/, '_')}".sub(/_+\z/, "")
+  end
+
+  def self.snapshot
+    load_data!
+    hunt = hunt_stats
+    [
+      file_mtime,
+      selected_char,
+      ignored.sort,
+      hide_arrows,
+      collapsed.sort,
+      value_width,
+      tracker_running?,
+      gem_eligible,
+      gem_fixated,
+      hunt && [hunt[:seconds].to_i, hunt[:kills], hunt[:paused]],
+      characters.keys.sort,
+      viewing_main? ? nil : [total_kills_for(selected_char), month_gems_for(selected_char), last_find(selected_char)]
+    ]
+  end
+
+  def self.open_dialog_xml
+    "<closeDialog id='#{DIALOG_ID}'/><openDialog type='dynamic' id='#{DIALOG_ID}' title='Gemstones' target='#{DIALOG_ID}' scroll='manual' location='main' resident='true'><dialogData id='#{DIALOG_ID}'></dialogData></openDialog>"
+  end
+
+  def self.help_text
+    [
+      "Gemstone Panel commands:",
+      "  *gs char <name>     show that character (*gs char main for roster)",
+      "  *gs refresh         reload Gemstone Info.json",
+      "  *gs restart         reset hunt timer (or click Restart hunt)",
+      "  *gs pause           toggle hunt timer pause",
+      "  *gs status          GEM STATUS -> Available/Fixate lights",
+      "  *gs ignore <field>  hide a row (or click the red triangle)",
+      "  *gs unignore <field>|all",
+      "  *gs ignored         list hidden rows",
+      "  *gs width <N>       value column width",
+      "  *gs hidearrows      toggle red triangles",
+      "  *gs toggle <section>  collapse/expand (hunt, char, critters, roster)",
+      "  *gs collapse all / *gs expand all"
+    ]
+  end
+end
+
+@gs_settings = GemstonePanel.load_settings
+GemstonePanel.ignored = @gs_settings["gemstone"]["ignored"]
+GemstonePanel.value_width = @gs_settings["gemstone"]["value_width"]
+GemstonePanel.hide_arrows = @gs_settings["gemstone"]["hide_arrows"]
+GemstonePanel.collapsed = @gs_settings["gemstone"]["collapsed"]
+GemstonePanel.gem_eligible = nil
+GemstonePanel.gem_fixated = nil
+GemstonePanel.status_requested = true
+GemstonePanel.data = {}
+GemstonePanel.file_mtime = nil
+GemstonePanel.load_data!(force: true)
+
+saved = @gs_settings["gemstone"]["selected_char"].to_s
+if saved != "" && (saved =~ /^main$/i || GemstonePanel.characters.keys.any? { |n| n.casecmp?(saved) })
+  GemstonePanel.selected_char = GemstonePanel.resolve_char(saved)
+elsif GemstonePanel.characters.keys.any? { |n| n.casecmp?(Char.name) }
+  GemstonePanel.selected_char = GemstonePanel.resolve_char(Char.name)
+else
+  GemstonePanel.selected_char = "Main"
+end
+
+gs_downstream_hook_id = "#{Script.current.name}_downstream"
+DownstreamHook.remove(gs_downstream_hook_id) rescue nil
+DownstreamHook.add(gs_downstream_hook_id, proc do |server_string|
+  GemstonePanel.observe_status(server_string)
+  server_string
+end)
+
+gs_upstream_hook_id = "#{Script.current.name}_upstream"
+UpstreamHook.remove(gs_upstream_hook_id) rescue nil
+UpstreamHook.add(gs_upstream_hook_id, proc do |command|
+  case command.strip
+  when /\*gs\s+help\s*\z/i, /\*gs\s*\z/i
+    GemstonePanel.help_text.each { |line| respond line }
+    nil
+  when /\*gs\s+char\s+(.+)\z/i
+    name = GemstonePanel.set_char!(Regexp.last_match(1))
+    _respond(GemstonePanel.build_dialog)
+    respond "Gemstone Panel: showing #{name}"
+    nil
+  when /\*gs\s+refresh\s*\z/i
+    GemstonePanel.load_data!(force: true)
+    GemstonePanel.status_requested = true
+    _respond(GemstonePanel.build_dialog)
+    respond "Gemstone Panel: reloaded #{File.basename(GemstonePanel.data_file)}"
+    nil
+  when /\*gs\s+status\s*\z/i
+    GemstonePanel.status_requested = true
+    respond "Gemstone Panel: checking GEM STATUS..."
+    nil
+  when /\*gs\s+restart\s*\z/i
+    unless GemstonePanel.tracker_running?
+      respond "Gemstone Panel: ;gemstone-tracker is not running"
+      next(nil)
+    end
+    $gemstone_tracker_restart_timer = true
+    respond "Gemstone Panel: hunt timer restart requested"
+    nil
+  when /\*gs\s+pause\s*\z/i
+    unless GemstonePanel.tracker_running?
+      respond "Gemstone Panel: ;gemstone-tracker is not running"
+      next(nil)
+    end
+    if $gemstone_tracker_pause_timer
+      $gemstone_tracker_pause_timer = nil
+      respond "Gemstone Panel: hunt timer resumed"
+    else
+      $gemstone_tracker_pause_timer = true
+      respond "Gemstone Panel: hunt timer paused"
+    end
+    nil
+  when /\*gs\s+ignore\s+(\S+)\s*\z/i
+    key = Regexp.last_match(1)
+    if GemstonePanel.add_ignored!(key)
+      _respond(GemstonePanel.build_dialog)
+      respond "Gemstone Panel: hiding '#{key}'"
+    else
+      respond "Gemstone Panel: already hiding '#{key}'"
+    end
+    nil
+  when /\*gs\s+unignore\s+all\s*\z/i
+    GemstonePanel.unignore_all!
+    _respond(GemstonePanel.build_dialog)
+    respond "Gemstone Panel: no longer hiding anything"
+    nil
+  when /\*gs\s+unignore\s+(\S+)\s*\z/i
+    key = Regexp.last_match(1)
+    if GemstonePanel.remove_ignored!(key)
+      _respond(GemstonePanel.build_dialog)
+      respond "Gemstone Panel: no longer hiding '#{key}'"
+    else
+      respond "Gemstone Panel: wasn't hiding '#{key}'"
+    end
+    nil
+  when /\*gs\s+ignored\s*\z/i
+    if GemstonePanel.ignored.empty?
+      respond "Gemstone Panel: nothing hidden"
+    else
+      respond "Gemstone Panel hidden fields: #{GemstonePanel.ignored.sort.join(', ')}"
+    end
+    nil
+  when /\*gs\s+width\s+(\d+)\s*\z/i
+    width = Regexp.last_match(1).to_i
+    if GemstonePanel.set_value_width!(width)
+      _respond(GemstonePanel.build_dialog)
+      respond "Gemstone Panel: value column width set to #{width}"
+    else
+      respond "Gemstone Panel: width must be a positive number"
+    end
+    nil
+  when /\*gs\s+hidearrows\s*\z/i
+    hidden = GemstonePanel.toggle_hide_arrows!
+    _respond(GemstonePanel.build_dialog)
+    respond "Gemstone Panel: hide arrows #{hidden ? 'ON' : 'OFF'}"
+    nil
+  when /\*gs\s+toggle\s+(\S+)\s*\z/i
+    id = Regexp.last_match(1)
+    state = GemstonePanel.toggle_collapsed!(id)
+    if state.nil?
+      respond "Gemstone Panel: unknown section '#{id}' (hunt, char, critters, roster)"
+    else
+      _respond(GemstonePanel.build_dialog)
+    end
+    nil
+  when /\*gs\s+collapse\s+all\s*\z/i
+    GemstonePanel.set_all_collapsed!(true)
+    _respond(GemstonePanel.build_dialog)
+    nil
+  when /\*gs\s+expand\s+all\s*\z/i
+    GemstonePanel.set_all_collapsed!(false)
+    _respond(GemstonePanel.build_dialog)
+    nil
+  else
+    command
+  end
+end)
+
+_respond(GemstonePanel.open_dialog_xml)
+_respond(GemstonePanel.build_dialog)
+
+before_dying do
+  UpstreamHook.remove(gs_upstream_hook_id) rescue nil
+  DownstreamHook.remove(gs_downstream_hook_id) rescue nil
+  _respond("<closeDialog id='#{GemstonePanel::DIALOG_ID}'/>")
+end
+
+echo "Gemstone Panel is active. Companion to Dreaven's ;gemstone-tracker. *gs help for commands."
+unless GemstonePanel.tracker_running?
+  echo "Gemstone Panel: ;gemstone-tracker is not running. Start it for live hunt stats (required)."
+end
+
+@gs_last_snapshot = GemstonePanel.snapshot
+
+loop do
+  if GemstonePanel.status_requested
+    GemstonePanel.status_requested = false
+    put "gem status"
+  end
+
+  snapshot = GemstonePanel.snapshot
+  if snapshot != @gs_last_snapshot
+    @gs_last_snapshot = snapshot
+    _respond(GemstonePanel.build_dialog)
+  end
+  pause 1
+end
