@@ -48,6 +48,23 @@ cp lich-gsiv-scripts/scripts/eloot-patched.lic \
 
 For the eloot loot-stance patch specifically, read `scripts/eloot-loot-stance.README.md`.
 
+
+## Auto-sync (this machine)
+
+Live copies stay under `/home/loraque/Lich5/`. On this host they are mirrored into this repo automatically:
+
+- **On-save:** user service `lich-gsiv-sync-watch.service` watches `Lich5/scripts` and `Lich5/tools/saga-log-summary`, debounces ~8s, then commits and pushes.
+- **Nightly catch-all:** `lich-gsiv-sync.timer` runs at 03:45 local.
+
+Manual run:
+
+```bash
+~/Projects/lich-gsiv-scripts/tools/sync-from-live.sh
+systemctl --user status lich-gsiv-sync-watch.service lich-gsiv-sync.timer
+```
+
+What gets synced: every `Lich5/scripts` file that is **not** stock Elanthia-Online / Tillmen core (`go2`, `eloot`, `infomon`, `repository`, …), plus patched forks (`*-patched`, `eloot-loot-stance.*`) and `tools/saga-log-summary`. Backups (`*Copy*`, `*(1)*`, machine-specific `*HAL_5000*`) are skipped.
+
 ## Authorship
 
 - Scripts signed `loraque` are originals from this account.

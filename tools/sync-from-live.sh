@@ -139,8 +139,8 @@ sync_tools() {
 
 commit_and_push() {
   git -C "$REPO" add -A scripts tools/saga-log-summary
-  # Keep sync script itself tracked if edited
-  git -C "$REPO" add tools/sync-from-live.sh 2>/dev/null || true
+  # Keep sync helpers tracked
+  git -C "$REPO" add tools/sync-from-live.sh tools/sync-watch.sh 2>/dev/null || true
 
   if git -C "$REPO" diff --cached --quiet; then
     echo "lich-gsiv-sync: nothing to commit"
