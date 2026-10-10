@@ -27,4 +27,3 @@ if Script.running?("alsohere_sagapanel")
 else
   Script.start("alsohere_sagapanel")
 end
-# lich-gsiv-sync: ok
