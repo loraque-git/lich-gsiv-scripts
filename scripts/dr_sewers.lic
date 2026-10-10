@@ -1,0 +1,266 @@
+#dr_sewers_new.lic
+=begin
+author: Alastir
+date: 6/14/18
+update: 2/26/22
+- Removed auto-chat to merchant.
+- Added counter for bloodscrip per sewer run, and per script run.
+- Shows how many searches left per sewer run.
+update: 8/15/23
+- Changed from bookletsack to eventsack for script uniformity.
+update: 8/8/25
+- Removed use of booklets.  Changed messaging to use built in Lich::Messaging.
+update: 8/8/25
+- Converted to UIDs for instance support of Shattered/Platinum
+
+This script will search the sewers and stow items.
+
+ Step 1:  Make sure your variables are configured.
+ - ;vars set lootsack=container (The container where your goodies will be stored)
+ - ;vars set eventsack=container (The container where your booklets or vouchers are stored)
+ - ;vars set keepsack=container (The container where your special finds will be stored - rods, swatches, dust, threads, stones)
+ 
+ Step 2:  ;dr_sewers
+ Step 3:  profit
+ 
+=end
+
+#Script.run('repository', 'set-updatable dr_sewers.lic')
+echo 'This script provided by Alastir'
+echo ''
+echo 'Variables used:'
+echo 'Vars.lootsack = Where treasure is stored'
+echo "Vars.lootsack is set to #{Vars.lootsack}"
+echo 'You can change this by typing -- ;vars set lootsack=container'
+echo ''
+echo 'Vars.keepsack = Where special drops are stored'
+echo "Vars.keepsack is set to #{Vars.keepsack}"
+echo 'You can change this by typing -- ;vars set keepsack=container'
+echo ''
+echo 'Bloodscrip will be automatically redeemed into your TICKET BALANCE.'
+echo ''
+echo ';unpause dr_sewers if you are satisfied with this setup.'
+pause_script
+
+def stand
+	if not standing?
+		fput 'stance offensive'
+		fput 'stand'
+	end
+end
+
+def start
+	if percentencumbrance > 50
+		echo "You're carrying too much stuff, lighten up!"
+		echo "You're carrying too much stuff, lighten up!"
+		echo "You're carrying too much stuff, lighten up!"
+		echo "You're carrying too much stuff, lighten up!"
+		echo "You're carrying too much stuff, lighten up!"
+		Script.pause ('dr_sewers')
+	end
+
+  result = dothistimeout('go grate', 5, /You need to redeem a stamped voucher or booklet to get inside the sewers.|The tunnel sweeper accepts your stamped voucher and says,/)
+  if result =~ /The tunnel sweeper accepts your stamped voucher and says,/
+    stand
+		move up
+		move up
+		move out
+		
+		$dr_sewers_start_time = Time.now
+	
+		$dr_sewers_total = 0
+		$dr_sewers_knocks = 0
+		$dr_sewers_knocks_left = 10
+	elsif result =~ /You need to redeem a stamped voucher or booklet to get inside the sewers./
+    echo 'Out of booklets!'
+		kill_script ('dr_sewers')
+	end
+end
+
+def searchsewers
+	loop {
+  if checkright and checkleft
+    echo 'Your hands are full, why are your hands full?!?!?'
+    echo 'Figure it out, and ;unpause dr_sewers when you fix yourself.'
+    Script.pause ('dr_sewers')
+	end
+
+	if XMLData.room_name == '[Bloodriven Village, Cesspool]'
+		break
+	else
+	result = dothistimeout('search', 5, /You notice (.*) who is quite obviously attempting to remain hidden.|You search around and find (\d+) bloodscrip\!|You search around and find 10 bonus bloodscrip\, which you pocket\!|You search around and find a cache of ([\d,]+) bloodscrip, which you pocket\!|You search around and find a (.*) crystal\!|You search around and find a flat etched stone\!|You search around the area and find (.*) rat\!|You search around and find an odd gem\!|You search around and find (.*)\!|You've recently searched|As you begin to search the area\, a wave of sewage|You search around the area and find a small rat, but it scurries off before you can catch it\!|You don't find anything of interest here.|Thick beads of phosphorescent slime dribble from the ceiling and land in a shallow puddle of glowing muck./)
+		if result =~ /You notice (.*) who is quite obviously attempting to remain hidden./
+			echo 'Something went wrong!'
+
+    elsif result =~ /Thick beads of phosphorescent slime dribble from the ceiling and land in a shallow puddle of glowing muck./
+      look_result = dothistimeout('look', 5, /Obvious exits:/)
+      dirs = look_result.gsub("Obvious exits:", "").split(", ")
+      move(dirs.sample)
+
+		elsif result =~ /You search around and find (\d+) bloodscrip\, which you pocket\!/
+			$dr_sewers_knocks_left -= 1
+			$dr_sewers_bloodscrip = $1.to_i
+			$dr_sewers_total = $dr_sewers_total + $dr_sewers_bloodscrip
+      Lich::Messaging.stream_window("Found #{$1} bloodscrip. (#{$dr_sewers_knocks_left})", "loot")
+			waitrt?
+      
+		elsif result =~ /You search around and find (\d+) bonus bloodscrip, which you pocket!/
+			$dr_sewers_bloodscrip = $1.to_i
+			$dr_sewers_total = $dr_sewers_total + $dr_sewers_bloodscrip
+      Lich::Messaging.stream_window("Found #{$1} bloodscrip. (#{$dr_sewers_knocks_left})", "loot")
+			waitrt?
+      
+		elsif result =~ /You search around and find a cache of ([\d,]+) bloodscrip, which you pocket\!/
+			$dr_sewers_knocks_left -= 1
+      Lich::Messaging.stream_window("Found a cache of bloodscrip worth #{$+}!  (#{$dr_sewers_knocks_left})", "loot")
+			echo '* Congrats!!  You won a cache of bloodscrip!'
+			echo '* Congrats!!  You won a cache of bloodscrip!'
+			echo '* Congrats!!  You won a cache of bloodscrip!'
+			echo '* Congrats!!  You won a cache of bloodscrip!'
+			echo '* Congrats!!  You won a cache of bloodscrip!'
+			#echo "* ;unpause dr_sewers when you're ready to continue!"
+			#Script.pause ('dr_sewers')
+			waitrt?
+      
+		elsif result =~ /You search around and find a (.*) crystal\!/
+      Lich::Messaging.stream_window("Found a crystal for the moonshard pendant.", "loot")
+			echo '* Congrats!!  You won a potential bloodrune!'
+			echo '* You can read the crystal (once) or look at it to see letters/symbols!'
+			echo "* You can then go to the following link to see which one you've won."
+			echo '* https://gswiki.play.net/MoonShard_pendant *'
+			echo '* Congrats!!  You won a potential bloodrune!'
+			waitrt?
+			fput "put my stone in my #{Vars.lootsack}"
+      
+		elsif result =~ /You search around and find a flat etched stone\!/
+      Lich::Messaging.stream_window("Found a stone for the moonshard pendant.", "loot")
+			echo '* Congrats!!  You won a potential bloodrune!'
+			echo '* You can read the stone (once) or look at it to see letters/symbols!'
+			echo "* You can then go to the following link to see which one you've won."
+			echo '* https://gswiki.play.net/MoonShard_pendant *'
+			echo '* Congrats!!  You won a potential bloodrune!'
+			waitrt?
+			fput "put my stone in my #{Vars.lootsack}"
+      
+    elsif result =~ /You search around and find a shimmering indigo orb!/
+      Lich::Messaging.stream_window("Found a 3x RPA orb!", "loot")
+        waitrt?
+        fput "put my orb in my #{Vars.keepsack}"
+      
+		elsif result =~ /You search around the area and find (.*) rat\!/
+      Lich::Messaging.stream_window("Found a rat!", "loot")
+			waitrt?
+			result = dothistimeout("put ##{GameObj.right_hand.id} in my #{Vars.lootsack}", 5, /You put|won\'t fit in the/)
+			if result =~ /You put/
+			elsif result =~ /won\'t fit in the/
+				echo 'Your container is full, maybe you should unload!?!?'
+				echo 'Figure it out, and unpause dr_sewers when you fix yourself.'
+				Script.pause ('dr_sewers')
+			end
+      
+		elsif result =~ /You search around and find an odd gem\!/
+      Lich::Messaging.stream_window("Found a WPS smithy invite!", "loot")
+			echo '* Congrats!!  You found an invitation to the WPS Smithy!'
+			waitrt?
+        
+		elsif result =~ /You search around and find (.*)\!/
+			waitrt?
+			if GameObj.right_hand.noun == 'rod' or GameObj.left_hand.noun == 'rod'
+        Lich::Messaging.stream_window("Rare Find: Found a slender wood rod!", "loot")
+				echo '* Congrats!!  You won a slender wooden rod for the major Bag of Holding!'
+        echo '*This can be sold to the ringleader for 100 bloodscrip!'
+				fput "put my rod in my #{Vars.keepsack}"
+				waitrt?
+        
+			elsif GameObj.right_hand.noun == 'swatch' or GameObj.left_hand.noun == 'swatch'
+        Lich::Messaging.stream_window("Rare Find: Found a swatch of material!", "loot")
+				echo '* Congrats!!  You won a swatch of material for the major Bag of Holding!'
+				fput "put my swatch in my #{Vars.keepsack}"
+				waitrt?
+        
+			elsif GameObj.right_hand.noun == 'thread' or GameObj.left_hand.noun == 'thread'
+        Lich::Messaging.stream_window("Rare Find: Found a strand of veniom thread!", "loot")
+				echo '* Congrats!!  You won a strand of veniom thread for the major Bag of Holding!'
+				fput "put my thread in my #{Vars.keepsack}"
+				waitrt?
+        
+			elsif GameObj.right_hand.noun == 'dust' or GameObj.left_hand.noun == 'dust'
+        Lich::Messaging.stream_window("Rare Find: Found a handful of sparkling dust!", "loot")
+				echo '* Congrats!!  You won a handful of sparkling dust for the major Bag of Holding!'
+				fput "put my dust in my #{Vars.keepsack}"
+				waitrt?
+        
+			elsif checkright
+        Lich::Messaging.stream_window("Found #{GameObj.right_hand.name}!", "loot")
+        result = dothistimeout("put ##{GameObj.right_hand.id} in my #{Vars.lootsack}", 5, /You put|won\'t fit in the/)
+        if result =~ /You put/
+        elsif result =~ /won\'t fit in the/
+          echo 'Your container is full, maybe you should unload!?!?'
+          echo 'Figure it out, and unpause dr_sewers when you fix yourself.'
+          Script.pause ('dr_sewers')
+        end
+        
+			elsif checkleft
+        Lich::Messaging.stream_window("Found #{GameObj.left_hand.name}!", "loot")
+        result = dothistimeout("put ##{GameObj.left_hand.id} in my #{Vars.lootsack}", 5, /You put|won\'t fit in the/)
+        if result =~ /You put/
+        elsif result =~ /won\'t fit in the/
+          echo 'Your container is full, maybe you should unload!?!?'
+          echo 'Figure it out, and unpause dr_sewers when you fix yourself.'
+          Script.pause ('dr_sewers')
+        end
+        
+			end
+
+		elsif result =~ /You've recently searched|As you begin to search the area\, a wave of sewage|You search around the area and find a small rat, but it scurries off before you can catch it\!/
+			waitrt?
+      fput 'look'
+			checkpaths
+			walk
+		elsif result =~ /You don't find anything of interest here./
+			break
+		end
+	end
+	}
+end
+
+def cesspoolcheck
+	if XMLData.room_name == '[Bloodriven Village, Cesspool]'
+    Lich::Messaging.stream_window("Total Found: #{$dr_sewers_total} bloodscrip.", "loot")
+		$dr_sewers_grand_total = $dr_sewers_grand_total + $dr_sewers_total
+    Lich::Messaging.stream_window("Grand Total: #{$dr_sewers_grand_total} bloodscrip.", "loot")
+		$dr_sewers_total_time = Time.now - $dr_sewers_start_time
+    Lich::Messaging.stream_window("Total Time: #{Time.at($dr_sewers_total_time).strftime("%M:%S")}!", "loot")
+	elsif checkroom =~ /Bloodriven Village, Sewer/
+		waitrt?
+		checkpaths
+		walk
+	end
+end
+
+##### MAIN LOOP
+
+$dr_sewers_grand_total = 0
+
+if checkroom =~ /Bloodriven Village, Sewer/
+	$dr_sewers_start_time = Time.now
+else
+  Lich::Messaging.stream_window("Walking to the Bloodriven Village, Sewer Grate.", "familiar")
+	Script.run('go2', 'u8214001 ')
+	start	#Checks for encumbrance, attempts to find a booklet or voucher and moves into the sewer, or exits.
+	$dr_sewers_start_time
+end
+
+loop {
+	if XMLData.room_name == '[Bloodriven Village, Cesspool]'
+    Lich::Messaging.stream_window("Walking to the Bloodriven Village, Sewer Grate.", "familiar")
+		Script.run('go2', 'u8214001 ')
+	elsif Room.current.uid.include?(8214001) #Bloodriven Village, Sewer Grate 
+    Lich::Messaging.stream_window("Entering the sewers!", "familiar")
+		start
+	else
+		searchsewers
+		waitrt?
+		cesspoolcheck
+	end
+}

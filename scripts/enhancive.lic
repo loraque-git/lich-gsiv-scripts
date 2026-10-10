@@ -1,0 +1,109 @@
+#enhancive.lic
+=begin
+
+Author: Alastir
+
+=end
+
+load 'scripts/alastirlib.lic'
+
+pause_script ('ebounty')
+pause_script ('go2')
+
+if script.vars[1] =~ /wear/
+	if UserVars.enhancive_worn == nil
+		AlastirLib::Messaging.output("-- Wearing enhancives.")
+		waitrt?
+		if Char.name == 'Alastir'
+			multifput 'remove my pants',"put my pants in my #{Vars.enhancivesack}"
+			multifput 'get my armoire','open my armoire','close my armoire',"put my armoire in my #{Vars.enhancivesack}"
+			multifput 'get my quintuple brooch','wear my quintuple brooch','tuck my quintuple brooch'
+			multifput 'get my studs','wear my studs'
+			multifput 'get my bead','wear my bead'
+			#multifput 'get my undershirt','remove my guard','wear my undershirt'
+			
+			#loop do
+			#	result = dothistimeout 'wear my guard', 5, /You struggle to wear a rigid leather chest guard but fail in the attempt.|You work your way into (.*)./
+			#	if result =~ /You struggle to wear (.*) but fail in the attempt./
+			#	elsif result =~ /You work your way into (.*)./
+			#		break
+			#	end
+			#end
+		elsif Char.name == 'Sivalis'
+			multifput 'get my armoire','open my armoire','close my armoire',"put my armoire in my #{Vars.enhancivesack}"			
+		end
+		waitrt?
+		sleep 0.3
+		waitrt?
+		fput 'sort auto head'
+		UserVars.enhancive_worn = true
+	end
+	if UserVars.enhancive_worn == true
+		echo 'Enhancives are already worn.'
+	end
+	if UserVars.enhancive_worn == false
+		AlastirLib::Messaging.output("-- Wearing enhancives.")
+		waitrt?
+		if Char.name == 'Alastir'
+			multifput 'remove my pants',"put my pants in my #{Vars.enhancivesack}"
+			multifput 'get my armoire','open my armoire','close my armoire',"put my armoire in my #{Vars.enhancivesack}"
+			multifput 'get my quintuple brooch','wear my quintuple brooch','tuck my quintuple brooch'
+			multifput 'get my studs','wear my studs'
+			multifput 'get my bead','wear my bead'	
+			#multifput 'get my undershirt','remove my guard','wear my undershirt'
+			
+			#loop do
+			#	result = dothistimeout 'wear my guard', 5, /You struggle to wear a rigid leather chest guard but fail in the attempt.|You work your way into (.*)./
+			#	if result =~ /You struggle to wear (.*) but fail in the attempt./
+			#	elsif result =~ /You work your way into (.*)./
+			#		break
+			#	end
+			#end
+		elsif Char.name == 'Sivalis'
+			multifput 'get my armoire','open my armoire','close my armoire',"put my armoire in my #{Vars.enhancivesack}"
+		end
+		waitrt?
+		sleep 0.3
+		waitrt?
+		fput 'sort auto head'
+		UserVars.enhancive_worn = true
+	else
+		echo 'Enhancives are already worn.'
+	end
+elsif script.vars[1] =~ /remove/
+	if UserVars.enhancive_worn == false
+		echo 'Enhancives are already removed.'
+	end
+	if UserVars.enhancive_worn == true
+		echo 'Removing enhancives'
+		AlastirLib::Messaging.output("-- Removing enhancives.")
+		waitrt?
+		if Char.name == 'Alastir'
+			multifput 'get my armoire','open my armoire','close my armoire',"put my armoire in my #{Vars.enhancivesack}"
+			multifput 'remove my quintuple brooch',"put my quintuple brooch in my #{Vars.enhancivesack}"
+			multifput 'remove my studs',"put my studs in my #{Vars.enhancivesack}"
+			multifput 'remove my bead',"put my bead in my #{Vars.enhancivesack}"
+			#multifput 'remove my undershirt',"put my undershirt in my #{Vars.enhancivesack}"
+			multifput "get my pants from my #{Vars.enhancivesack}",'wear my pants'
+		elsif Char.name == 'Sivalis'
+			multifput 'get my armoire','open my armoire','close my armoire',"put my armoire in my #{Vars.enhancivesack}"		
+		end
+		waitrt?
+		fput 'sort auto head'
+		UserVars.enhancive_worn = false
+	else
+		echo 'Enhancives are already removed.'
+	end
+elsif script.vars[1] =~ /true/
+	UserVars.enhancive_worn = true
+	echo 'enhancive_worn set to true'
+elsif script.vars[1] =~ /false/
+	UserVars.enhancive_worn = false
+	echo 'enhancive_worn set to false'
+elsif script.vars.empty?
+	echo 'This script requires wear or remove.'
+end
+
+
+unpause_script ('ebounty')
+unpause_script ('go2')

@@ -1,0 +1,2963 @@
+#quiet
+=begin
+  xp2
+
+  Shows a cleaner EXP window with useful extras in one place.
+
+  It quietly checks EXPERIENCE and, when enabled, LUMNIS INFO, ASCENSION EXP,
+  and RESOURCE. It then prints a compact summary with current experience,
+  gains, rates, goals, Lumnis/Tutelage, profession resource, Voln Favor,
+  and optional tutelog status.
+
+  xp2 can be used by itself, but it is recommended to use xp2 and tutelog
+  together. xp2 is the command, setup, and report side. tutelog is the
+  background pulse watcher. When both are used, xp2 can show better Tutelage
+  status, current Tutelage reports, pulse session totals, and tutelog settings.
+
+  It can use a wide or tall tracking table, save an experience goal, show
+  percent progress, and open setup with ;xp2 setup.
+
+      author: Mystienne
+      credits: Tillmen - original ;xp script
+               Peggyanne - preset-colored report style inspiration
+         game: GemStone
+      version: 1.9.4
+         tags: cosmetic, experience, lumnis, tutelage
+
+  Use ;xp2 help to see commands.
+=end
+require 'fileutils'
+require 'yaml'
+xp2_lich_dir = defined?(LICH_DIR) ? LICH_DIR : File.expand_path('..', File.dirname(__FILE__))
+xp2_settings_path = proc do
+  game = begin
+           XMLData.respond_to?(:game) && XMLData.game ? XMLData.game.to_s : 'GSIV'
+         rescue
+           'GSIV'
+         end
+  char = begin
+           XMLData.respond_to?(:name) && XMLData.name ? XMLData.name.to_s : 'unknown'
+         rescue
+           'unknown'
+         end
+  folder = "#{game}-#{char}".gsub(/[^A-Za-z0-9_.-]+/, '_')
+  File.join(xp2_lich_dir, 'data', 'tutelog', folder, 'settings.yaml')
+end
+xp2_yaml_keys = %w[
+  xp2_check_lumnis xp2_check_resource xp2_check_ascension xp2_debug xp2_layout xp2_goal
+  xp2_tutelage_bonus_used xp2_tutelage_reset_at xp2_tutelage_last_exp xp2_tutelage_state
+  xp2_tutelage_state_at xp2_tutelage_days xp2_lumnis_phase xp2_lumnis_phase_remaining
+  xp2_lumnis_expired xp2_rpa_active xp2_tutelage_source xp2_tutelage_tutelog_at
+  xp2_tutelage_tutelog_cycle xp2_tutelage_tutelog_reset_at xp2_tutelage_tutelog_total_exp
+  xp2_tutelage_reward_exp xp2_last_atps xp2_last_absorb_rate xp2_last_atp_remaining
+  xp2_last_level xp2_last_next_label xp2_last_next_value xp2_last_ptps
+  xp2_last_mtps xp2_last_mind xp2_last_exp xp2_last_snapshot_at
+]
+xp2_tutelog_legacy_keys = {
+  'hint' => 'tutelog_hint',
+  'notify_pulses' => 'tutelog_notify_pulses',
+  'logging_enabled' => 'tutelog_logging_enabled',
+  'preserve_cycles' => 'tutelog_preserve_cycles',
+  'output_style' => 'tutelog_output_style',
+  'lumnis_remaining_est' => 'tutelog_lumnis_remaining_est',
+  'lumnis_source_remaining' => 'tutelog_lumnis_source_remaining',
+  'last_xp2_refresh_at' => 'tutelog_last_xp2_refresh_at',
+  'last_xp2_refresh_reason' => 'tutelog_last_xp2_refresh_reason',
+  'started_at' => 'tutelog_started_at',
+  'tutelage_started_at' => 'tutelog_tutelage_started_at',
+  'log_path' => 'tutelog_log_path',
+  'csv_path' => 'tutelog_csv_path',
+  'cycle_label' => 'tutelog_cycle_label',
+  'last_next_text' => 'tutelog_last_next_text',
+  'last_next_value' => 'tutelog_last_next_value',
+  'last_next_mode' => 'tutelog_last_next_mode',
+  'session_exp_total' => 'tutelog_session_exp_total',
+  'session_bonus_total' => 'tutelog_session_bonus_total',
+  'pulse_count' => 'tutelog_pulse_count',
+  'reward_exp_total' => 'tutelog_reward_exp_total',
+  'reward_count' => 'tutelog_reward_count'
+}
+xp2_load_settings_yaml = proc do
+  begin
+    data = File.exist?(xp2_settings_path.call) ? YAML.load_file(xp2_settings_path.call) : {}
+    data.is_a?(Hash) ? data : {}
+  rescue
+    {}
+  end
+end
+xp2_save_settings_yaml = proc do |data|
+  FileUtils.mkdir_p(File.dirname(xp2_settings_path.call))
+  File.open(xp2_settings_path.call, 'w') { |file| file.write(data.to_yaml) }
+end
+xp2_apply_yaml_settings = proc do |data|
+  xp2_yaml_keys.each { |key| Vars[key] = data[key] if data.key?(key) }
+  Vars['tutelog'] = data['tutelog'] if data['tutelog'].is_a?(Hash)
+end
+xp2_collect_runtime_settings = proc do
+  data = xp2_load_settings_yaml.call
+  xp2_yaml_keys.each { |key| data[key] = Vars[key] unless Vars[key].nil? }
+  data['tutelog'] = Vars['tutelog'] if Vars['tutelog'].is_a?(Hash)
+  unless data['tutelog'].is_a?(Hash)
+    legacy_tutelog = {}
+    xp2_tutelog_legacy_keys.each { |new_key, old_key| legacy_tutelog[new_key] = Vars[old_key] unless Vars[old_key].nil? }
+    data['tutelog'] = legacy_tutelog unless legacy_tutelog.empty?
+  end
+  data
+end
+xp2_prune_persisted_vars = proc do |data|
+  next unless Vars.respond_to?(:delete)
+  xp2_yaml_keys.each { |key| Vars.delete(key) }
+  Vars.delete('tutelog')
+  xp2_tutelog_legacy_keys.values.each { |key| Vars.delete(key) }
+  Vars.keys.map(&:to_s).grep(/^tutelog_/).each { |key| Vars.delete(key) } if Vars.respond_to?(:keys)
+  Vars.save if Vars.respond_to?(:save)
+  xp2_apply_yaml_settings.call(data)
+end
+xp2_persist_settings = proc do
+  data = xp2_collect_runtime_settings.call
+  xp2_save_settings_yaml.call(data)
+  xp2_prune_persisted_vars.call(data)
+  data
+end
+xp2_migrate_settings = proc do
+  data = xp2_load_settings_yaml.call
+  if data.empty?
+    data = xp2_collect_runtime_settings.call
+    unless data.empty?
+      xp2_save_settings_yaml.call(data)
+      xp2_prune_persisted_vars.call(data)
+    end
+  else
+    xp2_apply_yaml_settings.call(data)
+    xp2_prune_persisted_vars.call(data)
+  end
+end
+xp2_migrate_settings.call
+xp2_setting_default = proc { |key, value|
+  CharSettings[key] = value if CharSettings[key].nil?
+}
+xp2_setting_default.call('goal', 0)
+xp2_setting_default.call('xp2_layout', 'wide')
+xp2_var_default = proc { |key, value|
+  Vars[key] = value if Vars[key].nil?
+}
+xp2_var_default.call('xp2_check_lumnis', 'on')
+xp2_var_default.call('xp2_check_resource', 'on')
+xp2_var_default.call('xp2_check_ascension', 'on')
+xp2_var_default.call('xp2_debug', 'off')
+xp2_var_default.call('xp2_tutelage_bonus_used', '0')
+xp2_var_default.call('xp2_tutelage_reset_at', '0')
+xp2_var_default.call('xp2_tutelage_last_exp', '0')
+xp2_var_default.call('xp2_tutelage_state', 'unknown')
+xp2_var_default.call('xp2_tutelage_state_at', '0')
+xp2_var_default.call('xp2_tutelage_days', '')
+xp2_var_default.call('xp2_lumnis_phase', '')
+xp2_var_default.call('xp2_lumnis_phase_remaining', '0')
+xp2_var_default.call('xp2_lumnis_expired', 'unknown')
+xp2_var_default.call('xp2_rpa_active', 'unknown')
+xp2_var_default.call('xp2_tutelage_source', 'xp2')
+xp2_var_default.call('xp2_tutelage_tutelog_at', '0')
+xp2_var_default.call('xp2_tutelage_tutelog_cycle', '')
+xp2_var_default.call('xp2_tutelage_tutelog_reset_at', '0')
+xp2_var_default.call('xp2_tutelage_tutelog_total_exp', '0')
+xp2_var_default.call('xp2_tutelage_reward_exp', '0')
+xp2_var_default.call('xp2_last_atp_remaining', '0')
+xp2_var_default.call('xp2_layout', CharSettings['xp2_layout'].to_s.empty? ? 'wide' : CharSettings['xp2_layout'].to_s)
+Vars['xp2_layout'] = 'wide' unless [ 'wide', 'tall' ].include?(Vars['xp2_layout'].to_s)
+CharSettings['xp2_layout'] = Vars['xp2_layout']
+xp2_var_default.call('xp2_goal', CharSettings['goal'].to_i.to_s)
+CharSettings['goal'] = Vars['xp2_goal'].to_i
+xp2_enabled = proc { |key| ![ false, 'false', 'off', 'no', '0' ].include?(Vars[key]) }
+xp2_debug_enabled = proc { [ true, 'true', 'on', 'yes', '1' ].include?(Vars['xp2_debug']) }
+xp2_on_off_text = proc { |key| xp2_enabled.call(key) ? 'on' : 'off' }
+xp2_checkbox_active = proc { |checkbox| checkbox.respond_to?(:active?) ? checkbox.active? : checkbox.active }
+xp2_save_var = proc { |key, value|
+  Vars[key] = value
+  xp2_persist_settings.call
+}
+tutelog_state = Vars['tutelog'].is_a?(Hash) ? Vars['tutelog'].dup : {}
+tutelog_state['notify_pulses'] = Vars['tutelog_notify_pulses'] if tutelog_state['notify_pulses'].to_s.empty? && !Vars['tutelog_notify_pulses'].nil?
+tutelog_state['notify_pulses'] = 'off' if tutelog_state['notify_pulses'].to_s.empty?
+tutelog_state['logging_enabled'] = 'on' if tutelog_state['logging_enabled'].to_s.empty?
+tutelog_state['preserve_cycles'] = '6' if tutelog_state['preserve_cycles'].to_i < 1
+tutelog_output_styles = %w[csv none]
+tutelog_absorb_modes = %w[auto supernode node town other]
+tutelog_state['output_style'] = 'csv' unless tutelog_output_styles.include?(tutelog_state['output_style'].to_s)
+tutelog_state['absorb_room_mode'] = 'auto' unless tutelog_absorb_modes.include?(tutelog_state['absorb_room_mode'].to_s)
+tutelog_reset_modes = %w[daily run idle]
+tutelog_state['general_reset_mode'] = 'run' if tutelog_state['general_reset_mode'].to_s.empty?
+tutelog_state['general_reset_mode'] = 'run' unless tutelog_reset_modes.include?(tutelog_state['general_reset_mode'].to_s)
+tutelog_state['general_idle_minutes'] = '480' if tutelog_state['general_idle_minutes'].to_i < 1
+tutelog_state['no_pulse_alert'] = 'off' if tutelog_state['no_pulse_alert'].to_s.empty?
+tutelog_state['no_pulse_minutes'] = '10' if tutelog_state['no_pulse_minutes'].to_i < 1
+tutelog_state['dock_enabled'] = 'off' if tutelog_state['dock_enabled'].to_s.empty?
+tutelog_dock_show_keys = %w[level mind pulse last count lumnis rpa next atp field tutelage]
+tutelog_dock_show_keys.each do |key|
+  setting_key = "dock_show_#{key}"
+  tutelog_state[setting_key] = 'on' if tutelog_state[setting_key].to_s.empty?
+end
+xp2_lich_dir = defined?(LICH_DIR) ? LICH_DIR : File.expand_path('..', File.dirname(__FILE__))
+xp2_room_modes_path = proc do
+  game = begin
+           XMLData.respond_to?(:game) && XMLData.game ? XMLData.game.to_s : 'GSIV'
+         rescue
+           'GSIV'
+         end
+  char = begin
+           XMLData.respond_to?(:name) && XMLData.name ? XMLData.name.to_s : 'unknown'
+         rescue
+           'unknown'
+         end
+  folder = "#{game}-#{char}".gsub(/[^A-Za-z0-9_.-]+/, '_')
+  File.join(xp2_lich_dir, 'data', 'tutelog', folder, 'settings.yaml')
+end
+xp2_current_game = proc do
+  begin
+    XMLData.respond_to?(:game) && XMLData.game ? XMLData.game.to_s : 'GSIV'
+  rescue
+    'GSIV'
+  end
+end
+xp2_current_room_id = proc do
+  begin
+    room_id = Room.current.id if defined?(Room) && Room.respond_to?(:current) && Room.current && Room.current.respond_to?(:id)
+    room_id.to_s unless room_id.nil? || room_id.to_s.empty?
+  rescue
+    nil
+  end
+end
+xp2_load_room_modes = proc do
+  begin
+    data = File.exist?(xp2_settings_path.call) ? YAML.load_file(xp2_settings_path.call) : {}
+    data.is_a?(Hash) ? data : {}
+  rescue
+    {}
+  end
+end
+xp2_save_room_modes = proc do |data|
+  FileUtils.mkdir_p(File.dirname(xp2_settings_path.call))
+  File.open(xp2_settings_path.call, 'w') { |file| file.write(data.to_yaml) }
+end
+xp2_room_mode_override_for = proc do |room_id = xp2_current_room_id.call|
+  room_key = room_id.to_s
+  next nil if room_key.empty?
+  data = xp2_load_room_modes.call
+  room_modes = data['room_modes'] || data[:room_modes] || {}
+  mode = room_modes[room_key] || room_modes[room_key.to_i] || room_modes[room_key.to_sym]
+  mode = mode.to_s.downcase
+  tutelog_absorb_modes.include?(mode) && mode != 'auto' ? mode : nil
+end
+xp2_set_room_mode_override = proc do |mode|
+  room_id = xp2_current_room_id.call
+  next [ false, 'current room is not available' ] if room_id.to_s.empty?
+  data = xp2_load_room_modes.call
+  room_modes = data['room_modes'] || data[:room_modes] || {}
+  room_modes = {} unless room_modes.is_a?(Hash)
+  data.delete(:room_modes) if data.key?(:room_modes)
+  data['room_modes'] = room_modes.transform_keys(&:to_s)
+  if mode == 'auto'
+    data['room_modes'].delete(room_id.to_s)
+    xp2_save_room_modes.call(data)
+    [ true, "room #{room_id} will use auto absorb mode." ]
+  else
+    data['room_modes'][room_id.to_s] = mode
+    xp2_save_room_modes.call(data)
+    [ true, "room #{room_id} absorb mode saved as #{mode}." ]
+  end
+end
+xp2_close_tutelog_dock = proc do
+  client = begin
+             if defined?($frontend)
+               $frontend.to_s
+             elsif defined?(Frontend) && Frontend.respond_to?(:client)
+               Frontend.client.to_s
+             else
+               ''
+             end
+           rescue
+             ''
+           end
+  if client.downcase == 'saga'
+    xml = "<dialogData id='Xp2TutelogDock' clear='t'><label id='xp2dock_off' value='Dock off' justify='4' left='24' top='5' height='16' width='262'/></dialogData>"
+  else
+    xml = "<dialogData id='Xp2TutelogDock' clear='t'><label id='xp2dock_off' value='Dock off' justify='1' left='6' top='5' height='13' width='178'/></dialogData>"
+  end
+  if defined?(_respond)
+    _respond xml
+  elsif defined?(respond)
+    respond xml
+  end
+rescue
+end
+save_tutelog_setting = proc { |key, value|
+  current_state = Vars['tutelog'].is_a?(Hash) ? Vars['tutelog'].dup : {}
+  current_state[key] = value
+  Vars['tutelog'] = current_state
+  tutelog_state[key] = value
+  Vars.delete('tutelog_notify_pulses') if Vars.respond_to?(:delete)
+  xp2_persist_settings.call
+  xp2_close_tutelog_dock.call if key.to_s == 'dock_enabled' && value.to_s =~ /^(off|no|false|0)$/i
+}
+save_tutelog_notify = proc { |value| save_tutelog_setting.call('notify_pulses', value) }
+save_tutelog_notify.call(tutelog_state['notify_pulses'])
+tutelog_general_keys = %w[
+  general_started_at general_session_date general_pulse_count general_exp_total
+  general_reward_count general_reward_exp_total general_rpa_pulse_count
+  general_rpa_exp_total general_last_pulse_at general_last_pulse_exp
+  general_last_mind general_last_reset_at general_reset_reason
+  general_last_decode_mode general_last_expected_pulse general_last_observed_multiplier
+  general_last_extra_multiplier general_last_extra_exp general_last_decode_confidence
+]
+reset_tutelog_general_stats = proc do |reason = 'manual_reset'|
+  current_state = Vars['tutelog'].is_a?(Hash) ? Vars['tutelog'].dup : {}
+  tutelog_general_keys.each { |key| current_state.delete(key) }
+  now_i = Time.now.to_i
+  current_state['general_started_at'] = now_i.to_s
+  current_state['general_session_date'] = Time.now.strftime('%m%d%Y')
+  current_state['general_pulse_count'] = '0'
+  current_state['general_exp_total'] = '0'
+  current_state['general_reward_count'] = '0'
+  current_state['general_reward_exp_total'] = '0'
+  current_state['general_rpa_pulse_count'] = '0'
+  current_state['general_rpa_exp_total'] = '0'
+  current_state['general_last_pulse_at'] = '0'
+  current_state['general_last_pulse_exp'] = '0'
+  current_state['general_last_mind'] = 'unknown'
+  current_state['general_last_reset_at'] = now_i.to_s
+  current_state['general_reset_reason'] = reason.to_s
+  Vars['tutelog'] = current_state
+  tutelog_state.replace(current_state)
+  xp2_persist_settings.call
+end
+tutelog_enabled = proc { |key| ![ false, 'false', 'off', 'no', '0' ].include?(tutelog_state[key]) }
+tutelog_dock_frontend = proc do
+  value = if defined?(Frontend) && Frontend.respond_to?(:client)
+            Frontend.client.to_s
+          elsif defined?($frontend)
+            $frontend.to_s
+          else
+            ''
+          end
+  value = value.downcase
+  if value.include?('saga')
+    'Saga'
+  elsif value.include?('wrayth')
+    'Wrayth'
+  elsif value.include?('warlock')
+    'Warlock'
+  elsif value.include?('stormfront') || value == 'sf'
+    'StormFront'
+  else
+    'unknown'
+  end
+rescue
+  'unknown'
+end
+xp2_tutelog_installed = proc do
+  begin
+    Script.exists?('tutelog')
+  rescue
+    File.exist?(File.join(File.dirname(__FILE__), 'tutelog.lic'))
+  end
+end
+xp2_tutelog_version = proc do
+  begin
+    paths = [
+      File.join(xp2_lich_dir, 'scripts', 'tutelog.lic'),
+      File.join(File.dirname(__FILE__), 'tutelog.lic'),
+      File.join(xp2_lich_dir, 'tutelog.lic')
+    ].uniq
+    path = paths.find { |candidate| File.file?(candidate) }
+    next 'not installed' unless path || !xp2_tutelog_installed.call
+    next 'unknown' unless path
+    header = File.binread(path)
+    match = header.match(/version:\s*(\d+\.\d+\.\d+)/i)
+    match ? match[1] : 'unknown'
+  rescue
+    'unknown'
+  end
+end
+xp2_tutelog_running = proc do
+  begin
+    running?('tutelog')
+  rescue
+    begin
+      Script.running?('tutelog')
+    rescue
+      false
+    end
+  end
+end
+xp2_mono_block = proc do |text, _preset = 'speech'|
+  if defined?(_respond)
+    _respond %Q{<output class="mono"/>\n#{text}<output class=""/>}
+  else
+    respond text
+  end
+end
+xp2_saga_frontend = proc do
+  frontend_client = begin
+                      defined?(Frontend) && Frontend.respond_to?(:client) ? Frontend.client.to_s.downcase : ''
+                    rescue
+                      ''
+                    end
+  next true if frontend_client == 'saga'
+  next true if frontend_client == 'profanity' && defined?($_DETACHABLE_CLIENT_) && $_DETACHABLE_CLIENT_
+  begin
+    running?('shard-origin')
+  rescue
+    begin
+      Script.running?('shard-origin')
+    rescue
+      false
+    end
+  end
+end
+xp2_frontend_preset = proc do |preset|
+  preset = preset.to_s
+  if xp2_saga_frontend.call
+    case preset
+    when 'speech'
+      'whisper'
+    when 'thought'
+      'watching'
+    else
+      preset
+    end
+  else
+    preset
+  end
+end
+xp2_inline_preset = proc do |preset, text|
+  preset = xp2_frontend_preset.call(preset)
+  if %w[monster creature error yellow bold].include?(preset)
+    "#{monsterbold_start}#{text}#{monsterbold_end}"
+  else
+    "<preset id=\"#{preset}\">#{text}</preset>"
+  end
+end
+xp2_inline_emphasis = proc { |text| xp2_inline_preset.call('thought', text) }
+xp2_preset_line = proc do |_preset, text|
+  xp2_mono_block.call(text)
+end
+xp2_color_main_output = proc do |text|
+  in_table = false
+  text.split("\n", -1).map do |line|
+    plain = line.gsub(/<[^>]+>/, '')
+    stripped = plain.strip
+    if stripped == 'Experience' || stripped == '----------'
+      xp2_inline_preset.call('thought', line)
+    elsif stripped =~ /\Agained in\s+\d/
+      in_table = true
+      line.sub(/\A(\s*)(gained in)(\s+)(.*)\z/) { "#{$1}#{xp2_inline_preset.call('speech', $2)}#{$3}#{$4}" }
+    elsif stripped.start_with?('gained in')
+      in_table = true
+      line.include?('<preset') ? line : xp2_inline_preset.call('speech', line)
+    elsif in_table && stripped =~ /\A-+(?:\s{2,}-+)*\z/
+      line.include?('<preset') ? line : line.gsub(/-+/) { |dashes| xp2_inline_preset.call('speech', dashes) }
+    elsif stripped =~ /\A(?:reset|day|session|last)\b/
+      in_table = true
+      if line.include?('<preset')
+        line
+      else
+        line.sub(/\A(\s*)(reset|day|session|last)/) { "#{$1}#{xp2_inline_preset.call('speech', $2)}" }
+      end
+    elsif in_table && line =~ /\A(\s*)(\S(?:.*?\S)?)(\s{2,}.*)?\z/
+      "#{$1}#{xp2_inline_preset.call('speech', $2)}#{$3}"
+    elsif line =~ /\A(\s*)([^:]{1,18}:\s*)(.*?)(\s{2,})([^:]{1,18}:\s*)(.*?)\z/
+      "#{$1}#{xp2_inline_preset.call('speech', $2)}#{$3}#{$4}#{xp2_inline_preset.call('speech', $5)}#{$6}"
+    elsif line =~ /\A(\s*)([^:]{1,18}:\s*)(.+?)\z/
+      "#{$1}#{xp2_inline_preset.call('speech', $2)}#{$3}"
+    elsif stripped.start_with?('(') && stripped.include?('experience needed')
+      line
+    else
+      line
+    end
+  end.join("\n")
+end
+
+xp2_command_args = script.vars.to_a[1..-1].to_a
+xp2_startup_delay = 0
+xp2_clean_args = []
+xp2_skip_arg = false
+xp2_command_args.each_with_index do |arg, index|
+  if xp2_skip_arg
+    xp2_skip_arg = false
+    next
+  end
+
+  text = arg.to_s.strip
+  if text =~ /\A(?:--)?delay=(\d+)\z/i
+    xp2_startup_delay = $1.to_i
+  elsif text =~ /\A(?:--)?delay\z/i && xp2_command_args[index + 1].to_s =~ /\A\d+\z/
+    xp2_startup_delay = xp2_command_args[index + 1].to_i
+    xp2_skip_arg = true
+  else
+    xp2_clean_args << arg
+  end
+end
+xp2_command_args = xp2_clean_args
+sleep xp2_startup_delay if xp2_startup_delay > 0
+xp2_level_exp_by_level = [
+  0,
+  2500, 5000, 10000, 17500, 27500, 40000, 55000, 72500, 92500,
+  115000, 140000, 167000, 197500, 230000, 265000, 302000, 341000, 382000, 425000,
+  470000, 517000, 566000, 617000, 670000, 725000, 781500, 839500, 899000, 960000,
+  1022500, 1086500, 1152000, 1219000, 1287500, 1357500, 1429000, 1502000, 1576500, 1652500,
+  1730000, 1808500, 1888000, 1968500, 2050000, 2132500, 2216000, 2300500, 2386000, 2472500,
+  2560000, 2648000, 2736500, 2825500, 2915000, 3005000, 3095500, 3186500, 3278000, 3370000,
+  3462500, 3555500, 3649000, 3743000, 3837500, 3932500, 4028000, 4124000, 4220500, 4317500,
+  4415000, 4513000, 4611500, 4710500, 4810000, 4910000, 5010500, 5111500, 5213000, 5315000,
+  5417500, 5520500, 5624000, 5728000, 5832500, 5937500, 6043000, 6149000, 6255500, 6362500,
+  6470000, 6578000, 6686500, 6795500, 6905000, 7015000, 7125500, 7236500, 7348000, 7460000,
+  7572500
+]
+
+xp2_parse_goal = proc { |value|
+  text = value.to_s.downcase.strip.gsub(',', '')
+  next nil if text.empty?
+  if text =~ /\A(?:level|lvl|lv|l)\s*(\d{1,3})\z/
+    level = $1.to_i
+    next xp2_level_exp_by_level[level] if level >= 0 && level < xp2_level_exp_by_level.length
+    next nil
+  end
+  if text =~ /\A(\d+(?:\.\d+)?)\s*(m|mil|million)\z/
+    next ($1.to_f * 1_000_000).to_i
+  elsif text =~ /\A(\d+(?:\.\d+)?)\s*(k|thousand)\z/
+    next ($1.to_f * 1_000).to_i
+  elsif text =~ /\A\d+(?:\.\d+)?\z/
+    next text.to_f.to_i
+  end
+  nil
+}
+xp2_save_goal = proc { |value|
+  goal = xp2_parse_goal.call(value)
+  next nil if goal.nil?
+  CharSettings['goal'] = goal
+  xp2_save_var.call('xp2_goal', goal.to_s)
+  goal
+}
+
+xp2_format_number = proc { |num|
+  num.to_i.to_s.reverse.scan(/\d{1,3}/).join(',').reverse
+}
+xp2_percent_text = proc do |value|
+  value = [[value.to_f, 0.0].max, 100.0].min
+  value >= 99.95 ? '100%' : format('%.1f%%', value)
+end
+xp2_tutelage_bonus_percent = proc do |bonus|
+  value = [(bonus.to_f / 100_000.0) * 100.0, 0.0].max
+  bonus.to_i > 100_000 ? format('%.1f%%', value) : xp2_percent_text.call(value)
+end
+
+xp2_absorb_snapshot = proc do
+  tags = []
+  begin
+    tags.concat(Array(Room.current.tags)) if defined?(Room) && Room.respond_to?(:current) && Room.current && Room.current.respond_to?(:tags)
+  rescue
+  end
+  begin
+    tags.concat(Array(Map.current.tags)) if defined?(Map) && Map.respond_to?(:current) && Map.current && Map.current.respond_to?(:tags)
+  rescue
+  end
+  tags = tags.map { |tag| tag.to_s.downcase }.reject(&:empty?).uniq
+  location = begin
+               raw_location = Room.current.location if defined?(Room) && Room.respond_to?(:current) && Room.current && Room.current.respond_to?(:location)
+               raw_location.to_s.gsub(/<[^>]+>/, ' ').gsub(/\s+/, ' ').strip
+             rescue
+               ''
+             end
+  town_from_location = location =~ /Wehnimer|Landing|River's Rest|Solhaven|Icemule|Kharam-Dzu|Teras|Ta'Illistim|Ta'Vaalor|Zul Logoth|Cysaegir|Mist Harbor|Kraken's Fall|Pinefar|Ravelin|Four Winds/i
+  ship_captains_supernode = location =~ /Ships/i && tags.include?('captains_quarters')
+  auto_supernode = tags.include?('supernode') || ship_captains_supernode
+  auto_node = auto_supernode || tags.include?('node')
+  auto_town = tags.include?('town') || !!town_from_location
+  auto_mode = if auto_supernode
+                'supernode'
+              elsif auto_node
+                'node'
+              elsif auto_town
+                'town'
+              elsif tags.empty? && location.empty?
+                'other_guess'
+              else
+                'other'
+              end
+  room_id = xp2_current_room_id.call
+  override_mode = xp2_room_mode_override_for.call(room_id) || 'auto'
+  mode = override_mode == 'auto' ? auto_mode : override_mode
+  logic_bonus = begin
+                  Lich::Gemstone::Stats.log[1].to_i
+                rescue
+                  begin
+                    Stats.log[1].to_i
+                  rescue
+                    0
+                  end
+                end
+  field_current = begin
+                    Lich::Gemstone::Experience.fxp_current.to_i
+                  rescue
+                    begin
+                      Experience.fxp_current.to_i
+                    rescue
+                      0
+                    end
+                  end
+  field_max = begin
+                Lich::Gemstone::Experience.fxp_max.to_i
+              rescue
+                begin
+                  Experience.fxp_max.to_i
+                rescue
+                  0
+                end
+              end
+  pool_bonus = [[field_current / 200, 0].max, 10].min
+  group_bonus = begin
+                  if defined?(Group) && Group.respond_to?(:members)
+                    Array(Group.members).length > 1 ? 1 : 0
+                  else
+                    0
+                  end
+                rescue
+                  0
+                end
+  supernode = mode == 'supernode'
+  node = supernode || mode == 'node'
+  town = mode == 'town'
+  base = town || node ? 22 : 19
+  base = 25 if node
+  divisor = town || node ? 5 : 7
+  super_bonus = supernode ? 2 : 0
+  expected = base + (logic_bonus / divisor) + pool_bonus + group_bonus + super_bonus
+  {
+    'room_id' => room_id || '?',
+    'location' => location,
+    'auto_mode' => auto_mode,
+    'override_mode' => override_mode,
+    'mode' => mode,
+    'logic_bonus' => logic_bonus,
+    'field_current' => field_current,
+    'field_max' => field_max,
+    'pool_bonus' => pool_bonus,
+    'group_bonus' => group_bonus,
+    'expected' => expected,
+    'tags' => tags.grep(/node|town|captains_quarters|meta:map/i),
+    'notes' => [ (ship_captains_supernode ? 'ship captain supernode' : nil), (town_from_location && !tags.include?('town') ? 'town from location' : nil), (override_mode != 'auto' ? "override #{override_mode}" : nil) ].compact.join(', ')
+  }
+end
+xp2_format_duration = proc do |seconds|
+  seconds = [ seconds.to_i, 0 ].max
+  days = seconds / 86_400
+  seconds %= 86_400
+  hours = seconds / 3_600
+  seconds %= 3_600
+  minutes = seconds / 60
+  seconds %= 60
+  parts = []
+  parts << "#{days}d" if days > 0
+  parts << "#{hours}h" if hours > 0 || days > 0
+  parts << "#{minutes}m" if minutes > 0 || hours > 0 || days > 0
+  parts << "#{seconds}s" if parts.empty?
+  parts.join(' ')
+end
+
+xp2_clear_tutelage_live_cache = proc do
+  Vars['xp2_tutelage_bonus_used'] = '0'
+  Vars['xp2_tutelage_source'] = 'xp2'
+  Vars['xp2_tutelage_tutelog_at'] = '0'
+  Vars['xp2_tutelage_tutelog_cycle'] = ''
+  Vars['xp2_tutelage_tutelog_reset_at'] = '0'
+  Vars['xp2_tutelage_tutelog_total_exp'] = '0'
+  Vars['xp2_tutelage_reward_exp'] = '0'
+  if Vars['tutelog'].is_a?(Hash)
+    current_state = Vars['tutelog'].dup
+    %w[session_exp_total session_bonus_total reward_exp_total reward_count pulse_count].each { |key| current_state[key] = '0' }
+    current_state['tutelage_started_at'] = ''
+    Vars['tutelog'] = current_state
+  end
+end
+xp2_changelog_text = proc do
+  output = "\n"
+  output.concat "xp2 changelog:\n"
+  output.concat "\n"
+  output.concat "04-18-2026\n"
+  output.concat "   0.2.0-0.7.0 feat(history): build the original xp tracking, table formatting, reset handling, time-since-last-use, and EXP verb output updates.\n"
+  output.concat "\n"
+  output.concat "04-19-2026\n"
+  output.concat "   0.8.0 fix(experience): restore until-next display, add until ATP, improve level 100 TP labels, and fix first-run crash.\n"
+  output.concat "\n"
+  output.concat "04-20-2026\n"
+  output.concat "   0.9.0 feat(ascension): use Ascension EXP gain rate for ATP ETA, show Ascension absorption, and squelch asc exp output.\n"
+  output.concat "\n"
+  output.concat "05-09-2026\n"
+  output.concat "   0.9.7 feat(layout): add compact layout, Lumnis/Tutelage parsing, Ascension and RESOURCE integration, Fame parsing fixes, and stronger output squelching.\n"
+  output.concat "\n"
+  output.concat "05-10-2026\n"
+  output.concat "   1.0.0 feat(experience): add the full compact EXP replacement display with silent EXPERIENCE, LUMNIS INFO, ASCENSION EXP, and RESOURCE checks.\n"
+  output.concat "   1.0.0 feat(tracking): show field exp, ATPs, Ascension absorb rate, mind state, Wisdom, Lumnis, RPA, Tutelage, profession resource, Voln Favor, and reset/session/last tracking.\n"
+  output.concat "\n"
+  output.concat "05-12-2026\n"
+  output.concat "   1.0.1 fix(resources): add full-resource highlighting and fix a rare crash from old saved goal data.\n"
+  output.concat "\n"
+  output.concat "05-13-2026\n"
+  output.concat "   1.1.0 feat(experience): add Ascension EXP tracking, percent progress, saved EXP goals, wide/tall layouts, setup window, optional checks, command shortcuts, and safer handling for dead, lagged, or oddly saved data.\n"
+  output.concat "   1.1.0 docs(release): note that this was a larger update and may still contain bugs; please report any problems you find.\n"
+  output.concat "\n"
+  output.concat "05-17-2026\n"
+  output.concat "   1.1.1 feat(tutelage): add an estimated Fash'lo'nae's Tutelage bonus counter that saves between runs and resets around Lumnis refresh.\n"
+  output.concat "\n"
+  output.concat "06-12-2026\n"
+  output.concat "   1.1.10 feat(tutelog): add command/setup polish, missing-tutelog help, current/latest cycle display, tooltips, no-log tracking, and autostart delay support.\n"
+  output.concat "\n"
+  output.concat "06-13-2026\n"
+  output.concat "   1.1.39 feat(output): add OSA-style color support for xp2, status, and Tutelage reports.\n"
+  output.concat "   1.1.39 fix(output): improve spacing and alignment so colored output stays readable in mono-style story windows.\n"
+  output.concat "\n"
+  output.concat "06-14-2026\n"
+  output.concat "   1.3.0 feat(settings): move xp2/tutelog settings to per-character settings.yaml and save room absorb overrides per room.\n"
+  output.concat "   1.3.0 chore(output): simplify tutelog output to CSV or none and keep coloring, alignment, help, reward EXP, and absorb-estimate cleanup.\n"
+  output.concat "\n"
+  output.concat "06-21-2026\n"
+  output.concat "   1.3.4 fix(tutelage): clear stale estimates when LUMNIS INFO says Tutelage is not presently available.\n"
+  output.concat "   1.3.4 chore(reports): stop asking users to send Tutelage files in story-window reports.\n"
+  output.concat "\n"
+  output.concat "06-22-2026\n"
+  output.concat "   1.3.5 fix(status): clarify when tutelog is not running or pulse data has not been collected.\n"
+  output.concat "\n"
+  output.concat "06-23-2026\n"
+  output.concat "   1.3.7 feat(tutelage): add active Tutelage ETA and allow bonus percent to show over 100%.\n"
+  output.concat "\n"
+  output.concat "06-24-2026\n"
+  output.concat "   1.3.8 fix(tutelage): prefer the active/current tutelog cycle before older saved cycle files.\n"
+  output.concat "\n"
+  output.concat "06-28-2026\n"
+  output.concat "   1.3.9 chore(docs): clean up changelog labels and help command coverage.\n"
+  output.concat "\n"
+  output.concat "06-30-2026\n"
+  output.concat "   1.3.10 chore(docs): explain how xp2 and tutelog work together and why using both is recommended.\n"
+  output.concat "\n"
+  output.concat "07-01-2026\n"
+  output.concat "   1.3.11 fix(absorb): make xp2 room absorb detection match tutelog tag and group bonus handling.\n"
+  output.concat "   1.3.12 fix(tutelage): show adjusted Tutelage bonus as the headline estimate when unusual pulses are removed.\n"
+  output.concat "\n"
+  output.concat "07-11-2026\n"
+  output.concat "   1.4.0 feat(experience): add a calendar-day tracking column that resets on the first xp2 run of a new local date.\n"
+  output.concat "\n"
+  output.concat "07-18-2026\n"
+  output.concat "   1.4.1 fix(setup): make the setup window X save settings and close safely without forcing a GTK destroy.\n"
+  output.concat "\n"
+  output.concat "08-07-2026\n"
+  output.concat "   1.4.2 feat(snapshot): save the latest parsed EXP snapshot so other scripts can read it without sending EXPERIENCE again.\n"
+  output.concat "\n"
+  output.concat "08-16-2026\n"
+  output.concat "   1.4.3 fix(output): use Saga-friendly preset colors while keeping the current Wrayth colors unchanged.\n"
+  output.concat "   1.4.4 fix(output): make Saga labels use whisper so they stand out better in mono reports.\n"
+  output.concat "   1.4.5 docs(changelog): list changelog entries oldest first.\n"
+  output.concat "\n"
+  output.concat "08-28-2026\n"
+  output.concat "   1.5.0 feat(dock): add controls for tutelog's resident xp2 status dock.\n"
+  output.concat "\n"
+  output.concat "09-07-2026\n"
+  output.concat "   1.6.0 feat(version): add ;xp2 version to show the installed xp2 and tutelog versions.\n"
+  output.concat "   1.6.1 fix(version): find tutelog through the Lich scripts directory before reading its version.\n"
+  output.concat "   1.7.0 feat(dock): add a Dock setup tab with client-specific color presets and display choices.\n"
+  output.concat "   1.7.1 style(dock): use two checkbox columns and remove the temporary color preset controls.\n"
+  output.concat "09-12-2026\n"
+  output.concat "   1.8.0 feat(dock): add an optional Next ATP bar when Ascension absorption is active below 100 percent.\n"
+  output.concat "   1.9.0 feat(dock): reorder progress bars and use Next ATP in the main slot at 100 percent absorption.\n"
+  output.concat "09-14-2026\n"
+  output.concat "   1.9.1 fix(tutelage): calculate completion ETA from the current session EXP rate before older rates.\n"
+  output.concat "09-18-2026\n"
+  output.concat "   1.9.2 fix(dock): close the Wrayth dock immediately when dock mode is turned off.\n"
+  output.concat "   1.9.3 fix(dock): replace stale Wrayth dock contents with a Dock off message when disabled.\n"
+  output.concat "   1.9.4 style(dock): center the Wrayth Dock off message.\n"
+  output
+end
+xp2_set_on_off = proc { |key, label, value|
+  case value.to_s.downcase
+  when 'on', 'yes', 'true', '1'
+    if key == 'tutelog_notify_pulses'
+      save_tutelog_notify.call('on')
+      lines = [ 'tutelog pulse notifications are now on.' ]
+      if !xp2_tutelog_installed.call
+        lines << 'Install tutelog to use pulse messages.'
+      elsif !xp2_tutelog_running.call
+        lines << 'Start tutelog with ;tutelog to see pulse messages.'
+      end
+      xp2_notice.call(lines)
+    else
+      xp2_save_var.call(key, 'on')
+      echo "#{label} check is now on."
+    end
+  when 'off', 'no', 'false', '0'
+    if key == 'tutelog_notify_pulses'
+      save_tutelog_notify.call('off')
+      lines = [ 'tutelog pulse notifications are now off.' ]
+      if !xp2_tutelog_installed.call
+        lines << 'Install tutelog to use pulse messages.'
+      elsif !xp2_tutelog_running.call
+        lines << 'Start tutelog with ;tutelog to see pulse messages.'
+      end
+      xp2_notice.call(lines)
+    else
+      xp2_save_var.call(key, 'off')
+      echo "#{label} check is now off."
+    end
+  else
+    echo "Usage: #{$clean_lich_char}#{script.name} <setting> on|off"
+  end
+}
+xp2_tutelog_preview_report = proc do |style|
+  style = tutelog_output_styles.include?(style.to_s) ? style.to_s : (tutelog_state['output_style'].to_s.empty? ? 'csv' : tutelog_state['output_style'].to_s)
+  style = 'csv' unless tutelog_output_styles.include?(style)
+  line = '------------------------------------------------------------'
+  report_indent = '        '
+  report_text = proc { |text| "#{report_indent}#{text}" }
+  preview_char = begin
+                   XMLData.respond_to?(:name) && XMLData.name ? XMLData.name.to_s : 'Maraella'
+                 rescue
+                   'Maraella'
+                 end
+  preview_char = 'Maraella' if preview_char.empty?
+  game_name = begin
+                XMLData.respond_to?(:game) && XMLData.game ? XMLData.game.to_s : 'GSIV'
+              rescue
+                'GSIV'
+              end
+  lich_dir = defined?(LICH_DIR) ? LICH_DIR : File.expand_path('..', File.dirname(__FILE__))
+  log_dir = File.join(lich_dir, 'logs', "#{game_name}-#{preview_char}")
+  state_dir = File.join(lich_dir, 'data', 'tutelog', "#{game_name}-#{preview_char}".gsub(/[^A-Za-z0-9_.-]+/, '_'))
+
+  parse_csv_line = proc do |line_text|
+    fields = []
+    current = ''
+    quoted = false
+    line_text.to_s.chomp.each_char do |char|
+      if quoted
+        if char == '"'
+          quoted = false
+        else
+          current << char
+        end
+      else
+        if char == '"'
+          quoted = true
+        elsif char == ','
+          fields << current
+          current = ''
+        else
+          current << char
+        end
+      end
+    end
+    fields << current
+    fields
+  end
+
+  blank_totals = proc { { 'session_exp_total' => 0, 'session_bonus_total' => 0, 'reward_exp_total' => 0, 'reward_count' => 0, 'pulses' => 0, 'pulse_values' => [], 'started_at' => 0, 'ended_at' => 0, 'saw_tutelage_data' => false, 'saw_log_request' => false } }
+  parse_time = proc do |text|
+    begin
+      Time.parse(text.to_s).to_i
+    rescue
+      0
+    end
+  end
+  apply_fields = proc do |totals, fields, fallback_time|
+    event = fields['event'].to_s
+    row_time = fields['timestamp'].to_s.empty? ? fallback_time.to_i : parse_time.call(fields['timestamp'])
+    row_time = fallback_time.to_i if row_time <= 0
+    if event == 'tutelage_start_message'
+      totals['session_exp_total'] = 0
+      totals['session_bonus_total'] = 0
+      totals['pulses'] = 0
+      totals['pulse_values'] = []
+      totals['reward_exp_total'] = 0
+      totals['reward_count'] = 0
+      totals['started_at'] = row_time if row_time > 0
+      totals['saw_tutelage_data'] = true
+    end
+    if event == 'pulse'
+      totals['pulses'] += 1
+      totals['pulse_values'] << fields['pulse'].to_i if fields['pulse'].to_i > 0
+      totals['saw_tutelage_data'] = true
+    elsif event == 'reward'
+      totals['reward_exp_total'] += fields['pulse'].to_i if fields['reward_exp_total'].to_s.empty?
+      totals['reward_count'] += 1 if fields['reward_count'].to_s.empty?
+      totals['saw_tutelage_data'] = true
+    elsif event == 'offline_absorb' || event == 'summary' || event == 'log_request'
+      totals['saw_tutelage_data'] = true
+    end
+    totals['saw_log_request'] = true if event == 'log_request'
+    totals['started_at'] = fields['started_at'].to_i if fields['started_at'].to_i > 0
+    totals['ended_at'] = fields['ended_at'].to_i if fields['ended_at'].to_i > 0
+    totals['session_exp_total'] = fields['session_exp_total'].to_i if fields['session_exp_total'] && !fields['session_exp_total'].to_s.empty?
+    totals['session_bonus_total'] = fields['session_bonus_total'].to_i if fields['session_bonus_total'] && !fields['session_bonus_total'].to_s.empty?
+    totals['reward_exp_total'] = fields['reward_exp_total'].to_i if fields['reward_exp_total'] && !fields['reward_exp_total'].to_s.empty?
+    totals['reward_count'] = fields['reward_count'].to_i if fields['reward_count'] && !fields['reward_count'].to_s.empty?
+    if fields['pulse_count'] && !fields['pulse_count'].to_s.empty?
+      totals['pulses'] = [totals['pulses'].to_i, fields['pulse_count'].to_i].max
+    elsif fields['pulses'] && !fields['pulses'].to_s.empty?
+      totals['pulses'] = [totals['pulses'].to_i, fields['pulses'].to_i].max
+    end
+    totals['ended_at'] = row_time if row_time > 0 && row_time > totals['ended_at'].to_i
+    totals['started_at'] = row_time if totals['started_at'].to_i <= 0 && row_time > 0 && totals['saw_tutelage_data']
+  end
+  parse_text_totals = proc do |path|
+    totals = blank_totals.call
+    begin
+      File.open(path, 'r') do |file|
+        file.each_line do |row|
+          fallback_time = parse_time.call(row[/\A[^|]+/, 0].to_s.strip)
+          fields = {}
+          row.strip.split(/\s+\|\s+/).each do |part|
+            key, value = part.split('=', 2)
+            fields[key] = value if key && value
+          end
+          apply_fields.call(totals, fields, fallback_time)
+        end
+      end
+    rescue
+    end
+    totals
+  end
+  parse_csv_totals = proc do |path|
+    totals = blank_totals.call
+    begin
+      lines = File.readlines(path)
+      headers = parse_csv_line.call(lines.shift || '')
+      lines.each do |row|
+        values = parse_csv_line.call(row)
+        fields = {}
+        headers.each_with_index { |key, index| fields[key] = values[index] if key && !key.empty? }
+        fields['details'].to_s.split(/\s*;\s*/).each do |detail|
+          key, value = detail.split('=', 2)
+          fields[key] = value if key && value && !key.empty? && fields[key].to_s.empty?
+        end
+        apply_fields.call(totals, fields, parse_time.call(fields['timestamp']))
+      end
+    rescue
+    end
+    totals
+  end
+  pulse_stats = proc do |totals|
+    values = Array(totals['pulse_values']).map(&:to_i).select { |value| value > 0 }
+    sorted = values.sort
+    count = values.length
+    average = count > 0 ? (values.inject(0.0) { |sum, value| sum + value } / count) : 0.0
+    median = if count == 0
+               0
+             elsif count.odd?
+               sorted[count / 2]
+             else
+               ((sorted[(count / 2) - 1] + sorted[count / 2]) / 2.0).round
+             end
+    largest = sorted.last || 0
+    threshold = average + 50.0
+    unusual_values = values.select { |value| value > threshold }
+    unusual_exp = unusual_values.inject(0) { |sum, value| sum + value }
+    unusual_bonus = unusual_values.inject(0) { |sum, value| sum + (value * 0.8).round }
+    {
+      'average_pulse' => count > 0 ? format('%.1f', average) : '0',
+      'median_pulse' => median,
+      'largest_pulse' => largest,
+      'unusual_pulse_count' => unusual_values.length,
+      'unusual_exp_total' => unusual_exp,
+      'unusual_bonus_total' => unusual_bonus,
+      'reward_exp_total' => totals['reward_exp_total'].to_i,
+      'reward_count' => totals['reward_count'].to_i,
+      'adjusted_exp_total' => [ totals['session_exp_total'].to_i - totals['reward_exp_total'].to_i - unusual_exp, 0 ].max,
+      'adjusted_bonus_total' => [ totals['session_bonus_total'].to_i - unusual_bonus, 0 ].max
+    }
+  end
+  format_seconds = proc do |seconds|
+    seconds = seconds.to_i
+    next 'not available' if seconds <= 0
+    days = seconds / 86_400
+    seconds %= 86_400
+    hours = seconds / 3_600
+    seconds %= 3_600
+    minutes = seconds / 60
+    parts = []
+    parts << "#{days}d" if days > 0
+    parts << "#{hours}h" if hours > 0
+    parts << "#{minutes}m" if minutes > 0 || parts.empty?
+    parts.join(' ')
+  end
+
+  candidate_files = []
+  candidate_files.concat(Dir[File.join(state_dir, "tute_#{preview_char}_c*.state")])
+  candidate_files.concat(Dir[File.join(log_dir, "tute_#{preview_char}_c*.log")])
+  candidate_files.concat(Dir[File.join(log_dir, "tute_#{preview_char}_c*.csv")])
+  candidate_files = candidate_files.select { |path| File.file?(path) }
+  current_cycle = tutelog_state['cycle_label'].to_s
+  current_cycle = Vars['xp2_tutelage_tutelog_cycle'].to_s if current_cycle.empty?
+  current_cycle_files = if Vars['xp2_tutelage_state'].to_s == 'active' && !current_cycle.empty?
+                          candidate_files.select { |path| File.basename(path) =~ /_c#{Regexp.escape(current_cycle)}\.(?:state|log|csv)\z/i }
+                        else
+                          []
+                        end
+  search_files = current_cycle_files.empty? ? candidate_files : current_cycle_files
+  latest_path = search_files.max_by { |path| [File.mtime(path).to_i, path] }
+  real_data = false
+  source_note = nil
+
+  if latest_path
+    cycle_match = File.basename(latest_path).match(/_c(\d+|unknown)\.(?:state|log|csv)\z/)
+    latest_cycle = cycle_match ? cycle_match[1] : 'unknown'
+    totals = latest_path =~ /\.csv\z/i ? parse_csv_totals.call(latest_path) : parse_text_totals.call(latest_path)
+    if totals['pulses'].to_i > 0 || totals['saw_tutelage_data']
+      real_data = true
+      started_at = totals['started_at'].to_i
+      ended_at = totals['ended_at'].to_i
+      duration_seconds = started_at > 0 && ended_at > started_at ? ended_at - started_at : 0
+      log_path = File.join(log_dir, "tute_#{preview_char}_c#{latest_cycle}.log")
+      csv_path = File.join(log_dir, "tute_#{preview_char}_c#{latest_cycle}.csv")
+      summary = {
+        'character' => preview_char,
+        'cycle_label' => latest_cycle,
+        'duration_text' => format_seconds.call(duration_seconds),
+        'session_exp_total' => totals['session_exp_total'].to_i,
+        'session_bonus_total' => totals['session_bonus_total'].to_i,
+        'reward_exp_total' => totals['reward_exp_total'].to_i,
+        'reward_count' => totals['reward_count'].to_i,
+        'pulse_count' => totals['pulses'].to_i,
+        'log_path' => log_path,
+        'csv_path' => csv_path,
+        'state_path' => File.join(state_dir, "tute_#{preview_char}_c#{latest_cycle}.state"),
+        'still_recording' => !totals['saw_log_request'] && Vars['xp2_tutelage_state'].to_s == 'active',
+        'sendable_report' => !!totals['saw_log_request']
+      }.merge(pulse_stats.call(totals))
+      source_note = if totals['saw_log_request']
+                      "Latest completed data from #{File.basename(latest_path)}."
+                    elsif Vars['xp2_tutelage_state'].to_s == 'active'
+                      "Still recording data for this cycle. Latest data from #{File.basename(latest_path)}."
+                    else
+                      "Latest saved data from #{File.basename(latest_path)}. Tutelage is not active now."
+                    end
+    end
+  end
+
+  unless real_data
+    sample_cycle = '20260614'
+    log_path = File.join(log_dir, "tute_#{preview_char}_c#{sample_cycle}.log")
+    csv_path = File.join(log_dir, "tute_#{preview_char}_c#{sample_cycle}.csv")
+    summary = {
+      'character' => preview_char,
+      'cycle_label' => sample_cycle,
+      'duration_text' => '46h 41m',
+      'session_exp_total' => 136_105,
+      'session_bonus_total' => 108_957,
+      'reward_exp_total' => 0,
+      'reward_count' => 0,
+      'pulse_count' => 696,
+      'average_pulse' => '176.6',
+      'median_pulse' => 155,
+      'largest_pulse' => 536,
+      'unusual_pulse_count' => 38,
+      'unusual_exp_total' => 15_845,
+      'unusual_bonus_total' => 12_676,
+      'adjusted_exp_total' => 120_260,
+      'adjusted_bonus_total' => 96_281,
+      'log_path' => log_path,
+      'csv_path' => csv_path,
+      'state_path' => File.join(state_dir, "tute_#{preview_char}_c#{sample_cycle}.state")
+    }
+  end
+
+  public_file_lines = []
+  public_file_lines << "CSV: #{summary['csv_path']}" if style == 'csv' && File.exist?(summary['csv_path'].to_s)
+
+  sample_file_lines = case style
+                      when 'csv'
+                        [ "CSV: #{summary['csv_path']}" ]
+                      when 'none'
+                        []
+                      else
+                        [ "CSV: #{summary['csv_path']}" ]
+                      end
+  sendable_report = real_data && summary['sendable_report']
+  file_lines = sendable_report ? public_file_lines : []
+
+  report_row = proc do |left_label, left_value, right_label = nil, right_value = nil|
+    left_label_text = left_label.to_s.rjust(13)
+    left_value_text = left_value.to_s
+    left_plain = "#{left_label_text}: #{left_value_text}"
+    left = "#{xp2_inline_preset.call('speech', left_label_text)}: #{left_value_text}"
+    if right_label
+      right_label_text = right_label.to_s.rjust(13)
+      right_value_text = right_value.to_s
+      right = "#{xp2_inline_preset.call('speech', right_label_text)}: #{right_value_text}"
+      "  #{left}#{' ' * [31 - left_plain.length, 1].max}#{right}"
+    else
+      "  #{left}"
+    end
+  end
+
+  report_lines = []
+  title = if real_data && summary['still_recording']
+            '*~ Current Tutelage Data ~*'
+          elsif real_data
+            '*~ Latest Tutelage Data ~*'
+          else
+            '*~ Example Tutelage Report ~*'
+          end
+  report_lines << xp2_inline_emphasis.call(title.center(line.length))
+  report_lines << ''
+  unless real_data
+    report_lines << "  Example data only - no Tutelage data was found for #{summary['character']}."
+    report_lines << '  These numbers are only a sample of how a finished report will look.'
+    report_lines << ''
+  end
+  report_lines << report_row.call('Character', summary['character'], 'Cycle', summary['cycle_label'])
+  report_lines << report_row.call('Duration', summary['duration_text'], 'Pulses', xp2_format_number.call(summary['pulse_count']))
+  report_lines << ''
+  best_bonus_total = summary['unusual_pulse_count'].to_i > 0 ? summary['adjusted_bonus_total'].to_i : summary['session_bonus_total'].to_i
+  raw_bonus_total = summary['session_bonus_total'].to_i
+  unusual_bonus_total = summary['unusual_bonus_total'] ? summary['unusual_bonus_total'].to_i : [ raw_bonus_total - best_bonus_total, 0 ].max
+  report_lines << report_row.call('EXP Tracked', xp2_format_number.call(summary['session_exp_total']), 'Est. Bonus', "#{xp2_format_number.call(best_bonus_total)} (#{xp2_tutelage_bonus_percent.call(best_bonus_total)})")
+  if unusual_bonus_total > 0
+    report_lines << report_row.call('Raw Bonus', xp2_format_number.call(raw_bonus_total), 'Unusual Bonus Removed', xp2_format_number.call(unusual_bonus_total))
+  end
+  if summary['reward_exp_total'].to_i > 0 || summary['reward_count'].to_i > 0
+    report_lines << report_row.call('Reward EXP', xp2_format_number.call(summary['reward_exp_total']), 'Rewards', xp2_format_number.call(summary['reward_count']))
+  end
+  report_lines << ''
+  report_lines << xp2_inline_emphasis.call('  Pulse Stats')
+  report_lines << report_row.call('Average', "#{summary['average_pulse']} EXP", 'Median', "#{xp2_format_number.call(summary['median_pulse'])} EXP")
+  report_lines << report_row.call('Largest', "#{xp2_format_number.call(summary['largest_pulse'])} EXP", 'Unusual', "#{xp2_format_number.call(summary['unusual_pulse_count'])} pulses")
+  report_lines << report_row.call('Unusual EXP', xp2_format_number.call(summary['unusual_exp_total']), 'Threshold', 'avg + 50')
+  report_lines << ''
+  report_lines << xp2_inline_emphasis.call('  Adjusted Estimate')
+  report_lines << report_row.call('Reward EXP removed', xp2_format_number.call(summary['reward_exp_total'])) if summary['reward_exp_total'].to_i > 0
+  report_lines << report_row.call('EXP minus reward/unusual', xp2_format_number.call(summary['adjusted_exp_total']))
+  report_lines << ''
+  report_lines << xp2_inline_preset.call('watching', '  Note: RPA or other stacked EXP bonuses may raise normal pulse size.')
+  report_lines << ''
+  if !real_data
+    report_lines << '  No CSV exists for this example.'
+  elsif summary['still_recording']
+    report_lines << xp2_inline_preset.call('watching', '  This cycle is still recording.')
+  elsif !sendable_report
+    report_lines << xp2_inline_preset.call('watching', '  Tutelage is not active now, and no completed CSV report was saved.')
+  elsif style == 'none'
+    report_lines << xp2_inline_preset.call('watching', '  Logging was off, so no public CSV was saved.')
+  elsif file_lines.empty? && real_data
+    report_lines << xp2_inline_preset.call('watching', '  No public CSV was saved for this cycle.')
+    report_lines << "  Hidden state: #{summary['state_path']}"
+  else
+    file_lines.each { |file_line| report_lines << "  #{file_line}" }
+  end
+  report_lines << ''
+  report_lines << (real_data ? source_note : 'Example only - no character data was saved or changed.')
+  xp2_mono_block.call(report_lines.join("\n"), 'speech')
+end
+xp2_open_settings = proc {
+  begin
+  unless defined?(Gtk)
+    echo 'xp2 settings GUI is not available because GTK is not loaded.'
+    next
+  end
+  if defined?($xp2_settings_window) && $xp2_settings_window
+    Gtk.queue { $xp2_settings_window.present }
+    next
+  end
+  done = false
+  settings_closed = false
+  settings_message = nil
+  tutelog_running = begin
+                      running?('tutelog')
+                    rescue
+                      begin
+                        Script.running?('tutelog')
+                      rescue
+                        false
+                      end
+                    end
+  Gtk.queue {
+    set_tooltip = proc do |widget, text|
+      if widget.respond_to?(:tooltip_text=)
+        widget.tooltip_text = text
+      elsif widget.respond_to?(:set_tooltip_text)
+        widget.set_tooltip_text(text)
+      end
+    end
+    main_table = Gtk::Table.new(3, 1)
+    notebook = Gtk::Notebook.new
+    table = Gtk::Table.new(8, 2)
+    notebook.append_page(table, Gtk::Label.new('xp2'))
+    tutelog_table = nil
+    tutelog_row = 0
+    dock_table = Gtk::Table.new(18, 2)
+    notebook.append_page(dock_table, Gtk::Label.new('dock'))
+    dock_row = 0
+    checks = {}
+
+    dock_client_label = Gtk::Label.new("Detected client: #{tutelog_dock_frontend.call}")
+    set_tooltip.call(dock_client_label, 'The dock uses the layout that matches this client.')
+    dock_table.attach(dock_client_label, 0, 2, dock_row, dock_row + 1, Gtk::AttachOptions::FILL, Gtk::AttachOptions::FILL, 6, 4)
+    dock_row += 1
+
+    dock_description = Gtk::Label.new('Choose what the resident dock shows.')
+    set_tooltip.call(dock_description, 'These choices affect the dock only. They do not change story-window output.')
+    dock_table.attach(dock_description, 0, 2, dock_row, dock_row + 1, Gtk::AttachOptions::FILL, Gtk::AttachOptions::FILL, 6, 4)
+    dock_row += 1
+
+    dock_checkbox = Gtk::CheckButton.new('Show xp2 status dock')
+    dock_checkbox.active = tutelog_enabled.call('dock_enabled')
+    set_tooltip.call(dock_checkbox, 'When on, tutelog opens a small resident dock with current xp2 and pulse information. Use ;xp2 dock off to close it.')
+    dock_table.attach(dock_checkbox, 0, 2, dock_row, dock_row + 1, Gtk::AttachOptions::FILL, Gtk::AttachOptions::FILL, 6, 4)
+    checks['tutelog_dock_enabled'] = dock_checkbox
+    dock_row += 1
+
+    dock_detail_labels = {
+      'level' => 'Show level',
+      'mind' => 'Show mind',
+      'pulse' => 'Show pulse age',
+      'last' => 'Show last pulse',
+      'count' => 'Show pulse count',
+      'lumnis' => 'Show Lumnis',
+      'rpa' => 'Show RPA',
+      'next' => 'Show next level or TP bar',
+      'atp' => 'Show next Ascension point bar',
+      'field' => 'Show field EXP bar',
+      'tutelage' => 'Show Tutelage bar'
+    }
+    tutelog_dock_show_keys.each_with_index do |key, index|
+      checkbox = Gtk::CheckButton.new(dock_detail_labels[key])
+      checkbox.active = tutelog_enabled.call("dock_show_#{key}")
+      set_tooltip.call(checkbox, 'Show or hide this item in the resident xp2 dock.')
+      column = index.even? ? 0 : 1
+      row = dock_row + (index / 2)
+      dock_table.attach(checkbox, column, column + 1, row, row + 1, Gtk::AttachOptions::FILL, Gtk::AttachOptions::FILL, 6, 4)
+      checks["tutelog_dock_show_#{key}"] = checkbox
+    end
+    dock_row += (tutelog_dock_show_keys.length + 1) / 2
+
+    dock_separator = Gtk::HSeparator.new if defined?(Gtk::HSeparator)
+    if dock_separator
+      dock_table.attach(dock_separator, 0, 2, dock_row, dock_row + 1, Gtk::AttachOptions::FILL, Gtk::AttachOptions::FILL, 6, 4)
+      dock_row += 1
+    end
+    if tutelog_running
+      tutelog_table = Gtk::Table.new(10, 2)
+      notebook.append_page(tutelog_table, Gtk::Label.new('tutelog'))
+    end
+    row = 0
+
+    layout_label = Gtk::Label.new('Layout')
+    layout_combo = Gtk::ComboBoxText.new
+    layout_combo.append_text('wide')
+    layout_combo.append_text('tall')
+    layout_combo.active = (Vars['xp2_layout'].to_s == 'tall' ? 1 : 0)
+    set_tooltip.call(layout_label, 'Choose the tracking table shape. Wide uses the original side-by-side table. Tall uses a narrower table that is easier to read in smaller windows.')
+    set_tooltip.call(layout_combo, 'Choose the tracking table shape. Wide uses the original side-by-side table. Tall uses a narrower table that is easier to read in smaller windows.')
+    table.attach(layout_label, 0, 1, row, row + 1, Gtk::AttachOptions::FILL, Gtk::AttachOptions::FILL, 6, 4)
+    table.attach(layout_combo, 1, 2, row, row + 1, Gtk::AttachOptions::FILL, Gtk::AttachOptions::FILL, 6, 4)
+    row += 1
+
+    goal_label = Gtk::Label.new('Goal')
+    goal_entry = Gtk::Entry.new
+    goal_entry.text = Vars['xp2_goal'].to_i.to_s
+    set_tooltip.call(goal_label, 'Sets the experience goal used for until goal and percent complete. Accepts plain numbers, commas, k, m, thousand, million, or a level such as level 95.')
+    set_tooltip.call(goal_entry, 'Sets the experience goal used for until goal and percent complete. Examples: 1000000, 1,000,000, 10k, 22.4m, 10 million, level 95.')
+    table.attach(goal_label, 0, 1, row, row + 1, Gtk::AttachOptions::FILL, Gtk::AttachOptions::FILL, 6, 4)
+    table.attach(goal_entry, 1, 2, row, row + 1, Gtk::AttachOptions::EXPAND | Gtk::AttachOptions::FILL, Gtk::AttachOptions::FILL, 6, 4)
+    row += 1
+    goal_feedback = Gtk::Label.new('')
+    goal_feedback.use_markup = true if goal_feedback.respond_to?(:use_markup=)
+    goal_feedback.set_alignment(0, 0.5) if goal_feedback.respond_to?(:set_alignment)
+    table.attach(goal_feedback, 1, 2, row, row + 1, Gtk::AttachOptions::FILL, Gtk::AttachOptions::FILL, 6, 0)
+    row += 1
+    update_goal_feedback = proc {
+      if xp2_parse_goal.call(goal_entry.text).nil?
+        if goal_feedback.respond_to?(:markup=)
+          goal_feedback.markup = '<span foreground="red">Invalid input</span>'
+        else
+          goal_feedback.text = 'Invalid input'
+        end
+      else
+        goal_feedback.text = ''
+      end
+    }
+    update_goal_feedback.call
+    goal_entry.signal_connect('changed') { update_goal_feedback.call }
+
+
+    [
+      [ 'Run Lumnis check', 'xp2_check_lumnis', 'When on, xp2 quietly runs LUMNIS INFO so it can show Gift of Lumnis status, refresh time, Tutelage days/state, schedule, and donations.' ],
+      [ 'Run Ascension check', 'xp2_check_ascension', 'When on, xp2 quietly runs ASCENSION EXP so it can show ATPs and Ascension absorption. Turn it off to avoid that extra command.' ],
+      [ 'Run Resource check', 'xp2_check_resource', 'When on, xp2 quietly runs RESOURCE so it can show profession resource totals, Voln Favor, and extras such as Covert Arts charges when present.' ]
+    ].each do |label, key, tooltip|
+      checkbox = Gtk::CheckButton.new(label)
+      checkbox.active = xp2_enabled.call(key)
+      set_tooltip.call(checkbox, tooltip)
+      table.attach(checkbox, 0, 2, row, row + 1, Gtk::AttachOptions::FILL, Gtk::AttachOptions::FILL, 6, 4)
+      checks[key] = checkbox
+      row += 1
+    end
+
+    preserve_entry = nil
+    output_style_combo = nil
+    reset_mode_combo = nil
+    idle_minutes_entry = nil
+    no_pulse_minutes_entry = nil
+    if tutelog_running
+      [
+        [ 'Log Tutelage data', 'tutelog_logging_enabled', 'When on, tutelog writes a public CSV file when output is set to CSV. When off, tutelog still keeps a hidden per-character cycle state file for tracking, but does not ask anyone to send it.' ],
+        [ 'Print tutelog pulses', 'tutelog_notify_pulses', 'When on, tutelog prints pulse messages in the story window, including pulse EXP and Tutelage totals when active. When off, it keeps tracking quietly.' ]
+      ].each do |label, key, tooltip|
+        checkbox = Gtk::CheckButton.new(label)
+        checkbox.active = key == 'tutelog_notify_pulses' ? tutelog_enabled.call('notify_pulses') : tutelog_enabled.call('logging_enabled')
+        set_tooltip.call(checkbox, tooltip)
+        tutelog_table.attach(checkbox, 0, 2, tutelog_row, tutelog_row + 1, Gtk::AttachOptions::FILL, Gtk::AttachOptions::FILL, 6, 4)
+        checks[key] = checkbox
+        tutelog_row += 1
+      end
+
+      no_pulse_checkbox = Gtk::CheckButton.new('Warn when pulses stop')
+      no_pulse_checkbox.active = tutelog_enabled.call('no_pulse_alert')
+      set_tooltip.call(no_pulse_checkbox, 'When on, tutelog prints one story-window warning if no EXP pulse arrives for the chosen number of minutes. It is off by default.')
+      tutelog_table.attach(no_pulse_checkbox, 0, 2, tutelog_row, tutelog_row + 1, Gtk::AttachOptions::FILL, Gtk::AttachOptions::FILL, 6, 4)
+      checks['tutelog_no_pulse_alert'] = no_pulse_checkbox
+      tutelog_row += 1
+
+      reset_mode_label = Gtk::Label.new('General reset')
+      reset_mode_combo = Gtk::ComboBoxText.new
+      tutelog_reset_modes.each { |mode| reset_mode_combo.append_text(mode) }
+      reset_mode_combo.active = tutelog_reset_modes.index(tutelog_state['general_reset_mode'].to_s) || 0
+      set_tooltip.call(reset_mode_label, 'Chooses when non-Tutelage pulse session stats reset. daily resets on a new local date, run resets whenever tutelog starts, idle resets after the chosen idle minutes.')
+      set_tooltip.call(reset_mode_combo, 'Chooses when non-Tutelage pulse session stats reset. daily resets on a new local date, run resets whenever tutelog starts, idle resets after the chosen idle minutes.')
+      tutelog_table.attach(reset_mode_label, 0, 1, tutelog_row, tutelog_row + 1, Gtk::AttachOptions::FILL, Gtk::AttachOptions::FILL, 6, 4)
+      tutelog_table.attach(reset_mode_combo, 1, 2, tutelog_row, tutelog_row + 1, Gtk::AttachOptions::FILL, Gtk::AttachOptions::FILL, 6, 4)
+      tutelog_row += 1
+
+      idle_minutes_label = Gtk::Label.new('Idle reset minutes')
+      idle_minutes_entry = Gtk::Entry.new
+      idle_minutes_entry.text = tutelog_state['general_idle_minutes'].to_i.to_s
+      set_tooltip.call(idle_minutes_label, 'Only used when General reset is idle. If tutelog starts after this many minutes without a pulse, the general pulse session starts fresh. Default is 480 minutes, which is 8 hours.')
+      set_tooltip.call(idle_minutes_entry, 'Only used when General reset is idle. Use 1 or higher. Default is 480 minutes, which is 8 hours.')
+      tutelog_table.attach(idle_minutes_label, 0, 1, tutelog_row, tutelog_row + 1, Gtk::AttachOptions::FILL, Gtk::AttachOptions::FILL, 6, 4)
+      tutelog_table.attach(idle_minutes_entry, 1, 2, tutelog_row, tutelog_row + 1, Gtk::AttachOptions::EXPAND | Gtk::AttachOptions::FILL, Gtk::AttachOptions::FILL, 6, 4)
+      tutelog_row += 1
+
+      no_pulse_minutes_label = Gtk::Label.new('No-pulse minutes')
+      no_pulse_minutes_entry = Gtk::Entry.new
+      no_pulse_minutes_entry.text = tutelog_state['no_pulse_minutes'].to_i.to_s
+      set_tooltip.call(no_pulse_minutes_label, 'When no-pulse warnings are on, this is how many minutes without EXP before tutelog prints a warning. Default is 10.')
+      set_tooltip.call(no_pulse_minutes_entry, 'When no-pulse warnings are on, this is how many minutes without EXP before tutelog prints a warning. Use 1 or higher. Default is 10.')
+      tutelog_table.attach(no_pulse_minutes_label, 0, 1, tutelog_row, tutelog_row + 1, Gtk::AttachOptions::FILL, Gtk::AttachOptions::FILL, 6, 4)
+      tutelog_table.attach(no_pulse_minutes_entry, 1, 2, tutelog_row, tutelog_row + 1, Gtk::AttachOptions::EXPAND | Gtk::AttachOptions::FILL, Gtk::AttachOptions::FILL, 6, 4)
+      tutelog_row += 1
+
+      preserve_label = Gtk::Label.new('Tutelog cycles to keep')
+      preserve_entry = Gtk::Entry.new
+      preserve_entry.text = [ tutelog_state['preserve_cycles'].to_i, 1 ].max.to_s
+      set_tooltip.call(preserve_label, 'How many old Tutelage cycle files to keep per character. Older CSV files and hidden state files are pruned after this limit.')
+      set_tooltip.call(preserve_entry, 'How many old Tutelage cycle files to keep per character. Use 1 or higher. Default is 6.')
+      tutelog_table.attach(preserve_label, 0, 1, tutelog_row, tutelog_row + 1, Gtk::AttachOptions::FILL, Gtk::AttachOptions::FILL, 6, 4)
+      tutelog_table.attach(preserve_entry, 1, 2, tutelog_row, tutelog_row + 1, Gtk::AttachOptions::EXPAND | Gtk::AttachOptions::FILL, Gtk::AttachOptions::FILL, 6, 4)
+      tutelog_row += 1
+
+      output_style_label = Gtk::Label.new('Tutelog output')
+      output_style_combo = Gtk::ComboBoxText.new
+      tutelog_output_styles.each { |style| output_style_combo.append_text(style) }
+      output_style_combo.active = tutelog_output_styles.index(tutelog_state['output_style'].to_s) || 0
+      set_tooltip.call(output_style_label, 'Controls public tutelog output. csv writes the spreadsheet file. none writes no public file and keeps only the hidden state file.')
+      set_tooltip.call(output_style_combo, 'Controls public tutelog output. csv writes the spreadsheet file. none writes no public file and keeps only the hidden state file.')
+      tutelog_table.attach(output_style_label, 0, 1, tutelog_row, tutelog_row + 1, Gtk::AttachOptions::FILL, Gtk::AttachOptions::FILL, 6, 4)
+      tutelog_table.attach(output_style_combo, 1, 2, tutelog_row, tutelog_row + 1, Gtk::AttachOptions::FILL, Gtk::AttachOptions::FILL, 6, 4)
+      tutelog_row += 1
+    end
+
+    initial_settings = {
+      'layout' => Vars['xp2_layout'].to_s,
+      'goal' => Vars['xp2_goal'].to_i,
+      'xp2_check_lumnis' => xp2_enabled.call('xp2_check_lumnis'),
+      'xp2_check_ascension' => xp2_enabled.call('xp2_check_ascension'),
+      'xp2_check_resource' => xp2_enabled.call('xp2_check_resource')
+    }
+    if tutelog_running
+      initial_settings['tutelog_logging_enabled'] = tutelog_enabled.call('logging_enabled')
+      initial_settings['tutelog_notify_pulses'] = tutelog_enabled.call('notify_pulses')
+      initial_settings['tutelog_preserve_cycles'] = [ tutelog_state['preserve_cycles'].to_i, 1 ].max
+      initial_settings['tutelog_output_style'] = tutelog_state['output_style'].to_s
+      initial_settings['tutelog_no_pulse_alert'] = tutelog_enabled.call('no_pulse_alert')
+      initial_settings['tutelog_general_reset_mode'] = tutelog_state['general_reset_mode'].to_s
+      initial_settings['tutelog_general_idle_minutes'] = tutelog_state['general_idle_minutes'].to_i
+      initial_settings['tutelog_no_pulse_minutes'] = tutelog_state['no_pulse_minutes'].to_i
+    end
+    initial_settings['tutelog_dock_enabled'] = tutelog_enabled.call('dock_enabled')
+    tutelog_dock_show_keys.each do |key|
+      initial_settings["tutelog_dock_show_#{key}"] = tutelog_enabled.call("dock_show_#{key}")
+    end
+
+    status = Gtk::Label.new('Changes save when this window closes.')
+    main_table.attach(notebook, 0, 1, 0, 1, Gtk::AttachOptions::EXPAND | Gtk::AttachOptions::FILL, Gtk::AttachOptions::EXPAND | Gtk::AttachOptions::FILL, 6, 4)
+    main_table.attach(status, 0, 1, 1, 2, Gtk::AttachOptions::FILL, Gtk::AttachOptions::FILL, 6, 4)
+
+    if defined?(Gtk::Box)
+      buttons = Gtk::Box.new(:horizontal)
+      close_button = Gtk::Button.new(:label => 'Close')
+      buttons.pack_start(close_button, :expand => false, :fill => false, :padding => 4)
+    else
+      buttons = Gtk::HBox.new
+      close_button = Gtk::Button.new(:label => 'Close')
+      buttons.pack_start(close_button, false, false, 4)
+    end
+    main_table.attach(buttons, 0, 1, 2, 3, Gtk::AttachOptions::FILL, Gtk::AttachOptions::FILL, 6, 6)
+
+    save_settings = proc {
+      result = nil
+      report_errors {
+        layout = layout_combo.active == 1 ? 'tall' : 'wide'
+        goal = xp2_parse_goal.call(goal_entry.text)
+        tutelog_keep = preserve_entry ? preserve_entry.text.to_s.gsub(/[^0-9]/, '').to_i : nil
+        tutelog_idle_minutes = idle_minutes_entry ? idle_minutes_entry.text.to_s.gsub(/[^0-9]/, '').to_i : nil
+        tutelog_no_pulse_minutes = no_pulse_minutes_entry ? no_pulse_minutes_entry.text.to_s.gsub(/[^0-9]/, '').to_i : nil
+        if goal.nil?
+          settings_message = 'settings were not saved: goal must use numbers, commas, decimals, k, m, thousand, million, or level 95.'
+          status.text = 'Not saved.'
+          update_goal_feedback.call
+          result = false
+        elsif tutelog_running && tutelog_keep.to_i < 1
+          settings_message = 'settings were not saved: tutelog cycles to keep must be 1 or higher.'
+          status.text = 'Not saved.'
+          result = false
+        elsif tutelog_running && tutelog_idle_minutes.to_i < 1
+          settings_message = 'settings were not saved: idle reset minutes must be 1 or higher.'
+          status.text = 'Not saved.'
+          result = false
+        elsif tutelog_running && tutelog_no_pulse_minutes.to_i < 1
+          settings_message = 'settings were not saved: no-pulse minutes must be 1 or higher.'
+          status.text = 'Not saved.'
+          result = false
+        else
+          current_settings = {
+            'layout' => layout,
+            'goal' => goal.to_i,
+            'xp2_check_lumnis' => xp2_checkbox_active.call(checks['xp2_check_lumnis']),
+            'xp2_check_ascension' => xp2_checkbox_active.call(checks['xp2_check_ascension']),
+            'xp2_check_resource' => xp2_checkbox_active.call(checks['xp2_check_resource']),
+            'tutelog_dock_enabled' => xp2_checkbox_active.call(checks['tutelog_dock_enabled'])
+          }
+          tutelog_dock_show_keys.each do |key|
+            current_settings["tutelog_dock_show_#{key}"] = xp2_checkbox_active.call(checks["tutelog_dock_show_#{key}"])
+          end
+          if tutelog_running
+            current_settings['tutelog_logging_enabled'] = xp2_checkbox_active.call(checks['tutelog_logging_enabled'])
+            current_settings['tutelog_notify_pulses'] = xp2_checkbox_active.call(checks['tutelog_notify_pulses'])
+            current_settings['tutelog_preserve_cycles'] = tutelog_keep
+            current_settings['tutelog_output_style'] = tutelog_output_styles[output_style_combo.active || 0] || 'csv'
+            current_settings['tutelog_no_pulse_alert'] = xp2_checkbox_active.call(checks['tutelog_no_pulse_alert'])
+            current_settings['tutelog_general_reset_mode'] = tutelog_reset_modes[reset_mode_combo.active || 0] || 'run'
+            current_settings['tutelog_general_idle_minutes'] = tutelog_idle_minutes
+            current_settings['tutelog_no_pulse_minutes'] = tutelog_no_pulse_minutes
+          end
+          if current_settings == initial_settings
+            settings_message = 'settings were not saved: no changes were made.'
+            status.text = 'No changes.'
+            result = false
+          else
+            CharSettings['xp2_layout'] = layout
+            xp2_save_var.call('xp2_layout', layout)
+            CharSettings['goal'] = goal
+            xp2_save_var.call('xp2_goal', goal.to_s)
+            goal_entry.text = goal.to_s if goal_entry.text.to_s.gsub(',', '').strip != goal.to_s
+            checks.each do |key, checkbox|
+              if key == 'tutelog_notify_pulses'
+                save_tutelog_setting.call('notify_pulses', xp2_checkbox_active.call(checkbox) ? 'on' : 'off')
+              elsif key == 'tutelog_logging_enabled'
+                save_tutelog_setting.call('logging_enabled', xp2_checkbox_active.call(checkbox) ? 'on' : 'off')
+              elsif key == 'tutelog_no_pulse_alert'
+                save_tutelog_setting.call('no_pulse_alert', xp2_checkbox_active.call(checkbox) ? 'on' : 'off')
+              elsif key == 'tutelog_dock_enabled'
+                save_tutelog_setting.call('dock_enabled', xp2_checkbox_active.call(checkbox) ? 'on' : 'off')
+              elsif key.start_with?('tutelog_dock_show_')
+                dock_key = key.sub('tutelog_', '')
+                save_tutelog_setting.call(dock_key, xp2_checkbox_active.call(checkbox) ? 'on' : 'off')
+              else
+                xp2_save_var.call(key, xp2_checkbox_active.call(checkbox) ? 'on' : 'off')
+              end
+            end
+            if tutelog_running
+              save_tutelog_setting.call('preserve_cycles', tutelog_keep.to_s)
+              save_tutelog_setting.call('output_style', tutelog_output_styles[output_style_combo.active || 0] || 'csv')
+              save_tutelog_setting.call('general_reset_mode', tutelog_reset_modes[reset_mode_combo.active || 0] || 'run')
+              save_tutelog_setting.call('general_idle_minutes', tutelog_idle_minutes.to_s)
+              save_tutelog_setting.call('no_pulse_minutes', tutelog_no_pulse_minutes.to_s)
+              preserve_entry.text = tutelog_keep.to_s if preserve_entry.text.to_s != tutelog_keep.to_s
+              idle_minutes_entry.text = tutelog_idle_minutes.to_s if idle_minutes_entry.text.to_s != tutelog_idle_minutes.to_s
+              no_pulse_minutes_entry.text = tutelog_no_pulse_minutes.to_s if no_pulse_minutes_entry.text.to_s != tutelog_no_pulse_minutes.to_s
+            end
+            settings_message = 'settings saved.'
+            status.text = 'Saved.'
+            result = true
+          end
+        end
+      }
+      result
+    }
+
+    close_settings_window = proc {
+      begin
+        if settings_closed
+          true
+        else
+          settings_closed = true
+          save_settings.call
+          done = true
+          window = $xp2_settings_window
+          $xp2_settings_window = nil
+          begin
+            window.set_keep_above(false) if window && window.respond_to?(:set_keep_above)
+          rescue
+          end
+          begin
+            window.hide if window && window.respond_to?(:hide)
+          rescue
+          end
+          true
+        end
+      rescue
+        settings_closed = true
+        done = true
+        $xp2_settings_window = nil
+        true
+      end
+    }
+
+    close_button.signal_connect('clicked') { close_settings_window.call }
+
+    $xp2_settings_window = Gtk::Window.new
+    $xp2_settings_window.title = 'xp2 Settings'
+    $xp2_settings_window.add(main_table)
+    $xp2_settings_window.signal_connect('delete_event') {
+      close_settings_window.call
+      true
+    }
+    $xp2_settings_window.signal_connect('destroy') {
+      settings_closed = true
+      done = true
+      $xp2_settings_window = nil
+      true
+    }
+    $xp2_settings_window.set_default_size(380, 360)
+    $xp2_settings_window.set_keep_above(true)
+    $xp2_settings_window.set_window_position(:center)
+    $xp2_settings_window.show_all
+  }
+  wait_until { done }
+  echo settings_message if settings_message
+  ensure
+  if defined?(Gtk)
+    Gtk.queue { $xp2_settings_window = nil }
+  end
+  end
+}
+if xp2_command_args[0]
+  xp2_command = xp2_command_args[0].to_s.downcase
+  xp2_value = xp2_command_args[1].to_s.downcase
+  xp2_toggle_settings = {}
+  %w[lu lum lumn lumni lumnis].each { |alias_name| xp2_toggle_settings[alias_name] = [ 'xp2_check_lumnis', 'lumnis' ] }
+  %w[a as asc asci ascen ascens ascensi ascensio ascension].each { |alias_name| xp2_toggle_settings[alias_name] = [ 'xp2_check_ascension', 'ascension' ] }
+  %w[r re res reso resou resour resourc resource resources].each { |alias_name| xp2_toggle_settings[alias_name] = [ 'xp2_check_resource', 'resource' ] }
+  %w[n no not noti notif notify notific notifica notificat notificati notificatio notification notifications].each { |alias_name| xp2_toggle_settings[alias_name] = [ 'tutelog_notify_pulses', 'tutelog pulse notifications' ] }
+  xp2_on_off_values = %w[on yes true 1 off no false 0]
+  xp2_requested_toggles = xp2_command_args[0..-2].to_a.map { |value| value.to_s.downcase }
+  xp2_requested_value = xp2_command_args[-1].to_s.downcase if xp2_command_args.length > 1
+  if xp2_command == 'settings' || xp2_command == 'gui' || xp2_command == 'setup'
+    xp2_open_settings.call
+
+  elsif xp2_command == 'version'
+    tutelog_version = xp2_tutelog_version.call
+    tutelog_text = tutelog_version == 'not installed' ? 'tutelog: not installed' : "tutelog version: #{tutelog_version}"
+    echo "\n-={ xp2 version: 1.9.4 }=-\n\n-={ #{tutelog_text} }=-\n"
+
+  elsif xp2_command == 'changelog' || xp2_command == 'changes' || xp2_command == 'history'
+    respond xp2_changelog_text.call
+
+  elsif xp2_command == 'absorb' || xp2_command == 'absorbtest' || xp2_command == 'pulse'
+    snap = xp2_absorb_snapshot.call
+    echo "Room #{snap['room_id']} | #{snap['location']} | mode #{snap['mode']} (auto #{snap['auto_mode']}, setting #{snap['override_mode']})"
+    echo "LOG #{snap['logic_bonus']} | Field #{xp2_format_number.call(snap['field_current'])}/#{xp2_format_number.call(snap['field_max'])} | Pool +#{snap['pool_bonus']} | Group +#{snap['group_bonus']} | Expected #{snap['expected']} | Tutelage x5 #{snap['expected'].to_i * 5}"
+    echo "Tags: #{snap['tags'].inspect}" unless snap['tags'].empty?
+    echo "Notes: #{snap['notes']}" unless snap['notes'].empty?
+  elsif %w[tu tut tute tutel tutela tutelag tutelage].include?(xp2_command)
+    xp2_tutelog_preview_report.call(xp2_value)
+
+
+  elsif (xp2_command == 'output' && tutelog_output_styles.include?(xp2_value)) ||
+        (xp2_command == 'tutelog' && xp2_command_args[1].to_s.downcase == 'output' && tutelog_output_styles.include?(xp2_command_args[2].to_s.downcase))
+    style = xp2_command == 'output' ? xp2_value : xp2_command_args[2].to_s.downcase
+    save_tutelog_setting.call('output_style', style)
+    echo "tutelog output style is now #{style}."
+  elsif xp2_command == 'roommode' || (xp2_command == 'tutelog' && xp2_command_args[1].to_s.downcase == 'roommode')
+    mode = xp2_command == 'roommode' ? xp2_value : xp2_command_args[2].to_s.downcase
+    if tutelog_absorb_modes.include?(mode)
+      ok, message = xp2_set_room_mode_override.call(mode)
+      echo message
+    else
+      echo "Usage: #{$clean_lich_char}#{script.name} roommode auto|supernode|node|town|other"
+    end
+
+  elsif xp2_command == 'nopulse'
+    case xp2_value
+    when 'on', 'yes', 'true', '1'
+      save_tutelog_setting.call('no_pulse_alert', 'on')
+      echo 'tutelog no-pulse alerts are now on.'
+    when 'off', 'no', 'false', '0'
+      save_tutelog_setting.call('no_pulse_alert', 'off')
+      echo 'tutelog no-pulse alerts are now off.'
+    else
+      minutes = xp2_value.to_s.gsub(/[^0-9]/, '').to_i
+      if minutes > 0
+        save_tutelog_setting.call('no_pulse_minutes', minutes.to_s)
+        save_tutelog_setting.call('no_pulse_alert', 'on')
+        echo "tutelog no-pulse alerts are now on at #{minutes} minute#{minutes == 1 ? '' : 's'}."
+      else
+        echo "Usage: #{$clean_lich_char}#{script.name} nopulse on|off|#"
+      end
+    end
+
+  elsif xp2_command == 'dock' || (xp2_command == 'tutelog' && xp2_command_args[1].to_s.downcase == 'dock')
+    value = xp2_command == 'dock' ? xp2_value : xp2_command_args[2].to_s.downcase
+    case value
+    when 'on', 'yes', 'true', '1'
+      save_tutelog_setting.call('dock_enabled', 'on')
+      echo 'tutelog xp2 dock is now on.'
+      echo 'Start tutelog with ;tutelog to open the dock.' unless xp2_tutelog_running.call
+    when 'off', 'no', 'false', '0'
+      save_tutelog_setting.call('dock_enabled', 'off')
+      echo 'tutelog xp2 dock is now off.'
+    else
+      echo "Usage: #{$clean_lich_char}#{script.name} dock on|off"
+    end
+
+  elsif xp2_command == 'tutelog' && xp2_command_args[1].to_s.downcase == 'reset'
+    reset_tutelog_general_stats.call('manual_reset')
+    echo 'tutelog general pulse stats reset.'
+
+  elsif xp2_command == 'tutelog' && xp2_command_args[1].to_s.downcase == 'resetmode'
+    mode = xp2_command_args[2].to_s.downcase
+    if tutelog_reset_modes.include?(mode)
+      save_tutelog_setting.call('general_reset_mode', mode)
+      echo "tutelog general pulse reset mode is now #{mode}."
+    else
+      echo "Usage: #{$clean_lich_char}#{script.name} tutelog resetmode daily|run|idle"
+    end
+
+  elsif xp2_command == 'tutelog' && xp2_command_args[1].to_s.downcase == 'idle'
+    minutes = xp2_command_args[2].to_s.gsub(/[^0-9]/, '').to_i
+    if minutes > 0
+      save_tutelog_setting.call('general_idle_minutes', minutes.to_s)
+      echo "tutelog idle reset is now #{minutes} minute#{minutes == 1 ? '' : 's'}."
+    else
+      echo "Usage: #{$clean_lich_char}#{script.name} tutelog idle #"
+    end
+
+  elsif xp2_requested_value && xp2_on_off_values.include?(xp2_requested_value) && xp2_requested_toggles.any? && xp2_requested_toggles.all? { |toggle_name| xp2_toggle_settings[toggle_name] }
+    xp2_requested_toggles.each do |toggle_name|
+      key, label = xp2_toggle_settings[toggle_name]
+      xp2_set_on_off.call(key, label, xp2_requested_value)
+    end
+
+  elsif xp2_toggle_settings[xp2_command]
+    key, label = xp2_toggle_settings[xp2_command]
+    xp2_set_on_off.call(key, label, xp2_value)
+
+  elsif xp2_command == 'debug'
+    case xp2_value
+    when 'on', 'yes', 'true', '1'
+      xp2_save_var.call('xp2_debug', 'on')
+      echo 'xp2 debug is now on.'
+    when 'off', 'no', 'false', '0'
+      xp2_save_var.call('xp2_debug', 'off')
+      echo 'xp2 debug is now off.'
+    else
+      echo "Usage: #{$clean_lich_char}#{script.name} debug on|off"
+    end
+
+  elsif xp2_command == 'status' && xp2_value == 'reset'
+    reset_tutelog_general_stats.call('manual_reset')
+    echo 'tutelog general pulse stats reset.'
+
+  elsif xp2_command == 'status'
+    tutelog_running = begin
+                        running?('tutelog')
+                      rescue
+                        begin
+                          Script.running?('tutelog')
+                        rescue
+                          false
+                        end
+                      end
+    lumnis_est = tutelog_state['lumnis_remaining_est']
+    source_remaining = tutelog_state['lumnis_source_remaining']
+    tutelog_started_at = tutelog_state['started_at'].to_i
+    tutelog_log_path = tutelog_state['log_path'].to_s
+    tutelog_csv_path = tutelog_state['csv_path'].to_s
+    tutelog_logging = tutelog_state['logging_enabled'].to_s =~ /^(off|no|false|0)$/i ? 'off' : 'on'
+    tutelog_preserve = [ tutelog_state['preserve_cycles'].to_i, 1 ].max
+    tutelog_output_style = tutelog_output_styles.include?(tutelog_state['output_style'].to_s) ? tutelog_state['output_style'].to_s : 'csv'
+    last_refresh_at = tutelog_state['last_xp2_refresh_at'].to_i
+    last_refresh_reason = tutelog_state['last_xp2_refresh_reason'].to_s
+    tutelog_hint = tutelog_state['hint'].to_s
+    has_tutelog_data = tutelog_started_at > 0
+
+    line = '------------------------------------------------------------'
+    report_indent = '        '
+    report_text = proc { |text| "#{report_indent}#{text}" }
+    general_started_at = tutelog_state['general_started_at'].to_i
+    general_pulses = tutelog_state['general_pulse_count'].to_i
+    general_exp = tutelog_state['general_exp_total'].to_i
+    general_avg = general_pulses > 0 ? format('%.1f', general_exp.to_f / general_pulses) : '0'
+    general_rewards = tutelog_state['general_reward_count'].to_i
+    general_reward_exp = tutelog_state['general_reward_exp_total'].to_i
+    general_rpa_pulses = tutelog_state['general_rpa_pulse_count'].to_i
+    general_rpa_exp = tutelog_state['general_rpa_exp_total'].to_i
+    general_last_pulse_at = tutelog_state['general_last_pulse_at'].to_i
+    general_last_pulse_exp = tutelog_state['general_last_pulse_exp'].to_i
+    general_last_mind = tutelog_state['general_last_mind'].to_s
+    general_last_mind = 'not available yet' if general_last_mind.empty?
+    general_decode_mode = tutelog_state['general_last_decode_mode'].to_s
+    general_expected_pulse = tutelog_state['general_last_expected_pulse'].to_s
+    general_observed_multiplier = tutelog_state['general_last_observed_multiplier'].to_s
+    general_extra_multiplier = tutelog_state['general_last_extra_multiplier'].to_s
+    general_extra_exp = tutelog_state['general_last_extra_exp'].to_s
+    general_decode_confidence = tutelog_state['general_last_decode_confidence'].to_s
+    general_reset_mode = tutelog_reset_modes.include?(tutelog_state['general_reset_mode'].to_s) ? tutelog_state['general_reset_mode'].to_s : 'run'
+    idle_minutes = [ tutelog_state['general_idle_minutes'].to_i, 1 ].max
+    no_pulse_text = tutelog_state['no_pulse_alert'].to_s =~ /^(on|yes|true|1)$/i ? "on after #{[ tutelog_state['no_pulse_minutes'].to_i, 1 ].max}m" : 'off'
+    current_room_id = xp2_current_room_id.call
+    absorb_room_mode = xp2_room_mode_override_for.call(current_room_id) || 'auto'
+
+    status_label_width = 12
+    status_left_width = 36
+    status_label = proc do |label|
+      label_text = label.to_s
+      label_padding = ' ' * [status_label_width - label_text.length, 0].max
+      "#{xp2_inline_preset.call('speech', label_text)}#{label_padding}"
+    end
+    status_cell = proc do |label, value|
+      label_plain = label.to_s.ljust(status_label_width)
+      value_text = value.to_s
+      plain = "#{label_plain}: #{value_text}"
+      colored = "#{status_label.call(label)}: #{value_text}"
+      [ plain, colored ]
+    end
+    status_row = proc do |left_label, left_value, right_label = nil, right_value = nil|
+      left_plain, left = status_cell.call(left_label, left_value)
+      if right_label
+        _right_plain, right = status_cell.call(right_label, right_value)
+        "  #{left}#{' ' * [status_left_width - left_plain.length, 1].max}#{right}"
+      else
+        "  #{left}"
+      end
+    end
+
+    status_lines = []
+    status_lines << xp2_inline_emphasis.call('*~ xp2 / tutelog Status ~*'.center(line.length))
+    status_lines << ''
+    status_lines << status_row.call('tutelog', tutelog_running ? 'running' : 'not running', 'logging', tutelog_logging)
+    status_lines << status_row.call('output', tutelog_output_style, 'cycles kept', tutelog_preserve)
+    status_lines << status_row.call('reset mode', general_reset_mode, 'no-pulse', no_pulse_text)
+    status_lines << status_row.call('idle reset', "#{idle_minutes} minutes (8h)") if general_reset_mode == 'idle'
+    status_lines << status_row.call('room mode', "#{absorb_room_mode} for room #{current_room_id}") unless absorb_room_mode == 'auto'
+    status_lines << ''
+    if !tutelog_running && general_started_at <= 0
+      status_lines << xp2_inline_preset.call('watching', '  General pulse data requires tutelog. Start ;tutelog to collect it.')
+      status_lines << ''
+    elsif !tutelog_running
+      status_lines << xp2_inline_preset.call('watching', '  tutelog is not running, so pulse stats are not updating.')
+      status_lines << ''
+    end
+    if general_started_at > 0
+      status_lines << xp2_inline_emphasis.call('  General Pulse Session')
+      status_lines << status_row.call('Started', Time.at(general_started_at).strftime('%m/%d/%Y %H:%M:%S'), 'Date', tutelog_state['general_session_date'])
+      status_lines << status_row.call('Pulses', xp2_format_number.call(general_pulses), 'EXP', xp2_format_number.call(general_exp))
+      status_lines << status_row.call('Average', "#{general_avg} EXP", 'Last', "#{xp2_format_number.call(general_last_pulse_exp)} EXP")
+      last_pulse_text = general_last_pulse_at > 0 ? "#{xp2_format_duration.call(Time.now.to_i - general_last_pulse_at)} ago" : 'not available yet'
+      status_lines << status_row.call('Last pulse', last_pulse_text, 'Mind', general_last_mind)
+      status_lines << status_row.call('Rewards', xp2_format_number.call(general_rewards), 'Reward EXP', xp2_format_number.call(general_reward_exp))
+      status_lines << status_row.call('RPA pulses', xp2_format_number.call(general_rpa_pulses), 'RPA EXP', xp2_format_number.call(general_rpa_exp))
+      unless general_decode_mode.empty?
+        expected_text = general_expected_pulse.empty? ? 'unknown' : "#{general_expected_pulse} EXP"
+        observed_text = general_observed_multiplier.empty? ? 'unknown' : "x#{general_observed_multiplier}"
+        extra_text = general_extra_multiplier.empty? ? 'unknown' : "x#{general_extra_multiplier}"
+        extra_text = "#{extra_text} / #{xp2_format_number.call(general_extra_exp)} EXP" unless general_extra_exp.empty?
+        confidence_text = general_decode_confidence.empty? ? 'unknown' : general_decode_confidence
+        status_lines << status_row.call('Absorb', "#{general_decode_mode} (#{confidence_text})", 'Expected', expected_text)
+        status_lines << status_row.call('Observed x', observed_text, 'Extra x', extra_text)
+      end
+    else
+      status_lines << '  General pulse data: not available yet'
+    end
+    xp2_mono_block.call(status_lines.join("\n") + "\n", 'speech')
+
+  elsif xp2_command == 'reset'
+    $xp = nil
+    if xp2_command_args[1] && xp2_command_args[1].to_s.downcase == 'all'
+      CharSettings['realtime'] = nil
+      CharSettings['daily'] = nil
+    end
+    echo "Experience tracking has been reset."
+
+  elsif xp2_command == 'goal' && xp2_command_args[1]
+    goal = xp2_save_goal.call(xp2_command_args[1..-1].join(' '))
+    if goal
+      echo "Experience goal set to #{xp2_format_number.call(goal)}."
+    else
+      echo "Usage: #{$clean_lich_char}#{script.name} goal <exp|level>"
+    end
+
+  elsif xp2_command == 'layout' && xp2_command_args[1]
+    layout = xp2_command_args[1].to_s.downcase
+    if [ 'wide', 'tall' ].include?(layout)
+      CharSettings['xp2_layout'] = layout
+      xp2_save_var.call('xp2_layout', layout)
+      echo "xp2 layout set to #{layout}."
+    else
+      echo "Usage: #{$clean_lich_char}#{script.name} layout wide|tall"
+    end
+  else
+    output = "\n"
+    tutelog_help_note = xp2_tutelog_installed.call ? '' : ' (requires tutelog)'
+    command_width = 46
+    help_line = proc do |command_text, description = ''|
+      command_text = command_text.to_s
+      padding = ' ' * [command_width - command_text.length, 2].max
+      output.concat "   #{xp2_inline_preset.call('speech', command_text)}#{padding}#{description}\n"
+    end
+    help_note = proc do |text|
+      output.concat "      #{text}\n"
+    end
+    help_section = proc do |text|
+      output.concat "\n#{xp2_inline_preset.call('thought', "#{text}:")}\n"
+    end
+    output.concat "#{xp2_inline_preset.call('thought', 'usage:')}\n"
+    help_section.call('xp2')
+    help_line.call("#{$clean_lich_char}#{script.name}", 'show experience with extra info')
+    help_line.call("#{$clean_lich_char}#{script.name} reset", 'reset experience tracking since login')
+    help_line.call("#{$clean_lich_char}#{script.name} reset all", 'reset all experience tracking')
+    help_line.call("#{$clean_lich_char}#{script.name} changelog", 'show recent changes')
+    help_line.call("#{$clean_lich_char}#{script.name} changes|history", 'show recent changes')
+    help_line.call("#{$clean_lich_char}#{script.name} version", 'show xp2 and tutelog versions')
+    help_line.call("#{$clean_lich_char}#{script.name} goal <exp|level>", 'set a goal to show time until')
+    help_line.call("#{$clean_lich_char}#{script.name} layout tall", 'use the narrower two-way tracking table')
+    help_line.call("#{$clean_lich_char}#{script.name} layout wide", 'use the original wide tracking table')
+    help_line.call("#{$clean_lich_char}#{script.name} settings", 'open the settings GUI')
+    help_line.call("#{$clean_lich_char}#{script.name} setup|gui", 'open the settings GUI')
+    help_line.call("#{$clean_lich_char}#{script.name} debug on|off", 'turn debug messages on or off')
+    help_section.call('checks')
+    help_line.call("#{$clean_lich_char}#{script.name} <setting> on|off", 'turn one check on or off')
+    help_line.call("#{$clean_lich_char}#{script.name} <setting> <setting> on|off", 'turn multiple checks on or off')
+    help_note.call("settings: lumnis, ascension, resource, notification#{tutelog_help_note} (shortcuts accepted)")
+    help_section.call('tutelog')
+    help_line.call("#{$clean_lich_char}#{script.name} status", "show tutelog status if available#{tutelog_help_note}")
+    help_line.call("#{$clean_lich_char}#{script.name} status reset", "reset general tutelog pulse stats#{tutelog_help_note}")
+    help_line.call("#{$clean_lich_char}#{script.name} tutelage", "show current/latest Tutelage report#{tutelog_help_note}")
+    help_line.call("#{$clean_lich_char}#{script.name} absorb", 'show current room absorb estimate')
+    help_line.call("#{$clean_lich_char}#{script.name} pulse", 'show current room absorb estimate')
+    help_line.call("#{$clean_lich_char}#{script.name} roommode auto|supernode|node|town|other", "set current room absorb mode#{tutelog_help_note}")
+    help_line.call("#{$clean_lich_char}#{script.name} output csv|none", "set tutelog file style#{tutelog_help_note}")
+    help_line.call("#{$clean_lich_char}#{script.name} tutelog output csv|none", "set tutelog file style#{tutelog_help_note}")
+    help_line.call("#{$clean_lich_char}#{script.name} nopulse on|off|#", "set tutelog no-pulse alerts#{tutelog_help_note}")
+    help_line.call("#{$clean_lich_char}#{script.name} dock on|off", "show or hide the xp2 status dock#{tutelog_help_note}")
+    help_line.call("#{$clean_lich_char}#{script.name} tutelog reset", "reset general tutelog pulse stats#{tutelog_help_note}")
+    help_line.call("#{$clean_lich_char}#{script.name} tutelog roommode auto|supernode|node|town|other", "set current room absorb mode#{tutelog_help_note}")
+    help_line.call("#{$clean_lich_char}#{script.name} tutelog resetmode daily|run|idle", "set pulse reset mode#{tutelog_help_note}")
+    help_line.call("#{$clean_lich_char}#{script.name} tutelog idle #", "set idle reset minutes#{tutelog_help_note}")
+    help_line.call("#{$clean_lich_char}#{script.name} notification on|off", "toggle pulse messages#{tutelog_help_note}")
+    unless xp2_tutelog_installed.call
+      help_note.call('tutelog is not installed.')
+      help_note.call('It can watch EXP pulses without sending EXPERIENCE and help track Tutelage data.')
+      help_note.call('Install and start tutelog to use pulse notifications and Tutelage logging.')
+    end
+    help_section.call('autostart')
+    help_line.call("#{$clean_lich_char}#{script.name} delay=6", 'wait 6 seconds, then show experience')
+    help_note.call("autostart example: #{xp2_inline_preset.call('whisper', "#{$clean_lich_char}autostart add --global #{script.name} delay=6")}")
+    output.concat "\n"
+    xp2_mono_block.call(output, 'speech')
+  end
+  exit
+end
+now                       = Hash.new
+xp_until_next             = 0
+xp_until_atp              = 0
+xp_next_label             = 'lvl'  # overwritten from exp verb output ('lvl' sub-100, 'TP' at 100+)
+field_exp_current         = nil
+field_exp_max             = nil
+exp_detail                = Hash.new
+time_since_max_width      = Hash.new
+time_until_next_max_width = Hash.new
+time_until_atp_max_width  = Hash.new
+time_until_goal_max_width = Hash.new
+to_number = proc { |value, fallback = 0|
+  if value.is_a?(Numeric)
+    value
+  elsif value.nil?
+    fallback
+  else
+    cleaned = value.to_s.gsub(',', '').strip
+    cleaned =~ /\A-?\d+(?:\.\d+)?\z/ ? cleaned.to_f : fallback
+  end
+}
+to_int = proc { |value, fallback = 0| to_number.call(value, fallback).to_i }
+safe_subtract = proc { |left, right| to_int.call(left) - to_int.call(right) }
+add_commas = proc { |num|
+  to_int.call(num).to_s.reverse.scan(/(?:\d*\.)?\d{1,3}-?/).join(',').reverse
+}
+calc_seconds = proc { |foo|
+  foo = [ to_int.call(foo), 0 ].max
+  seconds =  foo % 60
+  foo     = (foo - seconds) / 60
+  minutes =  foo % 60
+  foo     = (foo - minutes) / 60
+  hours   =  foo % 24
+  days    = (foo - hours) / 24
+  [days, hours, minutes, seconds]
+}
+# Formats a [days, hours, minutes, seconds] array using the given max-width
+# hash. Once the first non-zero unit is found, any smaller zero-valued unit is
+# rendered as "0u" rather than blanked out, to avoid ugly gaps like
+# "12d     28m 17s" (now shown as "12d 0h 28m 17s"). Leading zero units before
+# the first non-zero value are still blanked.
+format_time_with_widths = proc { |time, max_width|
+  unit_names  = ['days', 'hours', 'minutes', 'seconds']
+  unit_labels = ['d', 'h', 'm', 's']
+  started = false
+  list = Array.new
+  time.each_with_index do |val, i|
+    width = max_width[unit_names[i]].to_i
+    if val > 0
+      list.push "#{val.to_s.rjust(width)}#{unit_labels[i]}"
+      started = true
+    elsif width > 0
+      if started
+        list.push "#{'0'.rjust(width)}#{unit_labels[i]}"
+      else
+        list.push ''.rjust(width + 1)
+      end
+    end
+  end
+  list.join(' ')
+}
+format_time_since = proc { |foo|
+  format_time_with_widths.call(calc_seconds.call(foo), time_since_max_width)
+}
+format_time_until_next = proc { |time|
+  format_time_with_widths.call(time, time_until_next_max_width)
+}
+format_time_until_atp = proc { |time|
+  format_time_with_widths.call(time, time_until_atp_max_width)
+}
+format_time_until_goal = proc { |time|
+  format_time_with_widths.call(time, time_until_goal_max_width)
+}
+level_exp_by_level = xp2_level_exp_by_level
+level_exp_for = proc { |level| level_exp_by_level[to_int.call(level)] }
+percent_text = proc { |value|
+  next nil if value.nil?
+  value = [[to_number.call(value), 0.0].max, 100.0].min
+  formatted = format('%.1f', value)
+  formatted.sub(/\.0\z/, '') + '%'
+}
+gain_percent_text = proc { |value|
+  next nil if value.nil?
+  value = [to_number.call(value), 0.0].max
+  formatted = format('%.1f', value)
+  formatted.sub(/\.0\z/, '') + '%'
+}
+duration_text_to_seconds = proc { |text|
+  seconds = 0
+  text.to_s.scan(/(\d+)\s*(day|days|hour|hours|minute|minutes|min|mins|second|seconds|sec|secs)/i) do |amount, unit|
+    amount = amount.to_i
+    case unit.downcase
+    when 'day', 'days'
+      seconds += amount * 86_400
+    when 'hour', 'hours'
+      seconds += amount * 3_600
+    when 'minute', 'minutes', 'min', 'mins'
+      seconds += amount * 60
+    when 'second', 'seconds', 'sec', 'secs'
+      seconds += amount
+    end
+  end
+  seconds > 0 ? seconds : nil
+}
+
+xp2_debug_messages = []
+exp_lines = Lich::Util.quiet_command_xml(
+  'Experience',
+  /Level:|Experience:|You are a ghost|<output class="mono"\/>/,
+  /<prompt/,
+  false,
+  6,
+  true
+)
+exp_text = Array(exp_lines).join("\n")
+if exp_text =~ /You are a ghost!/i
+  _respond "\nYou are a ghost!  You must wait until someone resurrects you, or you decay.\n"
+  exit
+end
+exp_text.split(/\r?\n/).each do |raw_line|
+  line = raw_line.to_s.gsub(/<[^>]+>/, '').strip
+  next if line.empty?
+  if line =~ /\bLevel:\s*([0-9,]+)/
+    exp_detail['level'] = $1.gsub(',','').to_i
+  end
+  if line =~ /\bFame:\s*([0-9,]+)/
+    now['fame'] = $1.gsub(',','').to_i
+  end
+  if line =~ /\bExperience:\s*([0-9,]+)/
+    now['exp'] = $1.gsub(',','').to_i
+  end
+  if line =~ /\bField Exp:\s*([0-9,]+)\s*\/\s*([0-9,]+)/
+    field_exp_current = $1.gsub(',','').to_i
+    field_exp_max = $2.gsub(',','').to_i
+  end
+  if line =~ /\bAscension Exp:\s*([0-9,]+)/
+    now['aexp'] = $1.gsub(',','').to_i
+  end
+  if line =~ /\bRecent Deaths:\s*(\S+)/
+    exp_detail['recent_deaths'] = $1
+  end
+  if line =~ /\bTotal Exp:\s*([0-9,]+)/
+    exp_detail['total_exp'] = $1.gsub(',','').to_i
+  end
+  if line =~ /\bDeath's Sting:\s*(.+)$/
+    exp_detail['death_sting'] = $1.strip
+  end
+  if line =~ /\bLong-Term Exp:\s*([0-9,]+)/
+    exp_detail['long_term_exp'] = $1.gsub(',','').to_i
+  end
+  if line =~ /\bDeeds:\s*([0-9,]+)/
+    exp_detail['deeds'] = $1.gsub(',','').to_i
+  end
+  if line =~ /\bExp (?:until (?:next|lvl)|to next TP):\s*(\-?[0-9,]+)/
+    xp_until_next = $1.gsub(',','').to_i
+    xp_next_label = (line =~ /to next TP/) ? 'TP' : 'lvl'
+  end
+  if line =~ /\bExp to next ATP:\s*(\-?[0-9,]+)/
+    xp_until_atp = $1.gsub(',','').to_i
+  end
+  if line =~ /\bPTPs?\s*\/\s*MTPs?:\s*([0-9,]+)\s*\/\s*([0-9,]+)/
+    exp_detail['ptps'] = $1.gsub(',','').to_i
+    exp_detail['mtps'] = $2.gsub(',','').to_i
+  end
+  if line =~ /\AATPs:\s*([0-9,]+)/
+    exp_detail['atps'] = $1.gsub(',','').to_i
+  end
+  if line =~ /^Your mind (.+)$/
+    mind_text = $1.strip.sub(/[.!]\z/, '')
+    exp_detail['mind'] = mind_text.sub(/^is\s+/, '')
+  end
+  if line =~ /strange sense of serenity|uncommon clarity and understanding/
+    exp_detail['serenity'] = true
+  end
+  if line =~ /recent adventures echo powerfully in your mind/i
+    exp_detail['rpa'] = true
+  end
+  if line =~ /heightened understanding of events around you|Knowledge that is not your own teases/i
+    exp_detail['tutelage_active'] = true
+  end
+  if line =~ /You have been experiencing the Wisdom of the Ages for (.+)\./
+    exp_detail['wisdom'] = $1.strip
+  end
+end
+plain_exp_text = exp_text.gsub(/<[^>]+>/, ' ')
+ptp_capture_text = plain_exp_text.scan(/.{0,40}PTPs?\s*\/\s*MTPs?.{0,80}/i).join(' | ')
+ptp_label_index = ptp_capture_text =~ /PTPs?\s*\/\s*MTPs?/i
+if ptp_label_index
+  ptp_numbers = ptp_capture_text[ptp_label_index..-1].scan(/[0-9,]+/)
+  if ptp_numbers.length >= 2
+    exp_detail['ptps'] = ptp_numbers[0].gsub(',','').to_i
+    exp_detail['mtps'] = ptp_numbers[1].gsub(',','').to_i
+  end
+end
+if xp2_debug_enabled.call
+  xp2_debug_messages.push("EXP capture PTP/MTP: #{ptp_capture_text.empty? ? 'not found' : ptp_capture_text}")
+  xp2_debug_messages.push("EXP parsed PTP/MTP: #{exp_detail['ptps'] || 'nil'}/#{exp_detail['mtps'] || 'nil'}")
+end
+if defined?(Experience)
+  begin
+    field_exp_current = Experience.fxp_current if Experience.respond_to?(:fxp_current)
+    field_exp_max = Experience.fxp_max if Experience.respond_to?(:fxp_max)
+  rescue
+  end
+end
+if defined?(XMLData)
+  begin
+    exp_detail['mind'] = XMLData.mind_text if XMLData.respond_to?(:mind_text) && XMLData.mind_text
+  rescue
+  end
+end
+unless now['exp'] && now['fame']
+  _respond "\nUnable to read EXP data right now. Try ;xp2 again in a moment.\n"
+  exit
+end
+if exp_detail['level'] && exp_detail['ptps'] && exp_detail['mtps'] && exp_detail['mind']
+  snapshot_next_label = xp_next_label.to_s.downcase == 'tp' ? 'tp' : 'lvl'
+  xp2_save_var.call('xp2_last_level', exp_detail['level'].to_i.to_s)
+  xp2_save_var.call('xp2_last_next_label', snapshot_next_label)
+  xp2_save_var.call('xp2_last_next_value', xp_until_next.to_i.to_s)
+  xp2_save_var.call('xp2_last_ptps', exp_detail['ptps'].to_i.to_s)
+  xp2_save_var.call('xp2_last_mtps', exp_detail['mtps'].to_i.to_s)
+  xp2_save_var.call('xp2_last_mind', exp_detail['mind'].to_s)
+  xp2_save_var.call('xp2_last_exp', now['exp'].to_i.to_s)
+  xp2_save_var.call('xp2_last_snapshot_at', Time.now.to_i.to_s)
+end
+now['aexp'] ||= 0
+lumnis_info = {
+  'phase' => nil,
+  'phase_remaining' => nil,
+  'refresh' => nil,
+  'expired' => nil,
+  'schedule' => nil,
+  'tutelage_days' => nil,
+  'tutelage_inactive' => false,
+  'donations' => nil
+}
+lumnis_phase_caps = {
+  'quintupled' => 29200,
+  'quadrupled' => 21900,
+  'tripled' => 14600,
+  'doubled' => 7300
+}
+lumnis_phase_order = ['quintupled', 'quadrupled', 'tripled', 'doubled']
+lumnis_lines = []
+if xp2_enabled.call('xp2_check_lumnis')
+  lumnis_lines = Lich::Util.quiet_command_xml(
+    'lumnis info',
+    /Gift of Lumnis|Because your account is free|recent donation|Fash'lo'nae's Tutelage/i,
+    /<prompt/,
+    false,
+    6,
+    true
+  )
+else
+  xp2_debug_messages.push 'Skipped Lumnis info check.'
+end
+lumnis_text = Array(lumnis_lines).join("\n").gsub(/<[^>]+>/, ' ').gsub(/\s+/, ' ').strip
+if lumnis_text =~ /([0-9,]+).*?points.*?of.*?(quintupled|quadrupled|tripled|doubled).*?experience.*?remaining/i
+  lumnis_info['phase_remaining'] = $1.gsub(',','').to_i
+  lumnis_info['phase'] = $2.downcase
+  lumnis_info['expired'] = false
+end
+if lumnis_text =~ /refresh in\s+([^.]*)\./i
+  lumnis_info['refresh'] = $1.strip
+end
+if lumnis_text =~ /Gift of Lumnis has expired/i
+  lumnis_info['expired'] = true
+end
+if lumnis_text =~ /You have ([0-9,]+) points of (quintupled|quadrupled|tripled|doubled) experience remaining on your Gift of Lumnis\.\s+It is scheduled to refresh in\s*([^.]*)\./
+  lumnis_info['phase_remaining'] = $1.gsub(',','').to_i
+  lumnis_info['phase'] = $2
+  lumnis_info['refresh'] = $3.strip
+  lumnis_info['expired'] = false
+elsif lumnis_text =~ /Your Gift of Lumnis has expired for this week\.\s+It is scheduled to refresh in\s*([^.]*)\./
+  lumnis_info['refresh'] = $1.strip
+  lumnis_info['expired'] = true
+end
+Array(lumnis_lines).join("\n").split(/\r?\n/).each do |raw_line|
+  line = raw_line.to_s.gsub(/<[^>]+>/, ' ').gsub(/\s+/, ' ').strip
+  next if line.empty?
+  if line =~ /([0-9,]+).*?points.*?of.*?(quintupled|quadrupled|tripled|doubled).*?experience.*?remaining/i
+    lumnis_info['phase_remaining'] = $1.gsub(',','').to_i
+    lumnis_info['phase'] = $2.downcase
+    lumnis_info['expired'] = false
+  end
+  if line =~ /You have\s+([\d,]+)\s+points/i
+    lumnis_info['phase_remaining'] = $1.gsub(',','').to_i
+  end
+  if line =~ /points\s+of\s+(quintupled|quadrupled|tripled|doubled)\s+experience/i
+    lumnis_info['phase'] = $1.downcase
+    lumnis_info['expired'] = false
+  end
+  if line =~ /refresh in\s+([^.]*)\./i
+    lumnis_info['refresh'] = $1.strip
+  end
+  if line =~ /Gift of Lumnis has expired/i
+    lumnis_info['expired'] = true
+  end
+  if lumnis_info['refresh'].nil? && line =~ /You have ([0-9,]+) points of (quintupled|quadrupled|tripled|doubled) experience remaining on your Gift of Lumnis\.\s+It is scheduled to refresh in\s*([^.]*)\./
+    lumnis_info['phase_remaining'] = $1.gsub(',','').to_i
+    lumnis_info['phase'] = $2
+    lumnis_info['refresh'] = $3.strip
+    lumnis_info['expired'] = false
+  elsif lumnis_info['refresh'].nil? && line =~ /Your Gift of Lumnis has expired for this week\.\s+It is scheduled to refresh in\s*([^.]*)\./
+    lumnis_info['refresh'] = $1.strip
+    lumnis_info['expired'] = true
+  elsif line =~ /Your Gift of Lumnis is scheduled to start on (.+), in-game time\./
+    lumnis_info['schedule'] = $1.strip
+  elsif line =~ /You have not selected a Gift of Lumnis schedule\./
+    lumnis_info['schedule'] = 'not selected'
+  elsif line =~ /You are receiving Fash'lo'nae's Tutelage with ([0-9,]+) day\(s\) remaining\./
+    lumnis_info['tutelage_days'] = $1.gsub(',','').to_i
+  elsif line =~ /You are not presently receiving Fash'lo'nae's Tutelage\./
+    lumnis_info['tutelage_inactive'] = true
+  elsif line =~ /You have made ([0-9,]+) recent donation(?:s)? to the Temple of Lumnis\./
+    lumnis_info['donations'] = $1.gsub(',','').to_i
+  elsif line =~ /You (?:have made no|have not made any) recent donations to the Temple of Lumnis\./
+    lumnis_info['donations'] = 0
+  end
+end
+absorb_rate = nil
+asc_exp_squelch = proc { |server_string|
+  if server_string && (server_string.include?('your Ascension experience is as follows:') \
+  || server_string.include?('Ascension Experience:') \
+  || server_string.include?('Absorption Rate:') \
+  || server_string.include?('ATPs Earned:') \
+  || server_string.include?('ATPs Spent:') \
+  || server_string.include?('ATPs Available:') \
+  || server_string.include?('You are not currently Ascended') \
+  || server_string.include?('You do not have any Ascension experience'))
+    nil
+  else
+    server_string
+  end
+}
+asc_lines = []
+no_ascension_data = false
+saw_ascension_data = false
+if xp2_enabled.call('xp2_check_ascension')
+  DownstreamHook.add('xp_asc_exp_squelch', asc_exp_squelch)
+  begin
+    asc_lines = Lich::Util.quiet_command_xml(
+      'ascension exp',
+      /your Ascension experience is as follows:|Ascension Experience:|Absorption Rate:|not currently Ascended|do not have any Ascension experience/i,
+      /<prompt/,
+      false,
+      6,
+      true
+    )
+  ensure
+    DownstreamHook.remove('xp_asc_exp_squelch')
+  end
+else
+  xp2_debug_messages.push 'Skipped Ascension EXP check.'
+  exp_detail['atps'] = Vars['xp2_last_atps'].to_i if Vars['xp2_last_atps'] && !Vars['xp2_last_atps'].to_s.empty?
+  absorb_rate = Vars['xp2_last_absorb_rate'].to_i if Vars['xp2_last_absorb_rate'] && !Vars['xp2_last_absorb_rate'].to_s.empty?
+end
+Array(asc_lines).join("\n").split(/\r?\n/).each do |raw_line|
+  line = raw_line.to_s.gsub(/<[^>]+>/, ' ').gsub(/\s+/, ' ').strip
+  if line =~ /Absorption Rate:\s*(\d+)%/
+    absorb_rate = $1.to_i
+    saw_ascension_data = true
+  elsif line =~ /ATPs Available:\s*([0-9,]+)/
+    exp_detail['atps'] = $1.gsub(',','').to_i
+    saw_ascension_data = true
+  elsif line =~ /no Ascension|not currently Ascended|do not have any Ascension experience/i
+    no_ascension_data = true
+    break
+  end
+end
+if saw_ascension_data && !no_ascension_data && xp2_enabled.call('xp2_check_ascension')
+  xp2_save_var.call('xp2_last_atps', exp_detail['atps'].to_i.to_s) if exp_detail['atps']
+  xp2_save_var.call('xp2_last_absorb_rate', absorb_rate.to_i.to_s) unless absorb_rate.nil?
+end
+if no_ascension_data
+  exp_detail['atps'] = nil
+  xp_until_atp = 0
+  absorb_rate = nil
+  xp2_save_var.call('xp2_last_absorb_rate', '0')
+end
+xp2_save_var.call('xp2_last_atp_remaining', xp_until_atp.to_i.to_s)
+resource_info = {
+  'profession_name' => nil,
+  'profession_value' => nil,
+  'voln_favor' => nil,
+  'covert_arts' => nil
+}
+resource_short_names = {
+  'Luck Inspiration' => 'Inspiration',
+  'Inspiration' => 'Inspiration',
+  'Devotion' => 'Devotion',
+  'Vitality' => 'Vitality',
+  'Motes of Tranquility' => 'Tranquility',
+  "Nature's Grace" => 'Nature',
+  'Guile' => 'Guile',
+  'Necrotic Energy' => 'Necrotic',
+  'Grit' => 'Grit',
+  'Essence' => 'Essence'
+}
+resource_squelch = proc { |server_string|
+  if server_string && (server_string.include?('Health:') \
+  || server_string.include?('Voln Favor:') \
+  || server_string.include?('Inspiration:') \
+  || server_string.include?('Devotion:') \
+  || server_string.include?('Vitality:') \
+  || server_string.include?('Motes of Tranquility:') \
+  || server_string.include?("Nature's Grace:") \
+  || server_string.include?('Guile:') \
+  || server_string.include?('Necrotic Energy:') \
+  || server_string.include?('Grit:') \
+  || server_string.include?('Essence:') \
+  || server_string.include?('Covert Arts Charges:') \
+  || server_string.include?('Suffused') \
+  || server_string.include?('Accumulated Shadow Essence:'))
+    nil
+  else
+    server_string
+  end
+}
+resource_lines = []
+if xp2_enabled.call('xp2_check_resource')
+  DownstreamHook.add('xp_resource_squelch', resource_squelch)
+  begin
+    resource_lines = Lich::Util.quiet_command_xml(
+      'resource',
+      /Health:|Voln Favor|Inspiration|Devotion|Vitality|Motes of Tranquility|Nature's Grace|Guile|Necrotic Energy|Grit|Essence|Covert Arts Charges/i,
+      /<prompt/,
+      false,
+      6,
+      true
+    )
+  ensure
+    DownstreamHook.remove('xp_resource_squelch')
+  end
+else
+  xp2_debug_messages.push 'Skipped RESOURCE check.'
+end
+Array(resource_lines).join("\n").split(/\r?\n/).each do |raw_line|
+  line = raw_line.to_s.gsub(/<[^>]+>/, ' ').gsub(/\s+/, ' ').strip
+  next if line.empty? || line =~ /^(Health|Suffused|Accumulated Shadow Essence):/i
+  if line =~ /Voln Favor:\s*([0-9,]+)/i
+    resource_info['voln_favor'] = $1
+  elsif line =~ /^(.+?):\s*([0-9,]+)\/([0-9,]+)\s+\(Weekly\)\s+([0-9,]+)\/([0-9,]+)\s+\(Total\)/i
+    resource_name = $1.strip
+    next unless resource_short_names[resource_name]
+    resource_info['profession_name'] = resource_short_names[resource_name]
+    weekly_current = $2
+    weekly_max = $3
+    total_current = $4
+    total_max = $5
+    weekly_text = "#{weekly_current}/#{weekly_max} wk"
+    total_text = "#{total_current}/#{total_max} total"
+    weekly_text = xp2_inline_preset.call('monster', weekly_text) if weekly_current == weekly_max
+    total_text = xp2_inline_preset.call('monster', total_text) if total_current == total_max
+    resource_info['profession_value'] = "#{weekly_text} | #{total_text}"
+  elsif line =~ /Covert Arts Charges:\s*([0-9,]+)\/([0-9,]+)/i
+    covert_current = $1
+    covert_max = $2
+    covert_text = "#{covert_current}/#{covert_max}"
+    covert_text = xp2_inline_preset.call('monster', covert_text) if covert_current == covert_max
+    resource_info['covert_arts'] = covert_text
+  end
+end
+now['time'] = Time.now.to_i
+unless $xp
+  $xp = {}
+  $xp['first'] = now
+  $xp['last'] = now
+end
+# backward compat: older data may lack 'aexp'; seed from current reading
+$xp['first']['aexp'] ||= now['aexp']
+$xp['last']['aexp']  ||= now['aexp']
+# Repair fame baselines from runs where Fame failed to parse and was stored as 0.
+if now['fame'].to_i > 0
+  [ 'first', 'last' ].each do |key|
+    if $xp[key] && $xp[key]['fame'].to_i <= 0
+      $xp[key]['fame'] = now['fame']
+    end
+  end
+end
+unless CharSettings['realtime']
+  CharSettings['realtime'] = Hash.new
+  CharSettings['realtime']['time'] = now['time']
+  CharSettings['realtime']['exp'] = now['exp']
+  CharSettings['realtime']['fame'] = now['fame']
+  CharSettings['realtime']['aexp'] = now['aexp']
+end
+# backward compat for CharSettings saved before aexp tracking existed
+if CharSettings['realtime']['aexp'].nil?
+  CharSettings['realtime']['aexp'] = now['aexp']
+end
+if now['fame'].to_i > 0 && CharSettings['realtime']['fame'].to_i <= 0
+  CharSettings['realtime']['fame'] = now['fame']
+end
+today_key = Time.now.strftime('%m%d%Y')
+unless CharSettings['daily'].is_a?(Hash) && CharSettings['daily']['date'].to_s == today_key
+  CharSettings['daily'] = Hash.new
+  CharSettings['daily']['date'] = today_key
+  CharSettings['daily']['time'] = now['time']
+  CharSettings['daily']['exp'] = now['exp']
+  CharSettings['daily']['fame'] = now['fame']
+  CharSettings['daily']['aexp'] = now['aexp']
+end
+CharSettings['daily']['aexp'] = now['aexp'] if CharSettings['daily']['aexp'].nil?
+if now['fame'].to_i > 0 && CharSettings['daily']['fame'].to_i <= 0
+  CharSettings['daily']['fame'] = now['fame']
+end
+
+normalize_tracking_numbers = proc { |tracking|
+  next unless tracking
+  [ 'time', 'exp', 'fame', 'aexp' ].each do |key|
+    fallback = key == 'time' ? now['time'] : now[key]
+    value = tracking[key].nil? ? fallback : tracking[key]
+    tracking[key] = to_int.call(value, fallback)
+  end
+}
+[ 'time', 'exp', 'fame', 'aexp' ].each do |key|
+  now[key] = to_int.call(now[key])
+end
+normalize_tracking_numbers.call(CharSettings['realtime'])
+normalize_tracking_numbers.call(CharSettings['daily'])
+normalize_tracking_numbers.call($xp['first'])
+normalize_tracking_numbers.call($xp['last'])
+
+hourly_rate = proc { |amount, secs|
+  secs = to_number.call(secs)
+  secs > 0 ? (to_number.call(amount) * (3600 / secs.to_f)).to_i.round : 0
+}
+secs_since_realtime     = [ safe_subtract.call(Time.now.to_i, CharSettings['realtime']['time']), 0 ].max
+time_since_realtime     = calc_seconds.call(secs_since_realtime)
+  xp_since_realtime     = safe_subtract.call(now['exp'], CharSettings['realtime']['exp'])
+  xp_since_realtime_avg = hourly_rate.call(xp_since_realtime, secs_since_realtime)
+fame_since_realtime     = safe_subtract.call(now['fame'], CharSettings['realtime']['fame'])
+fame_since_realtime_avg = hourly_rate.call(fame_since_realtime, secs_since_realtime)
+ aexp_since_realtime    = safe_subtract.call(now['aexp'], CharSettings['realtime']['aexp'])
+aexp_since_realtime_avg = hourly_rate.call(aexp_since_realtime, secs_since_realtime)
+secs_since_day     = [ safe_subtract.call(now['time'], CharSettings['daily']['time']), 0 ].max
+time_since_day     = calc_seconds.call(secs_since_day)
+  xp_since_day     = safe_subtract.call(now['exp'], CharSettings['daily']['exp'])
+  xp_since_day_avg = hourly_rate.call(xp_since_day, secs_since_day)
+fame_since_day     = safe_subtract.call(now['fame'], CharSettings['daily']['fame'])
+fame_since_day_avg = hourly_rate.call(fame_since_day, secs_since_day)
+ aexp_since_day    = safe_subtract.call(now['aexp'], CharSettings['daily']['aexp'])
+aexp_since_day_avg = hourly_rate.call(aexp_since_day, secs_since_day)
+secs_since_first     = [ safe_subtract.call(now['time'], $xp['first']['time']), 0 ].max
+time_since_first     = calc_seconds.call(secs_since_first)
+  xp_since_first     = safe_subtract.call(now['exp'], $xp['first']['exp'])
+  xp_since_first_avg = hourly_rate.call(xp_since_first, secs_since_first)
+fame_since_first     = safe_subtract.call(now['fame'], $xp['first']['fame'])
+fame_since_first_avg = hourly_rate.call(fame_since_first, secs_since_first)
+ aexp_since_first    = safe_subtract.call(now['aexp'], $xp['first']['aexp'])
+aexp_since_first_avg = hourly_rate.call(aexp_since_first, secs_since_first)
+secs_since_last     = [ safe_subtract.call(now['time'], $xp['last']['time']), 0 ].max
+time_since_last     = calc_seconds.call(secs_since_last)
+  xp_since_last     = safe_subtract.call(now['exp'], $xp['last']['exp'])
+  xp_since_last_avg = hourly_rate.call(xp_since_last, secs_since_last)
+fame_since_last     = safe_subtract.call(now['fame'], $xp['last']['fame'])
+fame_since_last_avg = hourly_rate.call(fame_since_last, secs_since_last)
+ aexp_since_last    = safe_subtract.call(now['aexp'], $xp['last']['aexp'])
+aexp_since_last_avg = hourly_rate.call(aexp_since_last, secs_since_last)
+tutelage_bonus_cap = 100_000
+tutelage_bonus_used = to_int.call(Vars['xp2_tutelage_bonus_used'])
+tutelage_last_exp = to_int.call(Vars['xp2_tutelage_last_exp'])
+tutelage_refresh_seconds = duration_text_to_seconds.call(lumnis_info['refresh'])
+tutelage_reset_at = to_int.call(Vars['xp2_tutelage_reset_at'])
+if tutelage_refresh_seconds
+  estimated_reset_at = now['time'].to_i + tutelage_refresh_seconds
+  if tutelage_reset_at <= 0 || now['time'].to_i >= tutelage_reset_at || estimated_reset_at > tutelage_reset_at + 43_200
+    tutelage_bonus_used = 0
+    tutelage_reset_at = estimated_reset_at
+    tutelage_last_exp = now['exp'].to_i
+    Vars['xp2_tutelage_source'] = 'xp2'
+    Vars['xp2_tutelage_tutelog_at'] = '0'
+  end
+end
+tutelage_last_exp = now['exp'].to_i if tutelage_last_exp <= 0 || tutelage_last_exp > now['exp'].to_i
+tutelog_reset_at = to_int.call(Vars['xp2_tutelage_tutelog_reset_at'])
+tutelog_current_estimate = Vars['xp2_tutelage_source'].to_s == 'tutelog' && tutelog_reset_at > 0 && tutelage_reset_at > 0 && tutelog_reset_at == tutelage_reset_at
+tutelage_exp_delta = safe_subtract.call(now['exp'], tutelage_last_exp)
+if tutelog_current_estimate
+  tutelage_bonus_used = to_int.call(Vars['xp2_tutelage_bonus_used'])
+elsif exp_detail['tutelage_active'] && tutelage_exp_delta > 0
+  tutelage_bonus_used += (tutelage_exp_delta * 0.8).round
+  Vars['xp2_tutelage_source'] = 'xp2'
+end
+tutelage_last_exp = now['exp'].to_i
+tutelage_bonus_remaining = [ tutelage_bonus_cap - tutelage_bonus_used, 0 ].max
+Vars['xp2_tutelage_bonus_used'] = tutelage_bonus_used.to_i.to_s
+Vars['xp2_tutelage_reset_at'] = tutelage_reset_at.to_i.to_s if tutelage_reset_at.to_i > 0
+Vars['xp2_tutelage_last_exp'] = tutelage_last_exp.to_i.to_s
+tutelage_state = if exp_detail['tutelage_active']
+                   'active'
+                 elsif lumnis_info['tutelage_days'] || lumnis_info['tutelage_inactive']
+                   'inactive'
+                 else
+                   'unknown'
+                 end
+Vars['xp2_tutelage_state'] = tutelage_state
+Vars['xp2_tutelage_state_at'] = now['time'].to_i.to_s
+Vars['xp2_tutelage_days'] = lumnis_info['tutelage_days'] ? lumnis_info['tutelage_days'].to_i.to_s : ''
+Vars['xp2_lumnis_phase'] = lumnis_info['phase'].to_s
+Vars['xp2_lumnis_phase_remaining'] = lumnis_info['phase_remaining'].to_i.to_s
+Vars['xp2_lumnis_expired'] = lumnis_info['expired'].nil? ? 'unknown' : lumnis_info['expired'].to_s
+Vars['xp2_rpa_active'] = exp_detail['rpa'] ? 'on' : 'off'
+xp2_persist_settings.call
+
+for time in [ time_since_realtime, time_since_day, time_since_first, time_since_last ]
+  time_since_max_width['days']    = [ time_since_max_width['days'].to_i,    (time[0] > 0 ? time[0].to_s.length : 0) ].max
+  time_since_max_width['hours']   = [ time_since_max_width['hours'].to_i,   (time[1] > 0 ? time[1].to_s.length : 0) ].max
+  time_since_max_width['minutes'] = [ time_since_max_width['minutes'].to_i, (time[2] > 0 ? time[2].to_s.length : 0) ].max
+  time_since_max_width['seconds'] = [ time_since_max_width['seconds'].to_i, (time[3] > 0 ? time[3].to_s.length : 0) ].max
+end
+time_since_label_width = [ (time_since_max_width['days'].to_i + time_since_max_width['minutes'].to_i + time_since_max_width['hours'].to_i + time_since_max_width['seconds'].to_i + ([ time_since_max_width['days'], time_since_max_width['minutes'], time_since_max_width['hours'], time_since_max_width['seconds'] ].count { |i| i.to_i > 0 } * 2) - 1), 10 ].max
+eta_for = proc { |remaining, delta, secs|
+  next nil unless remaining && remaining > 0 && delta && delta > 0 && secs && secs > 0
+  begin
+    calc_seconds.call((remaining / (delta / secs.to_f)).to_i)
+  rescue
+    nil
+  end
+}
+time_until_next_realtime = eta_for.call(xp_until_next, xp_since_realtime, secs_since_realtime)
+time_until_next_day      = eta_for.call(xp_until_next, xp_since_day,      secs_since_day)
+time_until_next_first    = eta_for.call(xp_until_next, xp_since_first,    secs_since_first)
+time_until_next_last     = eta_for.call(xp_until_next, xp_since_last,     secs_since_last)
+for time in [ time_until_next_realtime, time_until_next_day, time_until_next_first, time_until_next_last ]
+  next unless time
+  time_until_next_max_width['days']    = [ time_until_next_max_width['days'].to_i,    (time[0] > 0 ? time[0].to_s.length : 0) ].max
+  time_until_next_max_width['hours']   = [ time_until_next_max_width['hours'].to_i,   (time[1] > 0 ? time[1].to_s.length : 0) ].max
+  time_until_next_max_width['minutes'] = [ time_until_next_max_width['minutes'].to_i, (time[2] > 0 ? time[2].to_s.length : 0) ].max
+  time_until_next_max_width['seconds'] = [ time_until_next_max_width['seconds'].to_i, (time[3] > 0 ? time[3].to_s.length : 0) ].max
+end
+time_until_next_label_width = [ (time_until_next_max_width['days'].to_i + time_until_next_max_width['minutes'].to_i + time_until_next_max_width['hours'].to_i + time_until_next_max_width['seconds'].to_i + ([ time_until_next_max_width['days'], time_until_next_max_width['minutes'], time_until_next_max_width['hours'], time_until_next_max_width['seconds'] ].count { |i| i.to_i > 0 } * 2) - 1), "until #{xp_next_label}".length ].max
+# When absorption is 0%, no exp flows to Ascension, so ATP ETA is literally
+# never. Otherwise fall back to the generic "no gain" label (used across all
+# the until-* columns when the current gain rate for that pool is zero).
+no_gain_label = 'no gain'
+no_atp_label = (absorb_rate == 0) ? 'never' : no_gain_label
+if xp_until_atp > 0
+  # Use the Ascension Exp gain rate (not the regular exp rate) so the ETA
+  # reflects whatever absorption % is currently set.
+  time_until_atp_realtime = eta_for.call(xp_until_atp, aexp_since_realtime, secs_since_realtime)
+  time_until_atp_day      = eta_for.call(xp_until_atp, aexp_since_day,      secs_since_day)
+  time_until_atp_first    = eta_for.call(xp_until_atp, aexp_since_first,    secs_since_first)
+  time_until_atp_last     = eta_for.call(xp_until_atp, aexp_since_last,     secs_since_last)
+  for time in [ time_until_atp_realtime, time_until_atp_day, time_until_atp_first, time_until_atp_last ]
+    next unless time
+    time_until_atp_max_width['days']    = [ time_until_atp_max_width['days'].to_i,    (time[0] > 0 ? time[0].to_s.length : 0) ].max
+    time_until_atp_max_width['hours']   = [ time_until_atp_max_width['hours'].to_i,   (time[1] > 0 ? time[1].to_s.length : 0) ].max
+    time_until_atp_max_width['minutes'] = [ time_until_atp_max_width['minutes'].to_i, (time[2] > 0 ? time[2].to_s.length : 0) ].max
+    time_until_atp_max_width['seconds'] = [ time_until_atp_max_width['seconds'].to_i, (time[3] > 0 ? time[3].to_s.length : 0) ].max
+  end
+  time_until_atp_label_width = [ (time_until_atp_max_width['days'].to_i + time_until_atp_max_width['minutes'].to_i + time_until_atp_max_width['hours'].to_i + time_until_atp_max_width['seconds'].to_i + ([ time_until_atp_max_width['days'], time_until_atp_max_width['minutes'], time_until_atp_max_width['hours'], time_until_atp_max_width['seconds'] ].count { |i| i.to_i > 0 } * 2) - 1), 9 ].max
+end
+CharSettings['goal'] = to_int.call(CharSettings['goal'])
+xp_until_goal = safe_subtract.call(CharSettings['goal'], now['exp'])
+if xp_until_goal > 0
+  time_until_goal_realtime = eta_for.call(xp_until_goal, xp_since_realtime, secs_since_realtime)
+  time_until_goal_day      = eta_for.call(xp_until_goal, xp_since_day,      secs_since_day)
+  time_until_goal_first    = eta_for.call(xp_until_goal, xp_since_first,    secs_since_first)
+  time_until_goal_last     = eta_for.call(xp_until_goal, xp_since_last,     secs_since_last)
+  for time in [ time_until_goal_realtime, time_until_goal_day, time_until_goal_first, time_until_goal_last ]
+    next unless time
+    time_until_goal_max_width['days']    = [ time_until_goal_max_width['days'].to_i,    (time[0] > 0 ? time[0].to_s.length : 0) ].max
+    time_until_goal_max_width['hours']   = [ time_until_goal_max_width['hours'].to_i,   (time[1] > 0 ? time[1].to_s.length : 0) ].max
+    time_until_goal_max_width['minutes'] = [ time_until_goal_max_width['minutes'].to_i, (time[2] > 0 ? time[2].to_s.length : 0) ].max
+    time_until_goal_max_width['seconds'] = [ time_until_goal_max_width['seconds'].to_i, (time[3] > 0 ? time[3].to_s.length : 0) ].max
+  end
+  time_until_goal_label_width = [ (time_until_goal_max_width['days'].to_i + time_until_goal_max_width['minutes'].to_i + time_until_goal_max_width['hours'].to_i + time_until_goal_max_width['seconds'].to_i + ([ time_until_goal_max_width['days'], time_until_goal_max_width['minutes'], time_until_goal_max_width['hours'], time_until_goal_max_width['seconds'] ].count { |i| i.to_i > 0 } * 2) - 1), 10 ].max
+end
+show_aexp = now['aexp'].to_i > 0
+exp_width      = [ add_commas.call(xp_since_realtime).length, add_commas.call(xp_since_day).length, add_commas.call(xp_since_first).length, add_commas.call(xp_since_last).length, 4 ].max
+avg_exp_width  = [ add_commas.call(xp_since_realtime_avg).length, add_commas.call(xp_since_day_avg).length, add_commas.call(xp_since_first_avg).length, add_commas.call(xp_since_last_avg).length, 6 ].max
+aexp_width     = [ add_commas.call(aexp_since_realtime).length, add_commas.call(aexp_since_day).length, add_commas.call(aexp_since_first).length, add_commas.call(aexp_since_last).length, 4 ].max
+avg_aexp_width = [ add_commas.call(aexp_since_realtime_avg).length, add_commas.call(aexp_since_day_avg).length, add_commas.call(aexp_since_first_avg).length, add_commas.call(aexp_since_last_avg).length, 6 ].max
+fame_width     = [ add_commas.call(fame_since_realtime).length, add_commas.call(fame_since_day).length, add_commas.call(fame_since_first).length, add_commas.call(fame_since_last).length, 4 ].max
+avg_fame_width = [ add_commas.call(fame_since_realtime_avg).length, add_commas.call(fame_since_day_avg).length, add_commas.call(fame_since_first_avg).length, add_commas.call(fame_since_last_avg).length, 6 ].max
+row_label_width = 7
+field_exp_text = if field_exp_current && field_exp_max
+                   "#{add_commas.call(field_exp_current)}/#{add_commas.call(field_exp_max)}"
+                 else
+                   'unknown'
+                 end
+next_percent = nil
+if xp_next_label == 'lvl' && exp_detail['level']
+  level_start_exp = level_exp_for.call(exp_detail['level'])
+  next_level_exp = level_exp_for.call(exp_detail['level'].to_i + 1)
+  if level_start_exp && next_level_exp && next_level_exp > level_start_exp
+    next_percent = percent_text.call(((now['exp'].to_f - level_start_exp) / (next_level_exp - level_start_exp)) * 100.0)
+  end
+elsif xp_next_label == 'TP' && xp_until_next && xp_until_next > 0
+  next_percent = percent_text.call(((2500 - xp_until_next.to_f) / 2500.0) * 100.0)
+end
+next_value_text = xp_until_next && xp_until_next > 0 ? add_commas.call(xp_until_next) : '0'
+next_value_text = "#{next_value_text} (#{next_percent})" if next_percent
+atp_percent = nil
+if xp_until_atp && xp_until_atp > 0
+  atp_percent = percent_text.call(((50000 - xp_until_atp.to_f) / 50000.0) * 100.0)
+end
+atp_value_text = xp_until_atp && xp_until_atp > 0 ? add_commas.call(xp_until_atp) : 'n/a'
+atp_value_text = "#{atp_value_text} (#{atp_percent})" if atp_percent
+
+
+goal_percent = nil
+if CharSettings['goal'].to_i > 0
+  goal_percent = percent_text.call((now['exp'].to_f / CharSettings['goal'].to_f) * 100.0)
+end
+goal_summary_text = nil
+if xp_until_goal > 0
+  goal_tail = goal_percent ? ", #{goal_percent} complete" : ""
+  goal_summary_text = "(#{add_commas.call(xp_until_goal)} experience needed to reach your goal of #{add_commas.call(CharSettings['goal'])}#{goal_tail})"
+end
+asc_absorb_text = if no_ascension_data
+                    'n/a'
+                  elsif absorb_rate
+                    "#{absorb_rate}%"
+                  else
+                    '?'
+                  end
+format_pair = proc { |left_label, left_value, right_label, right_value|
+  left = "#{left_label.to_s.rjust(13)}: #{left_value}"
+  if right_value.nil?
+    "  #{left}\n"
+  else
+    right = "#{right_label.to_s.rjust(13)}: #{right_value}"
+    "  #{left.ljust(31)}#{right}\n"
+  end
+}
+pair_width = 64  # visually centers "Experience" between the two colon columns
+output = "\n"
+output.concat "Experience".center(pair_width)
+output.concat "\n"
+output.concat "----------".center(pair_width)
+output.concat "\n"
+output.concat format_pair.call('Level', (exp_detail['level'] || '?'), 'Fame', (now['fame'] ? add_commas.call(now['fame']) : '?'))
+output.concat format_pair.call('Exp', (now['exp'] ? add_commas.call(now['exp']) : '?'), 'Field', field_exp_text)
+output.concat format_pair.call('Asc Exp', add_commas.call(now['aexp'].to_i), 'Total', add_commas.call(exp_detail['total_exp'] || now['exp'].to_i))
+output.concat format_pair.call('Long-Term', (exp_detail['long_term_exp'] ? add_commas.call(exp_detail['long_term_exp']) : '0'), 'Deeds', (exp_detail['deeds'] || 0))
+output.concat format_pair.call('Deaths', (exp_detail['recent_deaths'] || '0'), 'Sting', (exp_detail['death_sting'] || 'None'))
+output.concat format_pair.call('PTP/MTP', (exp_detail['ptps'] && exp_detail['mtps'] ? "#{exp_detail['ptps']}/#{exp_detail['mtps']}" : '?'), 'ATPs', (exp_detail['atps'] ? add_commas.call(exp_detail['atps']) : 'n/a'))
+output.concat format_pair.call("Next #{xp_next_label}", next_value_text, 'Next ATP', atp_value_text)
+output.concat format_pair.call('Mind', exp_detail['mind'], 'Asc Absorb', asc_absorb_text) if exp_detail['mind']
+output.concat format_pair.call('Mind', '', 'Asc Absorb', asc_absorb_text) unless exp_detail['mind']
+output.concat "  #{goal_summary_text}\n" if goal_summary_text
+output.concat "\n"
+effect_bits = Array.new
+effect_bits.push 'Lumnis serenity' if exp_detail['serenity']
+effect_bits.push 'RPA active' if exp_detail['rpa']
+effect_bits.push "Wisdom #{exp_detail['wisdom']}" if exp_detail['wisdom']
+output.concat format_pair.call('Effects', effect_bits.join(' | '), nil, nil) unless effect_bits.empty?
+lumnis_remaining_text = if lumnis_info['phase'] && lumnis_info['phase_remaining'].to_i > 0
+                         "#{add_commas.call(lumnis_info['phase_remaining'])} #{lumnis_info['phase']} exp"
+                       else
+                         'used up until refresh'
+                       end
+tutelage_base_text = if exp_detail['tutelage_active'] && lumnis_info['tutelage_days']
+                       "active now, #{lumnis_info['tutelage_days']} day(s) remaining"
+                     elsif exp_detail['tutelage_active']
+                       'active now'
+                     elsif lumnis_info['tutelage_days']
+                       "inactive, #{lumnis_info['tutelage_days']} day(s) remaining"
+                     else
+                       'not active'
+                     end
+tutelage_eta_text = nil
+if exp_detail['tutelage_active'] && tutelage_bonus_remaining > 0
+  tutelage_eta_seconds = nil
+  # Prefer the current session rate so idle time before the session does not
+  # stretch the estimate. Older rates are only fallbacks before the session
+  # has enough EXP to produce an estimate.
+  xp_rate_delta = nil
+  xp_rate_seconds = nil
+  if xp_since_realtime > 0 && secs_since_realtime > 0
+    xp_rate_delta = xp_since_realtime
+    xp_rate_seconds = secs_since_realtime
+  elsif xp_since_day > 0 && secs_since_day > 0
+    xp_rate_delta = xp_since_day
+    xp_rate_seconds = secs_since_day
+  elsif xp_since_last > 0 && secs_since_last > 0
+    xp_rate_delta = xp_since_last
+    xp_rate_seconds = secs_since_last
+  elsif xp_since_first > 0 && secs_since_first > 0
+    xp_rate_delta = xp_since_first
+    xp_rate_seconds = secs_since_first
+  end
+  if xp_rate_delta && xp_rate_seconds
+    tutelage_bonus_rate = (xp_rate_delta * 0.8) / xp_rate_seconds.to_f
+    tutelage_eta_seconds = (tutelage_bonus_remaining / tutelage_bonus_rate).to_i if tutelage_bonus_rate > 0
+  end
+  tutelage_eta_text = "done in #{xp2_format_duration.call(tutelage_eta_seconds)}" if tutelage_eta_seconds && tutelage_eta_seconds > 0
+end
+tutelage_estimate_tail = if tutelage_bonus_used > tutelage_bonus_cap
+                         "#{add_commas.call(tutelage_bonus_used - tutelage_bonus_cap)} over expected"
+                       else
+                         "#{add_commas.call(tutelage_bonus_remaining)} left"
+                       end
+tutelage_estimate_tail = "#{tutelage_estimate_tail}, #{tutelage_eta_text}" if tutelage_eta_text
+tutelage_estimate_text = "est. #{add_commas.call(tutelage_bonus_used)} (#{xp2_tutelage_bonus_percent.call(tutelage_bonus_used)}) bonus tracked, #{tutelage_estimate_tail}"
+tutelage_text = if exp_detail['tutelage_active']
+                  "#{tutelage_base_text}, #{tutelage_estimate_text}"
+                else
+                  tutelage_base_text
+                end
+output.concat format_pair.call('Lumnis', lumnis_remaining_text, nil, nil) if lumnis_info['refresh'] || lumnis_info['phase']
+output.concat format_pair.call('Refresh', lumnis_info['refresh'], nil, nil) if lumnis_info['refresh']
+output.concat format_pair.call('Tutelage', tutelage_text, nil, nil) if exp_detail['tutelage_active'] || lumnis_info['tutelage_days'] || lumnis_info['tutelage_inactive'] || lumnis_info['schedule']
+output.concat format_pair.call(resource_info['profession_name'], resource_info['profession_value'], nil, nil) if resource_info['profession_name'] && resource_info['profession_value']
+output.concat format_pair.call('Covert Arts', resource_info['covert_arts'], nil, nil) if resource_info['covert_arts']
+output.concat format_pair.call('Voln Favor', resource_info['voln_favor'], nil, nil) if resource_info['voln_favor']
+output.concat format_pair.call('Schedule', lumnis_info['schedule'], nil, nil) if lumnis_info['schedule']
+output.concat format_pair.call('Donations', "#{lumnis_info['donations']} recent", nil, nil) unless lumnis_info['donations'].nil?
+output.concat "\n"
+if CharSettings['xp2_layout'] == 'tall'
+  tall_time = proc { |time|
+    units = [ [ time[0].to_i, 'd' ], [ time[1].to_i, 'h' ], [ time[2].to_i, 'm' ], [ time[3].to_i, 's' ] ]
+    started = false
+    parts = Array.new
+    units.each do |value, label|
+      if value > 0 || started || label == 's'
+        parts.push "#{value}#{label}"
+        started = true
+      end
+    end
+    parts.join(' ')
+  }
+  tall_until_next = proc { |time| time ? tall_time.call(time) : no_gain_label }
+  tall_until_atp = proc { |time| time ? tall_time.call(time) : no_atp_label }
+  tall_until_goal = proc { |time| time ? tall_time.call(time) : no_gain_label }
+  tall_rows = Array.new
+  tall_rows.push [ 'gained in', tall_time.call(time_since_realtime), tall_time.call(time_since_day), tall_time.call(time_since_first), tall_time.call(time_since_last) ]
+  tall_rows.push [ 'exp', add_commas.call(xp_since_realtime), add_commas.call(xp_since_day), add_commas.call(xp_since_first), add_commas.call(xp_since_last) ]
+  tall_rows.push [ 'exp/h', add_commas.call(xp_since_realtime_avg), add_commas.call(xp_since_day_avg), add_commas.call(xp_since_first_avg), add_commas.call(xp_since_last_avg) ]
+  if show_aexp
+    tall_rows.push [ 'aexp', add_commas.call(aexp_since_realtime), add_commas.call(aexp_since_day), add_commas.call(aexp_since_first), add_commas.call(aexp_since_last) ]
+    tall_rows.push [ 'aexp/h', add_commas.call(aexp_since_realtime_avg), add_commas.call(aexp_since_day_avg), add_commas.call(aexp_since_first_avg), add_commas.call(aexp_since_last_avg) ]
+  end
+  if Vars['xp_ignore_fame'] != 'yes'
+    tall_rows.push [ 'fame', add_commas.call(fame_since_realtime), add_commas.call(fame_since_day), add_commas.call(fame_since_first), add_commas.call(fame_since_last) ]
+    tall_rows.push [ 'fame/h', add_commas.call(fame_since_realtime_avg), add_commas.call(fame_since_day_avg), add_commas.call(fame_since_first_avg), add_commas.call(fame_since_last_avg) ]
+  end
+  tall_rows.push [ "until #{xp_next_label}", tall_until_next.call(time_until_next_realtime), tall_until_next.call(time_until_next_day), tall_until_next.call(time_until_next_first), tall_until_next.call(time_until_next_last) ]
+    if xp_until_atp > 0
+    tall_rows.push [ 'until ATP', tall_until_atp.call(time_until_atp_realtime), tall_until_atp.call(time_until_atp_day), tall_until_atp.call(time_until_atp_first), tall_until_atp.call(time_until_atp_last) ]
+  end
+  if xp_until_goal > 0
+    tall_rows.push [ 'until goal', tall_until_goal.call(time_until_goal_realtime), tall_until_goal.call(time_until_goal_day), tall_until_goal.call(time_until_goal_first), tall_until_goal.call(time_until_goal_last) ]
+  end
+  tall_label_width = [ tall_rows.collect { |row| row[0].length }.max.to_i, 10 ].max
+  tall_reset_width = [ tall_rows.collect { |row| row[1].length }.max.to_i, 'reset'.length ].max
+  tall_day_width = [ tall_rows.collect { |row| row[2].length }.max.to_i, 'day'.length ].max
+  tall_session_width = [ tall_rows.collect { |row| row[3].length }.max.to_i, 'session'.length ].max
+  tall_last_width = [ tall_rows.collect { |row| row[4].length }.max.to_i, 'last'.length ].max
+  tall_indent = '  '
+  output.concat tall_indent
+  output.concat ''.ljust(tall_label_width)
+  tall_header = proc do |text, width|
+    "#{xp2_inline_preset.call('speech', text)}#{' ' * [width - text.length, 0].max}"
+  end
+  output.concat "  #{tall_header.call('reset', tall_reset_width)}  #{tall_header.call('day', tall_day_width)}  #{tall_header.call('session', tall_session_width)}  #{tall_header.call('last', tall_last_width)}\n"
+  output.concat "#{tall_indent}#{''.ljust(tall_label_width, '-')}  #{''.ljust(tall_reset_width, '-')}  #{''.ljust(tall_day_width, '-')}  #{''.ljust(tall_session_width, '-')}  #{''.ljust(tall_last_width, '-')}\n"
+  tall_rows.each do |row|
+    output.concat tall_indent
+    output.concat row[0].rjust(tall_label_width)
+    output.concat "  #{row[1].ljust(tall_reset_width)}  #{row[2].ljust(tall_day_width)}  #{row[3].ljust(tall_session_width)}  #{row[4].ljust(tall_last_width)}\n"
+  end
+else
+output.concat ''.rjust(row_label_width)
+output.concat '  '
+output.concat ' gain'.rjust(time_since_label_width/2)
+output.concat 'ed in'.ljust((time_since_label_width/2.0).ceil)
+output.concat '  '
+output.concat ' e'.rjust(exp_width/2)
+output.concat 'xp'.ljust((exp_width/2.0).ceil)
+output.concat '  '
+output.concat ' av'.rjust(avg_exp_width/2)
+output.concat 'g/h'.ljust((avg_exp_width/2.0).ceil)
+if show_aexp
+  output.concat '  '
+  output.concat 'ae'.rjust(aexp_width/2)
+  output.concat 'xp'.ljust((aexp_width/2.0).ceil)
+  output.concat '  '
+  output.concat ' av'.rjust(avg_aexp_width/2)
+  output.concat 'g/h'.ljust((avg_aexp_width/2.0).ceil)
+  output.concat '  '
+else
+  output.concat '  '
+end
+if Vars['xp_ignore_fame'] != 'yes'
+  output.concat 'fa'.rjust(fame_width/2)
+  output.concat 'me'.ljust((fame_width/2.0).ceil)
+  output.concat '  '
+  output.concat ' av'.rjust(avg_fame_width/2)
+  output.concat 'g/h'.ljust((avg_fame_width/2.0).ceil)
+  output.concat '  '
+end
+output.concat "until #{xp_next_label}".center(time_until_next_label_width)
+if xp_until_atp > 0
+  output.concat '  '
+  output.concat 'until ATP'.center(time_until_atp_label_width)
+end
+if xp_until_goal > 0
+  output.concat '  '
+  output.concat 'until'.rjust(time_until_goal_label_width/2)
+  output.concat ' goal'.ljust((time_until_goal_label_width/2.0).ceil)
+end
+output.concat "\n"
+output.concat ''.rjust(row_label_width, '-')
+output.concat '  '
+output.concat ''.rjust(time_since_label_width, '-')
+output.concat '  '
+output.concat ''.rjust(exp_width, '-')
+output.concat '  '
+output.concat ''.rjust(avg_exp_width, '-')
+if show_aexp
+  output.concat '  '
+  output.concat ''.rjust(aexp_width, '-')
+  output.concat '  '
+  output.concat ''.rjust(avg_aexp_width, '-')
+  output.concat '  '
+else
+  output.concat '  '
+end
+if Vars['xp_ignore_fame'] != 'yes'
+  output.concat ''.rjust(fame_width, '-')
+  output.concat '  '
+  output.concat ''.rjust(avg_fame_width, '-')
+  output.concat '  '
+end
+output.concat ''.rjust(time_until_next_label_width, '-')
+if xp_until_atp > 0
+  output.concat '  '
+  output.concat ''.rjust(time_until_atp_label_width, '-')
+end
+if xp_until_goal > 0
+  output.concat '  '
+  output.concat ''.rjust(time_until_goal_label_width, '-')
+end
+output.concat "\n"
+output.concat 'reset'.ljust(row_label_width)
+output.concat '  '
+output.concat format_time_since.call(secs_since_realtime).rjust(time_since_label_width)
+output.concat "  #{add_commas.call(xp_since_realtime).rjust(exp_width)}  #{add_commas.call(xp_since_realtime_avg).rjust(avg_exp_width)}  "
+if show_aexp
+  output.concat "#{add_commas.call(aexp_since_realtime).rjust(aexp_width)}  #{add_commas.call(aexp_since_realtime_avg).rjust(avg_aexp_width)}  "
+end
+if Vars['xp_ignore_fame'] != 'yes'
+  output.concat "#{add_commas.call(fame_since_realtime).rjust(fame_width)}  #{add_commas.call(fame_since_realtime_avg).rjust(avg_fame_width)}  "
+end
+if time_until_next_realtime
+  output.concat format_time_until_next.call(time_until_next_realtime).rjust(time_until_next_label_width)
+else
+  output.concat no_gain_label.rjust(time_until_next_label_width)
+end
+if xp_until_atp > 0
+  output.concat '  '
+  if time_until_atp_realtime
+    output.concat format_time_until_atp.call(time_until_atp_realtime).rjust(time_until_atp_label_width)
+  else
+    output.concat no_atp_label.rjust(time_until_atp_label_width)
+  end
+end
+if xp_until_goal > 0
+  output.concat '  '
+  if time_until_goal_realtime
+    output.concat format_time_until_goal.call(time_until_goal_realtime).rjust(time_until_goal_label_width)
+  else
+    output.concat no_gain_label.rjust(time_until_goal_label_width)
+  end
+end
+output.concat "\n"
+output.concat 'day'.ljust(row_label_width)
+output.concat '  '
+output.concat format_time_since.call(secs_since_day).rjust(time_since_label_width)
+output.concat "  #{add_commas.call(xp_since_day).rjust(exp_width)}  #{add_commas.call(xp_since_day_avg).rjust(avg_exp_width)}  "
+if show_aexp
+  output.concat "#{add_commas.call(aexp_since_day).rjust(aexp_width)}  #{add_commas.call(aexp_since_day_avg).rjust(avg_aexp_width)}  "
+end
+if Vars['xp_ignore_fame'] != 'yes'
+  output.concat "#{add_commas.call(fame_since_day).rjust(fame_width)}  #{add_commas.call(fame_since_day_avg).rjust(avg_fame_width)}  "
+end
+if time_until_next_day
+  output.concat format_time_until_next.call(time_until_next_day).rjust(time_until_next_label_width)
+else
+  output.concat no_gain_label.rjust(time_until_next_label_width)
+end
+if xp_until_atp > 0
+  output.concat '  '
+  if time_until_atp_day
+    output.concat format_time_until_atp.call(time_until_atp_day).rjust(time_until_atp_label_width)
+  else
+    output.concat no_atp_label.rjust(time_until_atp_label_width)
+  end
+end
+if xp_until_goal > 0
+  output.concat '  '
+  if time_until_goal_day
+    output.concat format_time_until_goal.call(time_until_goal_day).rjust(time_until_goal_label_width)
+  else
+    output.concat no_gain_label.rjust(time_until_goal_label_width)
+  end
+end
+output.concat "\n"
+output.concat 'session'.ljust(row_label_width)
+output.concat '  '
+output.concat format_time_since.call(secs_since_first).rjust(time_since_label_width)
+output.concat "  #{add_commas.call(xp_since_first).rjust(exp_width)}  #{add_commas.call(xp_since_first_avg).rjust(avg_exp_width)}  "
+if show_aexp
+  output.concat "#{add_commas.call(aexp_since_first).rjust(aexp_width)}  #{add_commas.call(aexp_since_first_avg).rjust(avg_aexp_width)}  "
+end
+if Vars['xp_ignore_fame'] != 'yes'
+  output.concat "#{add_commas.call(fame_since_first).rjust(fame_width)}  #{add_commas.call(fame_since_first_avg).rjust(avg_fame_width)}  "
+end
+if time_until_next_first
+  output.concat format_time_until_next.call(time_until_next_first).rjust(time_until_next_label_width)
+else
+  output.concat no_gain_label.rjust(time_until_next_label_width)
+end
+if xp_until_atp > 0
+  output.concat '  '
+  if time_until_atp_first
+    output.concat format_time_until_atp.call(time_until_atp_first).rjust(time_until_atp_label_width)
+  else
+    output.concat no_atp_label.rjust(time_until_atp_label_width)
+  end
+end
+if xp_until_goal > 0
+  output.concat '  '
+  if time_until_goal_first
+    output.concat format_time_until_goal.call(time_until_goal_first).rjust(time_until_goal_label_width)
+  else
+    output.concat no_gain_label.rjust(time_until_goal_label_width)
+  end
+end
+output.concat "\n"
+output.concat 'last'.ljust(row_label_width)
+output.concat '  '
+output.concat format_time_since.call(secs_since_last).rjust(time_since_label_width)
+output.concat "  #{add_commas.call(xp_since_last).rjust(exp_width)}  #{add_commas.call(xp_since_last_avg).rjust(avg_exp_width)}  "
+if show_aexp
+  output.concat "#{add_commas.call(aexp_since_last).rjust(aexp_width)}  #{add_commas.call(aexp_since_last_avg).rjust(avg_aexp_width)}  "
+end
+if Vars['xp_ignore_fame'] != 'yes'
+  output.concat "#{add_commas.call(fame_since_last).rjust(fame_width)}  #{add_commas.call(fame_since_last_avg).rjust(avg_fame_width)}  "
+end
+if time_until_next_last
+  output.concat format_time_until_next.call(time_until_next_last).rjust(time_until_next_label_width)
+else
+  output.concat no_gain_label.rjust(time_until_next_label_width)
+end
+if xp_until_atp > 0
+  output.concat '  '
+  if time_until_atp_last
+    output.concat format_time_until_atp.call(time_until_atp_last).rjust(time_until_atp_label_width)
+  else
+    output.concat no_atp_label.rjust(time_until_atp_label_width)
+  end
+end
+if xp_until_goal > 0
+  output.concat '  '
+  if time_until_goal_last
+    output.concat format_time_until_goal.call(time_until_goal_last).rjust(time_until_goal_label_width)
+  else
+    output.concat no_gain_label.rjust(time_until_goal_label_width)
+  end
+end
+output.concat "\n"
+end
+if xp2_debug_enabled.call
+  output.concat "\n"
+  output.concat "debug: settings lumnis=#{xp2_on_off_text.call('xp2_check_lumnis')} ascension=#{xp2_on_off_text.call('xp2_check_ascension')} resource=#{xp2_on_off_text.call('xp2_check_resource')}\n"
+  output.concat "debug: tutelage bonus estimate used=#{tutelage_bonus_used} remaining=#{tutelage_bonus_remaining} reset_at=#{tutelage_reset_at} source=#{Vars['xp2_tutelage_source']}\n"
+  xp2_debug_messages.each { |message| output.concat "debug: #{message}\n" }
+end
+
+output.concat "\n"
+xp2_mono_block.call(xp2_color_main_output.call(output), 'speech')
+$xp['last'] = now

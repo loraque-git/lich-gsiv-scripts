@@ -1,0 +1,26 @@
+#This is a companion script for ;rogues and is required for that script to run properly.
+#;rogues created this script.
+
+Thread.new{
+	loop{
+		wait_until{ checkroom =~ /A Dark Corner/ }
+		number_to_check_against = @rogue_dark_corner_number
+		wait_until{ checkroom !~ /A Dark Corner/ }
+		sleep 3
+		if running? "rogues"
+			if number_to_check_against == @rogue_dark_corner_number
+				@rogue_text_to_display.push("You are no longer in the room with your trainer.")
+				@rogue_text_to_display.push("Restarting ;rogues.")
+				rogue_display_message
+				kill_script "rogues" if running? "rogues"
+				wait_while{ running? "rogues" }
+				start_script "rogues", [@rogue_current_skill]
+			end
+		end
+	}}
+
+loop{
+	wait_until { !running? "rogues" }
+	sleep 5
+	exit if !running? "rogues"
+}

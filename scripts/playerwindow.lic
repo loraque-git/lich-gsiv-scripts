@@ -1,0 +1,2434 @@
+=begin
+  Works in Saga FE!
+  Player Window - Real-Time Player Display & Spam Filter
+
+  Creates a dedicated window to display other players in the room with
+  real-time status updates. Players are shown alphabetically with clickable
+  interactions: POKE sleeping players, PULL prone players, cast 108 on
+  stunned players, wave oak wands to unstun, cast 209 to untrammel webbed
+  players, or use ;ecure to heal injured players (empaths). Includes a
+  powerful spam filter and animal filter to reduce story window clutter
+  in crowded rooms. Supports Wrayth FE panel and GTK window for Avalon
+  and Wizard FEs.
+
+  References:
+    Wrayth FE Window: https://discordapp.com/channels/226045346399256576/1339018254517145681
+    GTK Window:       https://discordapp.com/channels/226045346399256576/1386507836191670342
+
+  Usage:
+    ;playerwindow                - Start player window
+
+  In-game Commands (while running):
+    *pwcol                       - Toggle single/double column layout
+    *pwcol3                      - Use a 3-column layout
+    *pwcol4                      - Use a 4-column layout
+    *pwcol5                      - Use a 5-column layout
+    *pwcol6                      - Use a 6-column layout
+    *pwcol7                      - Use a 7-column layout
+    *pwcol8                      - Use an 8-column layout
+    *pwbuttons                   - Hide/show filter buttons
+    *pwstatus                    - Cycle Saga status display: text -> unicode -> emoji -> text
+    *pwmove                      - Toggle player movement filtering
+    *pwflare                     - Toggle flare-message filtering
+    *pwcombat                    - Toggle combat message filtering (attack rolls, damage
+                                    math, crit flavor, flares, statuses, etc.)
+    *pwclaim                     - Hide/show claim status
+    *pwgtk                       - Enable GTK window
+    *pwgroup                     - Hide/show the group display
+    *pwheaders                   - Hide/show the PCs/Players header
+    *filterspam                  - Toggle spam filtering
+    *filteranimals               - Toggle animal filtering
+    *pwdebug                     - Toggle filter-debug logging (echoes why a line was/wasn't filtered)
+    *pwprofession                - Toggle profession icons next to player names (Saga only)
+    *pwprofession <profs...>      - Show icons for only the listed professions, e.g.
+                                    "*pwprofession warrior cleric" -- everyone else parsed via
+                                    *pwparse stays tracked but hidden until you switch back
+    *pwprofession all             - Clear the filter, showing every parsed profession again
+    *pwparse <profession>        - Look up who's currently playing a profession (via WHO PROFESSION)
+                                    and remember it for the icon display, e.g. "*pwparse warrior"
+    *pwparse all                  - Queue all 10 professions for lookup, one per loop tick, in
+                                    order, so the window stays responsive between them
+
+  Author: Phocosoen, ChatGPT
+  Tags: wrayth, saga, frontend, mod, window, players, spam, filter, group, avalon, wizard, gtk3
+  Version: 2.13.0
+  Recently changed:
+    v2.13.0 (2026-10-10) - Combat Filter now lets AS/DS/CS/TD resolution
+      rolls (family :resolution) through instead of dropping them, same
+      as attack and damage lines -- only the crit/flare/status/etc.
+      flavor noise in between gets filtered now.
+    v2.12.0 (2026-10-10) - Shortened the four filter toggle labels from
+      "X Filter: ON"/"X Filter: OFF" to "X <check mark>"/"X <x mark>" to
+      save horizontal space in the panel.
+    v2.11.0 (2026-10-10) - Added a generic "** ... !/... **"-shaped flare
+      pattern to the Flare Filter's pattern list, alongside (not
+      replacing) the curated flare_patterns.rb table -- confirmed against
+      real logged flares that this shape alone catches the vast majority
+      of them, so an un-cataloged flare no longer has to slip through
+      unfiltered just because flare_patterns.rb doesn't have an entry for
+      it yet.
+    v2.10.0 (2026-10-10) - Rebuilt the Combat Filter (*pwcombat) on
+      lich-5's own Gemstone combat definitions (PlayerWindow::
+      CombatClassifier, built the same way combatstream.lic builds its
+      own) instead of the hand-rolled "You swing/slash/..." + AS:/CS:/
+      SSR/SMR regex it used before -- now recognizes any attack
+      (self or otherwise), resolution roll, outcome, flare, status, UCS,
+      spell loss, sequence, assault, crit-rider or crit-rank line, plus
+      (on lich-5 newer than 5.21) the scattered Definitions::Messages
+      family. Unlike combatstream.lic, this filter still only omits --
+      nothing is routed to another window. Removed the now-dead
+      critical_rank_line?/critranks_parser helpers it replaced.
+    v2.9.4 (2026-09-30) - Found and fixed two bugs behind occasional
+      "Story window doesn't auto-scroll" reports, via a live raw-XML
+      capture showing the server can send the same speech line twice --
+      once through a speech stream, once bold-wrapped straight to the
+      main stream with a <popBold/> glued directly onto the following
+      <prompt .../> with no separator on the same chunk. (1) The
+      "always let speech through" guard was hardcoded to double quotes
+      (<preset id="speech">) and never matched the game's actual
+      single-quoted XML (<preset id='speech'>) -- it has silently never
+      fired since it was added; fixed to accept either quote style and
+      broadened to whisper/thought (matching combatstream.lic's own
+      CONVERSATION guard intent). (2) downstream_proc_filtered's tag-
+      preservation wrapper only ever re-attached a dropped <output>
+      mono-formatting tag when one of its ~40 suppression branches
+      squelched a line carrying one (its own comment already explained
+      why for <output>) -- widened to also preserve <prompt>...</prompt>
+      and <pushBold/>/<popBold/>, since the exact same "FE left in a
+      stuck, unbalanced tag state" failure mode applies to a dropped
+      prompt cycle or an orphaned bold tag, not just dropped mono mode.
+    v2.9.3 (2026-09-22) - Fixed two decay squelches (kresh-ravager
+      abdomen-deflate, hive-thrall caustic-fluid) that matched literal
+      bare text and silently failed on the real raw XML -- confirmed via
+      user-supplied captures that the game wraps the creature-noun/pronoun
+      reference in <pushBold/><a exist=... noun=...>...</a><popBold/>,
+      same class of bug already fixed for combatfilter_sagapanel.lic's
+      pronoun patterns. Both now tolerate any number of tags,
+      (?:<[^>]*>)*, around the wrapped word. The third reported line (the
+      "corpse ... is no longer where it was lying" notice) already worked
+      unchanged -- its .+? wildcard happened to bridge the embedded tags.
+    v2.9.2 (2026-09-22) - Added the "corpse ... is no longer where it was
+      lying" decay squelch (the delayed-decay notice you get when you
+      wander back to a spot after a corpse has fully decayed).
+    v2.9.1 (2026-09-22) - Added the kresh-ravager rapid-decay abdomen line
+      to the decay-message squelch.
+    v2.9.0 (2026-09-22) - Added two more decay-message squelches: the
+      kiramon-myrmidon exoskeleton-crumble line and the caustic-fluid
+      hive-thrall dissolve line (his/her/it alternation).
+    v2.8.0 (2026-09-16) - Added sympathy-status parsing and the ogre-face
+      emoji in Saga emoji status mode.
+    v2.7.0 (2026-08-28) - Added rooted-status parsing and the stump emoji
+      in Saga emoji status mode.
+    v2.6.2 (2026-08-25) - Removed the extra reserved row below the shared
+            PCs:/Group: header line.
+    v2.6.1 (2026-08-25) - Used the second actual player column for Group:
+            and enabled the shared header row starting at 2 columns.
+    v2.6.0 (2026-08-25) - With 3+ columns, placed the PCs: and Group:
+            headers on one line with PCs: first.
+    v2.5.0 (2026-08-25) - Persisted profession parsing results between
+            sessions so parsed profession icons do not need to be rebuilt.
+    v2.4.0 (2026-08-25) - Added *pwgroup and *pwheaders to toggle the group
+            display and PCs/Players header, both enabled by default.
+    2.3.1 - Fixed the GTK window's font-size A-/A+ buttons and the
+            GTK-unavailable startup fallback silently clobbering any
+            OTHER script's writes to the shared lichwindows.yaml: both
+            saved a `settings`/`window_settings` hash loaded once (at
+            window-open or script-start time) rather than re-reading the
+            file fresh first, so clicking A-/A+ any time after another
+            script had written a newer change would silently erase it
+            from disk -- confirmed as the real cause of a user-reported
+            "my exp_sagapanel change didn't save" report. Both sites now
+            go through update_player_setting (already mutex-guarded and
+            already fresh-reloads before saving), same as every other
+            safe setter in this file.
+    - Added "*pwprofession <profs...>" (e.g. "*pwprofession warrior
+      cleric"), which narrows the icon display to just the listed
+      professions regardless of what's been *pwparse'd -- everyone else
+      stays tracked in the roster, just hidden, so switching filters back
+      and forth doesn't require re-parsing. "*pwprofession all" clears the
+      filter; bare "*pwprofession" still just toggles icons on/off as
+      before.
+    - Added "*pwparse all", which queues all 10 professions for lookup at
+      once instead of running *pwparse once per profession by hand.
+      Processed one profession per loop tick (not all in one blocking
+      burst), so the window and other commands stay responsive across the
+      up-to-10 "who profession" round trips.
+    - Added Saga-only profession icons next to player names, toggled with
+      *pwprofession. Since the game doesn't expose another player's
+      profession directly, the roster is built by running *pwparse
+      <profession> (e.g. "*pwparse bard"), which issues WHO PROFESSION and
+      remembers the returned names -- run it once per profession you want
+      icons for. Covers all ten professions (Bard/Cleric/Empath/Monk/
+      Paladin/Ranger/Rogue/Sorcerer/Warrior/Wizard).
+    - Column layout extended from 1-4 to 1-8 (*pwcol3 through *pwcol8).
+    - Added a Saga-only status display mode for the player grid, cycled
+      with *pwstatus: text (plain words) -> unicode (special characters)
+      -> emoji -> back to text. Dead players use a tombstone icon, sitting/
+      kneeling/prone get dedicated icons, in emoji mode.
+	  - Added Hidden Player display in PCs.
+	  - Added support for Saga FE.
+	  - Added support for 3 and 4 column layouts.
+	  - Updated Spam Filter for Mana Trawl game.
+    - Added optional CLAIM status display with *pwclaim toggle.
+    - Added combat-number suppression controls (AS/CS/SMR/SSR and related combat math lines).
+    - Added decay-message suppression support to reduce post-search/loot corpse-noise lines.
+    - Added condensed death-message suppression output with centered death notices.
+    - Added flare-message suppression with dedicated flare filtering controls.
+    - Added spell-falloff suppression support, including XML-tagged line variants.
+    - Added Wrayth-only filter button visibility control via *pwbuttons.
+=end
+
+no_kill_all
+
+require 'yaml'
+
+module PlayerWindow
+  extend self
+  include Lich::Common if defined?(Lich::Common)
+  SETTINGS_MUTEX = Mutex.new
+  PLAYER_ROW_HEIGHT = 20
+  PLAYER_COLUMN_WIDTH = 120
+  PLAYER_HEADER_WIDTH = 200
+
+  class << self
+    attr_accessor :gtk_available,
+                  :use_gtk_playerwindow,
+                  :filter_spam,
+                  :filter_animals,
+                  :filter_flares,
+                  :filter_combat_math,
+                  :single_column,
+                  :columns,
+                  :show_filter_buttons,
+                  :show_claim_status,
+                  :show_movement,
+                  :debug_filter_enabled,
+                  :flare_patterns,
+                   :hidden_player_detected,
+                   :group_dirty,
+                   :group_display,
+                   :show_group_display,
+                   :show_headers,
+                   :saga_status_mode,
+                  :show_profession_icons,
+                  :profession_display_filter,
+                  :profession_map,
+                  :pending_parse_queue
+  end
+
+  BLOCKED_NOUNS = [
+    "albatross", "badger", "bandicoot", "banishara", "bat", "baza", "bear", "beetle", "bloodhound", "boar", "boarrat", "bobcat", "bush", "bushwag", "buzzard", "caiverine", "caligos", "caracara", "caraval", "canid", "capybara", "castorides", "cat", "catamount", "cheetah", "chameleon", "cockatiel", "colocolo", "condor", "cougar", "coydog", "coyote", "crow", "culpeo", "curhound", "curwolf", "cygnet", "deerhound", "dhole", "dog", "dobrem", "elf-owl", "eagle", "falcon", "fennec", "ferret", "fishing", "fox", "foxhound", "frog", "fossa", "giraffe", "goshawk", "graiphel", "groundhog", "gryfalcon", "gannet", "hare", "harpy", "harrier", "hedgehog", "heron", "howler", "hound", "hawk", "hawk-eagle", "hispid", "hummingbird", "hyena", "iguana", "jackal", "jabady", "jaguar", "jaguarundi", "jungle", "karet", "kingfisher", "kite", "kodkod", "ledisa", "lemur", "leopard", "lion", "lizard", "loper", "lugger", "lynx", "macaw", "magpie", "maned", "margay", "marmot", "marmoset", "mastiff", "melomys", "merlin", "mink", "mongoose", "monkey", "mole", "mouse", "mudcat", "muskrat", "muzzlerat", "narmo", "nutria", "ocicat", "ocelot", "oncilla", "opossum", "osprey", "owl", "panther", "parakeet", "parrot", "passo", "pelican", "penguin", "peregrine", "petrel", "phantom", "phantasma", "pigeonhawk", "pitohui", "porcupine", "pterosaur", "puppet", "puma", "puppy", "pygmy-parrot", "rabbit", "raccoon", "raptor", "rasper", "rat", "raven", "redtail", "ringtail", "rockrat", "rodent", "rowl", "sandrat", "samoyed", "saker", "screech-owl", "seal", "seagull", "seahawk", "sealion", "seal-pup", "serpent", "serval", "shrika", "shrike", "skua", "sloth", "snowcat", "snow-owl", "sparrowhawk", "spirit", "spider", "squirrel", "stratis", "swift", "tanuki", "tamarin", "tarsier", "tigrina", "tiger", "toad", "tothis", "toucan", "trakel", "tunnelcat", "turtle", "vole", "vulture", "warthog", "weasel", "whale", "whiskrat", "wildcat", "wolf", "wolfhound", "wolverine", "woodchuck", "woodpecker", "woodshrew", "wombat", "wyrdling", "viper", "mandrake", "lamb", "scarab", "teadragon", "kitten"
+  ].freeze
+
+  PW_DEFAULT_WINDOW_SETTINGS = {
+    "playerwindow" => {
+      "single_column"        => false,
+      "columns"              => 2,
+      "filter_animals"       => false,
+      "filter_flares"        => false,
+      "filter_combat_math"   => false,
+      "filter_spam"          => true,
+      "show_filter_buttons"  => true,
+      "show_claim_status"    => true,
+      "show_movement"        => true,
+      "x"                    => 1860,
+      "y"                    => 1600,
+      "width"                => 420,
+      "height"               => 370,
+      "font_size"            => 17,
+      "use_gtk_playerwindow" => true,
+      "palette"              => "White on Black",
+      "saga_status_mode"     => "unicode",
+      "show_profession_icons" => false,
+      "profession_display_filter" => nil,
+      "profession_map"       => {},
+      "show_group_display"   => true,
+      "show_headers"         => true
+    },
+  }.freeze
+
+  SAGA_STATUS_MODES = %w[text unicode emoji].freeze
+  PROFESSION_NAMES = %w[Warrior Rogue Wizard Cleric Empath Sorcerer Ranger Bard Monk Paladin].freeze
+
+  def load_flare_patterns_file
+    scripts_dir = "#{$script_dir}"
+    flare_patterns_filename = "flare_patterns.rb"
+    flare_patterns_path = File.join(scripts_dir, flare_patterns_filename)
+
+    return false unless File.exist?(flare_patterns_path)
+
+    load flare_patterns_path
+    true
+  rescue StandardError
+    false
+  end
+
+  def deep_merge_hash(base, override)
+    base.merge(override) do |_k, base_val, override_val|
+      if base_val.is_a?(Hash) && override_val.is_a?(Hash)
+        deep_merge_hash(base_val, override_val)
+      else
+        override_val
+      end
+    end
+  end
+
+  # Flare procs are wrapped in "** ... **" and end in "!" or "..." --
+  # confirmed against real logged flares (scepter/mace procs, spirit
+  # warden strikes, etc.) covering the vast majority on its own, without
+  # needing a per-flare-type entry in flare_patterns.rb. Kept as a
+  # fallback alongside the curated DMGFLARE_PATTERNS/NODMGFLARE_PATTERNS
+  # list (not a replacement for it) in case a flare's own text ever
+  # doesn't fit this shape.
+  GENERIC_FLARE_PATTERN = /(?:\*\*[^\r\n]*(?:!|\.\.\.)\s*\*\*|\*\*\s*Exploding in a tumbling current of frothy foam|suddenly lights up with hundreds of tiny blue sparks!|You hear the soft tinkle of rolling dice, followed by the sound of coins dropping!)/.freeze
+
+  def load_flare_filter_patterns
+    patterns = [GENERIC_FLARE_PATTERN]
+    patterns.concat(DMGFLARE_PATTERNS.values) if defined?(DMGFLARE_PATTERNS) && DMGFLARE_PATTERNS.is_a?(Hash)
+    patterns.concat(NODMGFLARE_PATTERNS.values) if defined?(NODMGFLARE_PATTERNS) && NODMGFLARE_PATTERNS.is_a?(Hash)
+    patterns.select { |pattern| pattern.is_a?(Regexp) }
+  end
+
+  def claim_label
+    defined?(Lich::Claim) && Lich::Claim.mine? ? "True" : "False"
+  rescue StandardError
+    "False"
+  end
+
+  def claim_status_text
+    show_claim_status ? " CLAIM: #{claim_label}" : ""
+  end
+
+  def window_settings_path(name: Char.name)
+    # Use $data_dir and XMLData.game for Lich data structure
+    base_dir = "#{$data_dir}#{XMLData.game}/#{name}"
+    Dir.mkdir("#{$data_dir}#{XMLData.game}") unless File.exist?("#{$data_dir}#{XMLData.game}")
+    Dir.mkdir(base_dir) unless File.exist?(base_dir)
+    File.join(base_dir, "lichwindows.yaml")
+  end
+
+  def load_window_settings(name: Char.name)
+    filename = window_settings_path(name: name)
+    settings_hash = nil
+
+    if File.exist?(filename) && name == Char.name
+      raw = File.read(filename)
+      parsed = YAML.safe_load(
+        raw,
+        permitted_classes: [Hash, Array, String, Integer, Float, TrueClass, FalseClass, NilClass],
+        aliases: false
+      )
+      settings_hash = parsed.is_a?(Hash) ? parsed : {}
+      settings_hash = deep_merge_hash(PW_DEFAULT_WINDOW_SETTINGS, settings_hash)
+    elsif !File.exist?(filename) && name != Char.name
+      echo "Window settings: Attempt to load a profile (#{name}) that does not exist."
+      settings_hash = nil
+    elsif !File.exist?(filename) && name == Char.name
+      echo "Window settings: No current settings found. Loading defaults..."
+      settings_hash = deep_merge_hash(PW_DEFAULT_WINDOW_SETTINGS, {})
+      File.write(filename, settings_hash.to_yaml)
+    else
+      echo "Window settings: Unknown error loading profile (#{name})"
+      settings_hash = nil
+    end
+
+    settings_hash
+  rescue StandardError => e
+    echo "Window settings: Error loading settings (#{e.message}). Loading defaults..."
+    settings_hash = deep_merge_hash(PW_DEFAULT_WINDOW_SETTINGS, {})
+    File.write(filename, settings_hash.to_yaml) if name == Char.name
+    settings_hash
+  end
+
+  def save_window_settings(settings, name: Char.name)
+    filename = window_settings_path(name: name)
+    File.write(filename, settings.to_yaml)
+  end
+
+  def update_player_setting(key, value)
+    SETTINGS_MUTEX.synchronize do
+      settings = load_window_settings
+      settings["playerwindow"] ||= {}
+      settings["playerwindow"][key] = value
+      save_window_settings(settings)
+    end
+  end
+
+  def save_profession_map!
+    update_player_setting("profession_map", profession_map)
+  end
+
+  def gtk_enabled?
+    gtk_available && PlayerWindow.use_gtk_playerwindow
+  end
+
+  def start_gtk_main_if_needed
+    return unless gtk_available
+
+    Gtk.main if Gtk.main_level.zero?
+  end
+
+  def center_text(text, width = 80)
+    trimmed = text.to_s.strip
+    return trimmed if trimmed.empty?
+
+    pad = [(width - trimmed.length) / 2, 0].max
+    (" " * pad) + trimmed
+  end
+
+  def line_is_self_status?(line)
+    plain = line.to_s.gsub(/<[^>]*>/, " ").strip
+    plain.match?(/\A(?:You|Your)\b/i)
+  end
+
+  def plain_text(line)
+    line.to_s.gsub(/<[^>]*>/, " ").gsub(/\s+/, " ").strip
+  end
+
+  def roundtime_prompt_line?(line)
+    line.to_s.match?(/<prompt\b[^>]*>\s*(?:R(?:&gt;|>)|&gt;|>)\s*<\/prompt>/i)
+  end
+
+  def prompt_line?(line)
+    line.to_s.match?(/<prompt\b[^>]*>.*?<\/prompt>/i)
+  end
+
+  def combat_damage_line?(line)
+    plain_text(line).match?(/\.\.\.\s+(?:(?:and hit for|and cause)\s+)?\d+\s+points? of damage!/i)
+  end
+
+  def combat_death_line?(line)
+    line.to_s.match?(/collapses to the ground\, dead\.|succumbs to death\.|form goes still\.|surrendering to death\.|life goes out of|as the power animating| collapses\, life|\, lifeless\.|animation departs?|collapses into a puddle|talons and feathers\.|many eyes close\.|death claims|ground\, still\.|goes still in death\.|ground\, unmoving\.|begins (?:to lose|losing) cohesion\.|at last going still\.|sags\, lifeless\,|becoming completely still\.|\, then goes still\.|the ground\, motionless\.|side and dies\.|and goes still\,|before expiring\.|dissolve from the bottom up\!|the life fading from|movement completely ceases\.|and collapses into the water\.|and into nothingness\!|a silhouette onto the ground beneath|collapses\, wings folding limply against|before collapsing\, lifeless\,|succumbs to death\, a|eyes go wide and surprised\.|explodes forth in a dazzling torrent\, searing the ground/i)
+  end
+
+  # Recognizes combat lines with lich-5's own Gemstone combat definitions --
+  # the same source combatstream.lic classifies from -- instead of the
+  # hand-rolled "You swing/slash/..." + AS:/CS:/SSR/SMR regex this filter
+  # used before. Covers far more than self-initiated attacks: any
+  # resolution roll, damage line, attack (self or otherwise), outcome,
+  # flare, status, UCS, spell loss, sequence, assault, crit-rider or crit-
+  # rank flavor text, and (on lich-5 newer than 5.21) the scattered
+  # Definitions::Messages family. Unlike combatstream.lic, this never
+  # routes anything anywhere -- the filter below just drops what classifies
+  # (that's the whole point: omit it, not move it to another window).
+  module CombatClassifier
+    CANDIDATES = [
+      [:resolution, 'Definitions::Resolutions', :parse],
+      [:damage,     'Definitions::Damage',      :parse],
+      [:attack,     'Parser',                   :parse_attack],
+      [:outcome,    'Definitions::Outcomes',    :parse],
+      [:flare,      'Definitions::Flares',      :parse],
+      [:status,     'Definitions::Statuses',    :parse],
+      [:ucs,        'Definitions::UCS',         :parse],
+      [:spell_loss, 'Definitions::SpellLosses', :parse],
+      [:sequence,   'Definitions::Sequences',   :parse_start],
+      [:sequence,   'Definitions::Sequences',   :parse_end],
+      [:assault,    'Definitions::Assaults',    :parse_start],
+      [:assault,    'Definitions::Assaults',    :parse_end],
+      [:crit_rider, 'Definitions::Resolutions', :crit_rider_line?]
+    ].freeze
+
+    def self.build(gemstone = Lich::Gemstone)
+      combat = gemstone.const_get(:Combat, false)
+      families = CANDIDATES.filter_map do |family, path, meth|
+        mod = lookup(combat, path)
+        [family, mod.method(meth)] if mod.respond_to?(meth)
+      end
+
+      messages = lookup(combat, 'Definitions::Messages')
+      families << [:message, ->(line) { messages.scan(line).any? }] if messages.respond_to?(:scan)
+
+      crits = lookup(gemstone, 'CritRanks')
+      families << [:crit, ->(line) { crits.parse(line).any? }] if crits.respond_to?(:parse)
+
+      families
+    end
+
+    def self.lookup(root, path)
+      path.split('::').reduce(root) do |ns, name|
+        ns&.const_defined?(name, false) ? ns.const_get(name, false) : nil
+      end
+    end
+
+    # @return [Symbol, nil] the first family that recognizes line, or nil
+    def self.classify(families, line)
+      families.each do |family, matcher|
+        return family if matcher.call(line)
+      end
+      nil
+    end
+  end
+
+  def combat_families
+    @combat_families ||= CombatClassifier.build
+  rescue StandardError
+    @combat_families = []
+  end
+
+  def spell_falloff_patterns
+    return @spell_falloff_patterns if @spell_falloff_patterns
+
+    @spell_falloff_patterns = []
+    down_messages =
+      if defined?(Spell) && Spell.respond_to?(:downmsgs)
+        Spell.downmsgs
+      else
+        []
+      end
+
+    Array(down_messages).each do |msg|
+      next if msg.nil? || msg.strip.empty?
+
+      source = msg.to_s
+      source = source.gsub(/\A\^/, "").gsub(/\$\z/, "")
+      begin
+        @spell_falloff_patterns << Regexp.new(source, Regexp::IGNORECASE)
+      rescue RegexpError
+        next
+      end
+    end
+    @spell_falloff_patterns
+  end
+
+  def spell_falloff_line?(line)
+    return false if line_is_self_status?(line)
+
+    plain = line.to_s.gsub(/<[^>]*>/, " ").gsub(/\s+/, " ").strip
+    matcher = proc { |regex| (line =~ regex) || (plain =~ regex) }
+
+    return true if matcher.call(/The constricting bands surrounding .* shatter into nothingness\./i)
+    return true if matcher.call(/ground beneath .* suddenly calms\.?/i)
+    return true if matcher.call(/The guiding force leaves .*\./i)
+    return true if matcher.call(/.* seems to lose an aura of confidence\./i)
+    return true if matcher.call(/illuminated mantle protecting .* begins to falter.*fades away\.?/i)
+
+    spell_falloff_patterns.any? { |pattern| matcher.call(pattern) }
+  end
+
+  def extract_noun_from_line(line)
+    xml_nouns = line.scan(/noun="([^"]+)"/i).flatten
+    return xml_nouns.last if xml_nouns.any?
+
+    plain = line.gsub(/<[^>]*>/, " ").strip
+    return Regexp.last_match(1).strip if plain =~ /\b(?:a|an|the|some)\s+([a-z][a-z' -]{2,40})\b/i
+
+    nil
+  end
+
+  def hidden_player_line?(line)
+    PlayerWindow.plain_text(line).match?(/\bobvious signs of someone hiding\b/i)
+  end
+
+  def room_text_state_line?(line)
+    raw = line.to_s
+    return true if raw.match?(/<(?:component|compDef) id=['"]room objs['"]>/i)
+    return true if raw.match?(/<(?:component|compDef) id=['"]room desc['"]>/i)
+    return true if raw.match?(/<style id=["']roomDesc["']/i)
+    return true if raw.match?(/\bYou also see\b/i)
+
+    false
+  end
+
+  def set_hidden_player_detected(value)
+    value = !!value
+    return if PlayerWindow.hidden_player_detected == value
+
+    PlayerWindow.hidden_player_detected = value
+    PlayerWindow.group_dirty = true
+  end
+
+end
+
+unless PlayerWindow.load_flare_patterns_file
+  echo "Playerwindow: flare patterns unavailable (could not load flare_patterns.rb from #{$script_dir}). Flare filtering disabled."
+end
+
+# ... load WINDOW_SETTINGS_PATH, PlayerWindow.load_window_settings, etc ...
+
+window_settings        = PlayerWindow.load_window_settings
+window_settings      ||= PlayerWindow.deep_merge_hash(PlayerWindow::PW_DEFAULT_WINDOW_SETTINGS, {})
+player_window_settings = window_settings["playerwindow"] || {}
+
+PlayerWindow.use_gtk_playerwindow = player_window_settings["use_gtk_playerwindow"] || false
+PlayerWindow.filter_spam      = player_window_settings["filter_spam"]      || false
+PlayerWindow.filter_animals   = player_window_settings["filter_animals"]   || false
+PlayerWindow.filter_flares    = player_window_settings["filter_flares"]    || false
+PlayerWindow.filter_combat_math = player_window_settings["filter_combat_math"] || false
+PlayerWindow.columns = begin
+  c = player_window_settings["columns"].to_i
+  c = (player_window_settings["single_column"] ? 1 : 2) unless (1..8).include?(c)
+  [[c, 1].max, 8].min
+end
+PlayerWindow.single_column = (PlayerWindow.columns == 1)
+PlayerWindow.show_filter_buttons = player_window_settings.fetch("show_filter_buttons", true)
+PlayerWindow.show_claim_status   = player_window_settings.fetch("show_claim_status", true)
+PlayerWindow.show_movement       = player_window_settings.fetch("show_movement", true)
+PlayerWindow.show_group_display  = player_window_settings.fetch("show_group_display", true)
+PlayerWindow.show_headers        = player_window_settings.fetch("show_headers", true)
+PlayerWindow.saga_status_mode    = player_window_settings.fetch("saga_status_mode", "unicode")
+PlayerWindow.saga_status_mode    = "unicode" unless PlayerWindow::SAGA_STATUS_MODES.include?(PlayerWindow.saga_status_mode)
+PlayerWindow.show_profession_icons = player_window_settings.fetch("show_profession_icons", false)
+PlayerWindow.profession_display_filter = begin
+  saved = player_window_settings["profession_display_filter"]
+  if saved.is_a?(Array)
+    filtered = saved.select { |p| PlayerWindow::PROFESSION_NAMES.include?(p) }
+    filtered.empty? ? nil : filtered
+  end
+end
+PlayerWindow.profession_map = begin
+  saved = player_window_settings["profession_map"]
+  if saved.is_a?(Hash)
+    saved.each_with_object({}) do |(name, profession), map|
+      name = name.to_s.strip.downcase
+      profession = profession.to_s
+      next if name.empty? || !PlayerWindow::PROFESSION_NAMES.include?(profession)
+
+      map[name] = profession
+    end
+  else
+    {}
+  end
+end
+PlayerWindow.pending_parse_queue = []
+PlayerWindow.debug_filter_enabled = false # Toggle with *pwdebug
+PlayerWindow.flare_patterns = PlayerWindow.load_flare_filter_patterns
+PlayerWindow.hidden_player_detected = false
+PlayerWindow.gtk_available = begin
+  require 'gtk3'
+  true
+rescue LoadError => e
+  echo "Playerwindow: GTK unavailable (#{e.message})."
+  false
+end
+
+@pw_startup_request_gtk = (PlayerWindow.use_gtk_playerwindow || !Frontend.supports_room_window?)
+
+if Frontend.supports_room_window?
+  # Open the players window using Wrayth's dynamic dialog.
+  _respond("<closeDialog id='PlayerWindow'/><openDialog type='dynamic' id='PlayerWindow' title='Players' target='PlayerWindow' resident='true'><dialogData id='PlayerWindow'></dialogData></openDialog>")
+end
+
+@pw_last_pcs = []
+@pw_last_pcs_snapshot = nil
+@pw_last_filter_state = nil # Track last known state of all filter flags
+
+# --- 1) Define your palettes ---
+PlayerWindow::PALETTES = {
+  "Lich Dark Mode"     => { bg: "#2E2E2E", fg: "#DADADA" },
+  "Lich Light Mode"    => { bg: "#E6E6E6", fg: "#202020" },
+  "Middle Ground"      => { bg: "#333333", fg: "#FFFFFF" },
+  "White on Black"     => { bg: "#000000", fg: "#FFFFFF" },
+  "NQWhite on NQBlack" => { bg: "#111111", fg: "#f6f6f6" },
+  "Black on White"     => { bg: "#FFFFFF", fg: "#000000" },
+} unless defined?(PlayerWindow::PALETTES)
+
+class PlayerWindowGtk
+  @window       = nil
+  @css_provider = nil
+  @font_size    = nil
+  @pending_command = nil
+  class << self
+    attr_accessor :pending_command
+  end
+  # --- 2) Regenerate & apply CSS using the chosen palette ---
+  def self.reload_css
+    # Load persisted palette choice (default to "White on Black")
+    settings = PlayerWindow.load_window_settings
+    pw       = settings["playerwindow"] ||= {}
+    pal_name = pw["palette"] || "White on Black"
+    colors   = PlayerWindow::PALETTES[pal_name]
+
+    css = <<~CSS
+      /* window frame */
+      window#playerwindow {
+        background-color: #{colors[:bg]};
+        color:            #{colors[:fg]};
+        border:           0px solid #888888;
+        border-radius:    4px;
+      }
+
+      window#playerwindow .palette-btn,
+      window#playerwindow popover .palette-btn,
+      window#playerwindow GtkPopover .palette-btn {
+        background: #{colors[:bg]};
+        color: #{colors[:fg]};
+      }
+
+      window#playerwindow .palette-btn:checked {
+        background: #{colors[:bg]};
+        color: #{colors[:fg]};
+      }
+
+      /* header bar */
+      window#playerwindow headerbar {
+        background-color: #{colors[:bg]};
+        color:            #{colors[:fg]};
+      }
+
+      /* header bar buttons / toggles */
+      window#playerwindow headerbar .header-toggle {
+        margin:      0 2px;
+        padding:     2px 4px;
+        background-image: none;
+        background-color: transparent;
+        color:            #{colors[:fg]};
+        border:           none;
+        box-shadow:       none;
+      }
+
+      /* "on" state for toggles */
+      window#playerwindow headerbar .header-toggle:checked {
+        background-color: #0a84ff; /* system blue */
+        color:            #FFFFFF;
+      }
+
+      /* content labels */
+      window#playerwindow label {
+        font-size: #{@font_size}px;
+        color:     #{colors[:fg]};
+      }
+
+      /* scrolled area & flowbox */
+      window#playerwindow GtkScrolledWindow,
+      window#playerwindow GtkFlowBox {
+        background-color: #{colors[:bg]};
+      }
+  window#playerwindow .player-btn,
+  window#playerwindow button.player-btn {
+        background: #{colors[:bg]};
+        color: #{colors[:fg]};
+    border-radius: 6px;
+    border-width: 1px;
+    border-style: solid;
+    border-color: #888888;
+    padding: 5px;
+    font-weight: normal;
+    transition: background 0.2s;
+  }
+
+  window#playerwindow .player-btn:active,
+  window#playerwindow button.player-btn:active {
+        background: #{colors[:bg]};
+        color: #{colors[:fg]};
+  }
+    CSS
+
+    @css_provider.load(data: css)
+  end
+
+  def self.create_main_window
+    return if @window
+
+    # --- load persisted settings ---
+    settings = PlayerWindow.load_window_settings
+    pw       = settings["playerwindow"] ||= {}
+    PlayerWindow.filter_spam    = pw["filter_spam"]    || false
+    PlayerWindow.filter_animals = pw["filter_animals"] || false
+    PlayerWindow.filter_flares  = pw["filter_flares"]  || false
+    PlayerWindow.filter_combat_math = pw["filter_combat_math"] || false
+    @font_size = pw["font_size"] || 14
+    pw["palette"] || "White on Black"
+
+    # --- build top-level window & HeaderBar ---
+    @window = Gtk::Window.new(:toplevel)
+    @window.set_name("playerwindow")
+    @window.set_border_width(10)
+    @window.set_type_hint(Gdk::WindowTypeHint::UTILITY)
+    @window.set_keep_above(true)
+
+    header = Gtk::HeaderBar.new
+    header.show_close_button = true
+    header.title = "PW"
+
+    # - Spam Filter toggle -
+    spam_toggle = Gtk::ToggleButton.new(label: "Spam")
+    spam_toggle.style_context.add_class("header-toggle")
+    spam_toggle.active = PlayerWindow.filter_spam
+    spam_toggle.signal_connect("toggled") do |btn|
+      PlayerWindow.filter_spam = btn.active?
+      respond "Spam filtering #{PlayerWindow.filter_spam ? 'ENABLED' : 'DISABLED'}."
+      PlayerWindow.update_player_setting("filter_spam", PlayerWindow.filter_spam)
+      update_players(GameObj.pcs.reject { |pc| pc.name == Char.name })
+    end
+    header.pack_start(spam_toggle)
+
+    # - Flare Filter toggle -
+    flare_toggle = Gtk::ToggleButton.new(label: "Flare")
+    flare_toggle.style_context.add_class("header-toggle")
+    flare_toggle.active = PlayerWindow.filter_flares
+    flare_toggle.signal_connect("toggled") do |btn|
+      if btn.active? && PlayerWindow.flare_patterns.empty?
+        btn.active = false
+        respond "Flare filtering unavailable. flare_patterns.rb not loaded."
+        next
+      end
+
+      PlayerWindow.filter_flares = btn.active?
+      respond "Flare filtering #{PlayerWindow.filter_flares ? 'ENABLED' : 'DISABLED'}."
+      PlayerWindow.update_player_setting("filter_flares", PlayerWindow.filter_flares)
+      update_players(GameObj.pcs.reject { |pc| pc.name == Char.name })
+    end
+    header.pack_start(flare_toggle)
+
+    # - Combat Filter toggle -
+    combat_math_toggle = Gtk::ToggleButton.new(label: "Combat")
+    combat_math_toggle.style_context.add_class("header-toggle")
+    combat_math_toggle.active = PlayerWindow.filter_combat_math
+    combat_math_toggle.signal_connect("toggled") do |btn|
+      PlayerWindow.filter_combat_math = btn.active?
+      respond "Combat filtering #{PlayerWindow.filter_combat_math ? 'ENABLED' : 'DISABLED'}."
+      PlayerWindow.update_player_setting("filter_combat_math", PlayerWindow.filter_combat_math)
+      update_players(GameObj.pcs.reject { |pc| pc.name == Char.name })
+    end
+    header.pack_start(combat_math_toggle)
+
+    # - Animal Filter toggle -
+    animal_toggle = Gtk::ToggleButton.new(label: "Animal")
+    animal_toggle.style_context.add_class("header-toggle")
+    animal_toggle.active = PlayerWindow.filter_animals
+    animal_toggle.signal_connect("toggled") do |btn|
+      PlayerWindow.filter_animals = btn.active?
+      respond "Animal filtering #{PlayerWindow.filter_animals ? 'ENABLED' : 'DISABLED'}."
+      PlayerWindow.update_player_setting("filter_animals", PlayerWindow.filter_animals)
+      update_players(GameObj.pcs.reject { |pc| pc.name == Char.name })
+    end
+    header.pack_start(animal_toggle)
+
+    # - Font size buttons -
+    dec_btn = Gtk::Button.new(label: "A-")
+    inc_btn = Gtk::Button.new(label: "A+")
+    [dec_btn, inc_btn].each do |b|
+      b.style_context.add_class("header-toggle")
+      header.pack_start(b)
+    end
+    dec_btn.signal_connect("clicked") do
+      @font_size = [@font_size - 1, 8].max
+      PlayerWindow.update_player_setting("font_size", @font_size)
+      reload_css
+    end
+    inc_btn.signal_connect("clicked") do
+      @font_size = [@font_size + 1, 30].min
+      PlayerWindow.update_player_setting("font_size", @font_size)
+      reload_css
+    end
+
+    # - Palette selector -
+    # build your MenuButton
+    palette_btn = Gtk::MenuButton.new
+    palette_btn.style_context.add_class("header-toggle")
+    img = Gtk::Image.new(
+      icon_name: "preferences-desktop-color-symbolic",
+      icon_size: Gtk::IconSize::SMALL_TOOLBAR
+    )
+    palette_btn.set_image(img)
+    palette_btn.set_always_show_image(true)
+
+    # create the Popover and position it _before_ attaching it
+    popover = Gtk::Popover.new(palette_btn)
+    popover.set_position(Gtk::PositionType::TOP) # <- do this first
+
+    # now fill your popover
+    listbox = Gtk::Box.new(:vertical, 0)
+    PlayerWindow::PALETTES.each_key do |name|
+      btn = Gtk::ToggleButton.new(label: name)
+      btn.style_context.add_class("header-toggle")
+      btn.style_context.add_class("palette-btn")
+      btn.active = (name == pw["palette"])
+      btn.signal_connect("clicked") do
+        settings = PlayerWindow.load_window_settings
+        settings["playerwindow"] ||= {}
+        settings["playerwindow"]["palette"] = name
+        PlayerWindow.save_window_settings(settings)
+        reload_css
+      end
+      listbox.add(btn)
+    end
+    popover.add(listbox)
+    listbox.show_all
+
+    # *only now* attach the popover to the button
+    palette_btn.set_popover(popover)
+
+    # and finally pack it into your header
+    header.pack_end(palette_btn)
+
+    @window.set_titlebar(header)
+
+    # - CSS provider & initial styling -
+    @css_provider = Gtk::CssProvider.new
+    reload_css
+    screen = Gdk::Screen.default
+    Gtk::StyleContext.add_provider_for_screen(
+      screen,
+      @css_provider,
+      Gtk::StyleProvider::PRIORITY_APPLICATION
+    )
+
+    # - Restore geometry -
+    @window.resize(pw["width"], pw["height"]) if pw["width"] && pw["height"]
+    @window.move(pw["x"], pw["y"]) if pw["x"] && pw["y"]
+
+    @group_label = Gtk::Label.new("")
+    @group_label.set_xalign(0)
+    @group_label.style_context.add_class("group-label")
+
+    @scroll = Gtk::ScrolledWindow.new
+    @scroll.set_policy(Gtk::PolicyType::AUTOMATIC, Gtk::PolicyType::AUTOMATIC)
+    @scroll.set_hexpand(true)
+    @scroll.set_vexpand(true)
+
+    @flow = Gtk::FlowBox.new
+    @flow.selection_mode        = :none
+    @flow.max_children_per_line = [PlayerWindow.columns, 1].max
+    @flow.column_spacing        = 0
+    @flow.row_spacing           = 0
+    @flow.set_vexpand(true)
+    @flow.valign                = Gtk::Align::START
+    @flow.homogeneous           = false
+    @scroll.add(@flow)
+
+    container = Gtk::Box.new(:vertical, 1)
+    container.pack_start(@group_label, expand: false, fill: true, padding: 0)
+    container.pack_start(@scroll,      expand: true,  fill: true, padding: 0)
+    @window.add(container)
+
+    # --- save geometry on move/resize ---
+    @ignore_next_configure = true
+    @window.signal_connect("configure_event") do |_w, _ev|
+      if @ignore_next_configure
+        @ignore_next_configure = false
+      else
+        x, y = @window.position
+        w, h = @window.size
+        s = PlayerWindow.load_window_settings
+        s["playerwindow"] ||= {}
+        s["playerwindow"].merge!("x" => x, "y" => y, "width" => w, "height" => h)
+        PlayerWindow.save_window_settings(s)
+      end
+      false
+    end
+
+    # --- replace the default destroy->Gtk.main_quit handler ---
+    # 1) First, connect Gtk.main_quit yourself and capture its handler ID:
+    default_quit_id = @window.signal_connect("destroy") do
+      Gtk.main_quit
+    end
+
+    # 2) Immediately disconnect that handler:
+    @window.signal_handler_disconnect(default_quit_id)
+
+    # 3) Now install your destroy handler that only closes this window:
+    @window.signal_connect("destroy") do
+      @window = nil
+      # NO Gtk.main_quit here!
+    end
+
+    @window.show_all
+
+
+    # - initial fill -
+    pcs = GameObj.pcs.reject { |pc| pc.name == Char.name }
+    Gtk.queue { update_players(pcs, PlayerWindow.group_display) }
+  end
+
+  # - update_players & player_status_fix remain unchanged -
+  def self.update_players(pcs, group_display = nil)
+    return unless @window
+    Gtk.queue do
+      # update lone group label
+      if PlayerWindow.show_group_display && group_display
+        @group_label.set_text(group_display)
+        @group_label.show
+      else
+        @group_label.hide
+      end
+
+      # rebuild FlowBox of players
+      @flow.max_children_per_line = [PlayerWindow.columns, 1].max
+      @flow.children.each { |c| @flow.remove(c) }
+      if PlayerWindow.show_headers
+        player_count = pcs.size + (PlayerWindow.hidden_player_detected ? 1 : 0)
+        count_lbl = Gtk::Label.new("Players: #{player_count}#{PlayerWindow.claim_status_text}")
+        count_lbl.set_xalign(0)
+        @flow.add(count_lbl)
+        # Pad the header row with blank cells so it spans all columns.
+        ([PlayerWindow.columns, 1].max - 1).times { @flow.add(Gtk::Label.new("")) }
+      end
+
+      if PlayerWindow.hidden_player_detected
+        row = Gtk::Box.new(:horizontal, 4)
+        row.set_size_request(PlayerWindow::PLAYER_COLUMN_WIDTH, -1)
+        name_lbl = Gtk::Label.new("Hidden Player")
+        name_lbl.set_xalign(0)
+        row.pack_start(name_lbl, expand: true, fill: true, padding: 0)
+
+        btn = Gtk::Button.new(label: "hidden")
+        btn.sensitive = false
+        btn.style_context.add_class("player-btn")
+        row.pack_start(btn, expand: false, fill: false, padding: 0)
+        @flow.add(row)
+      end
+
+      pcs.sort_by { |pc| PlayerWindow.extract_noun(pc).downcase }.each do |pc|
+        noun   = PlayerWindow.extract_noun(pc)
+        status = PlayerWindow.player_status_fix(pc.status)
+        action_cmd = PlayerWindow.action_for_status(status, pc)
+        btn_label = status ? status : "look" # <--- THIS IS THE KEY
+
+        row = Gtk::Box.new(:horizontal, 4)
+        row.set_size_request(PlayerWindow::PLAYER_COLUMN_WIDTH, -1)
+        name_lbl = Gtk::Label.new(noun)
+        name_lbl.set_xalign(0)
+        row.pack_start(name_lbl, expand: true, fill: true, padding: 0)
+
+        btn = Gtk::Button.new(label: btn_label)
+        btn.style_context.add_class("player-btn")
+        btn.signal_connect("clicked") do
+          PlayerWindowGtk.pending_command = action_cmd ? action_cmd : "look ##{pc.id}"
+        end
+        row.pack_start(btn, expand: false, fill: false, padding: 0)
+        @flow.add(row)
+      end
+      @flow.show_all
+    end
+  end
+
+  def self.player_status_fix(status)
+    PlayerWindow.player_status_fix(status)
+  end
+end
+
+if @pw_startup_request_gtk
+  if PlayerWindow.gtk_available
+    respond ""
+    respond " Initiating GTK window."
+    respond ""
+    respond " GTK Playerwindow is active."
+    respond ""
+    Gtk.queue { PlayerWindowGtk.create_main_window }
+    Thread.new { PlayerWindow.start_gtk_main_if_needed }
+  else
+    PlayerWindow.use_gtk_playerwindow = false
+    PlayerWindow.update_player_setting("use_gtk_playerwindow", false)
+    respond ""
+    respond " GTK Playerwindow disabled: gtk3 gem not available."
+    respond ""
+  end
+end
+
+# Standardize status names for players, prioritizing "stunned" over "prone".
+def PlayerWindow.player_status_fix(status)
+  return "dead" if status =~ /dead/i
+  return "stunned" if status =~ /stunned/i # Ensure "stunned" takes precedence
+  return "sleeping" if status =~ /unconscious|slumber|sleeping/i
+  return "prone" if status =~ /lying down|prone|knocked to the ground/i
+  return "sitting" if status =~ /sitting/i
+  return "kneeling" if status =~ /kneeling/i
+  return "calmed" if status =~ /calmed/i
+  return "frozen" if status =~ /frozen/i
+  return "held" if status =~ /held/i
+  return "rooted" if status =~ /rooted/i
+  return "webbed" if status =~ /web/i
+  return "sympathy" if status =~ /sympath/i
+  return nil
+end
+
+# Saga-panel-only status text -> XML numeric character reference. Values are
+# entity references (not raw UTF-8 literals) since raw non-ASCII bytes
+# embedded directly in a dialog control's value='' attribute don't survive
+# Saga's dialog-control rendering intact. "dead" has no unicode-mode glyph
+# (matches creaturewindow's convention) -- it only gets an icon in emoji
+# mode, using the tombstone per-player (vs. creaturewindow's skull, which
+# marks dead creatures).
+PW_SAGA_STATUS_ICONS_UNICODE = {
+  /\bcalmed\b/i   => "&#x262E;",   # U+262E peace symbol
+  /\bfrozen\b/i   => "&#x2744;",   # U+2744 snowflake
+  /\bheld\b/i     => "&#x2327;",   # U+2327 x in a rectangle box
+  /\bsleeping\b/i => "&#x1DBB;&#x1DBB;&#x1DBB;", # U+1DBB x3 modifier letter small z
+  /\bwebbed\b/i   => "&#x203B;",   # U+203B reference mark
+  /\bstunned\b/i  => "&#x2739;",   # U+2739 six pointed black star
+  /\bprone\b/i    => "&#x21D3;"    # U+21D3 downwards double arrow
+}.freeze
+
+PW_SAGA_STATUS_ICONS_EMOJI = {
+  /\bcalmed\b/i   => "&#x1F60C;",         # U+1F60C relieved face
+  /\bfrozen\b/i   => "&#x2744;&#xFE0F;",  # U+2744 snowflake
+  /\bheld\b/i     => "&#x26D3;&#xFE0F;",  # U+26D3 chains
+  /\bsleeping\b/i => "&#x1F4A4;",         # U+1F4A4 zzz
+  /\bwebbed\b/i   => "&#x1F578;&#xFE0F;", # U+1F578 spider web
+  /\bstunned\b/i  => "&#x26A1;",          # U+26A1 high voltage
+  /\bprone\b/i    => "&#x1F6CC;",         # U+1F6CC person in bed (lying down)
+  /\bsitting\b/i  => "&#x1FA91;",         # U+1FA91 chair
+  /\bkneeling\b/i => "&#x1F9CE;",         # U+1F9CE person kneeling
+  /\brooted\b/i   => "&#x1FAB5;",         # U+1FAB5 wood log/stump
+  /\bsympathy\b/i => "&#x1F47A;",         # U+1F47A ogre face
+  /\bdead\b/i     => "&#x1FAA6;"          # U+1FAA6 tombstone
+}.freeze
+
+# Profession icons are emoji-only (no unicode/text alternative was given),
+# so they're gated by their own PlayerWindow.show_profession_icons toggle
+# rather than saga_status_mode. Values are XML numeric character references
+# for the same reason as the status icons above.
+PW_PROFESSION_ICONS = {
+  "Bard"     => "&#x1F3B5;",                   # U+1F3B5 musical note
+  "Cleric"   => "&#x1F64F;",                   # U+1F64F folded hands
+  "Empath"   => "&#x2764;&#xFE0F;&#x200D;&#x1FA79;", # U+2764 mending heart (heart + VS16 + ZWJ + adhesive bandage)
+  "Monk"     => "&#x1F44A;",                   # U+1F44A oncoming fist
+  "Paladin"  => "&#x1F6E1;&#xFE0F;",           # U+1F6E1 shield
+  "Ranger"   => "&#x1F3F9;",                   # U+1F3F9 bow and arrow
+  "Rogue"    => "&#x1F5E1;&#xFE0F;",           # U+1F5E1 dagger
+  "Sorcerer" => "&#x1F52E;",                   # U+1F52E crystal ball
+  "Warrior"  => "&#x2694;&#xFE0F;",            # U+2694 crossed swords
+  "Wizard"   => "&#x1FA84;"                    # U+1FA84 magic wand
+}.freeze
+
+# Blocking: issues "who profession X" and captures the roster. Must only be
+# called from the main script thread (e.g. the main loop below), never from
+# inside an UpstreamHook callback -- those run in the client's send
+# pipeline and can't sit around waiting several seconds on game output.
+# Detects the response purely structurally (a header line ending in ':',
+# then name rows, then "Total: N") since the exact header wording isn't
+# documented and may vary by profession.
+def PlayerWindow.fetch_profession_roster(profession, timeout: 6)
+  names = []
+  # :before -> :header -> :capturing -> :done. Was :before -> :capturing
+  # on the first line matching /:\s*$/ -- ANY unrelated game line ending
+  # in a colon arriving during the up-to-timeout wait (a label, another
+  # player's broadcast, anything) falsely triggered capture mode, and the
+  # stray words that followed got written into profession_map, silently
+  # overwriting correct entries for previously-*pwparse'd players. Now
+  # anchored on the actual protocol boundary this response is wrapped in
+  # (<output class="mono"/> ... <output class=""/>, confirmed against a
+  # real "who profession warrior" capture and already the established
+  # idiom elsewhere in this codebase -- see combatfilter_sagapanel.lic,
+  # go2.lic, eloot.lic, etc.), so nothing outside that block can be
+  # mistaken for roster content regardless of wording.
+  state = :before
+  invalid = false
+  ttl = Time.now + timeout
+
+  hook_name = "playerwindow_who_#{Time.now.to_f}"
+  DownstreamHook.add(hook_name, proc { |line|
+    # Names in this response are clickable links (<a exist="..."
+    # noun="...">Name</a>), so strip tags before matching/collecting --
+    # otherwise raw tag fragments end up in the roster instead of names.
+    clean = strip_xml(line).to_s
+    case state
+    when :before
+      if clean =~ /^Valid options:/i
+        invalid = true
+        state = :done
+        nil
+      elsif line =~ /<output class=["']mono["']\s*\/>/i
+        state = :header
+        nil
+      else
+        line
+      end
+    when :header
+      # The roster's own header line ("Brave Adventurers Questing:", etc.
+      # -- wording varies by profession and isn't documented) is the
+      # first non-blank line inside the mono block; skip it unconditionally
+      # rather than matching its exact text, then start capturing.
+      if clean.strip.empty?
+        nil
+      else
+        state = :capturing
+        nil
+      end
+    when :capturing
+      if clean =~ /^Total:\s*\d+/i || line =~ /<output class=["']["']\s*\/>/i
+        state = :done
+        nil
+      else
+        names.concat(clean.scan(/\S+/))
+        nil
+      end
+    else
+      line
+    end
+  }, persist: false)
+
+  fput "who profession #{profession.downcase}"
+  sleep 0.05 until state == :done || Time.now > ttl
+
+  DownstreamHook.remove(hook_name)
+  return :invalid if invalid
+
+  names
+end
+
+def PlayerWindow.saga_status_icon_table
+  case PlayerWindow.saga_status_mode
+  when "emoji"
+    PW_SAGA_STATUS_ICONS_EMOJI
+  when "unicode"
+    PW_SAGA_STATUS_ICONS_UNICODE
+  else
+    nil
+  end
+end
+
+# Saga-panel-only status text -> symbol substitution, gated by
+# PlayerWindow.saga_status_mode ("text"/"unicode"/"emoji", cycled via
+# *pwstatus). GTK keeps the plain text from PlayerWindow.player_status_fix
+# untouched.
+def PlayerWindow.saga_status_display(status_text)
+  return status_text if status_text.nil? || $frontend != 'saga'
+
+  table = PlayerWindow.saga_status_icon_table
+  return status_text unless table
+
+  display = status_text.dup
+  table.each { |pattern, icon| display.gsub!(pattern, icon) }
+  display
+end
+
+# Builds "name (status)" normally, but drops the parentheses when the Saga
+# panel is about to render status as a unicode/emoji symbol instead of a
+# word.
+def PlayerWindow.saga_wrap_status(name, status)
+  return name.to_s if status.nil?
+  return "#{name} #{status}" if $frontend == 'saga' && PlayerWindow.saga_status_mode != 'text'
+
+  "#{name} (#{status})"
+end
+
+# Returns "<icon> " for a player whose profession is known from a prior
+# *pwparse lookup, or "" otherwise. Saga-only, and gated separately from
+# saga_status_mode since profession icons have no unicode/text alternative.
+# Takes the bare noun, not pc.name -- pc.name can carry an earned title
+# (e.g. "Chaos Lord Kighte"), but the WHO PROFESSION roster (and the noun
+# players are actually addressed by) is just the bare name ("Kighte").
+# If profession_display_filter is set (via "*pwprofession <profs...>"),
+# only those professions get an icon -- everyone else in profession_map
+# is still tracked, just not shown, so switching the filter back doesn't
+# require re-parsing.
+def PlayerWindow.saga_profession_icon(pc_noun)
+  return "" unless $frontend == 'saga' && PlayerWindow.show_profession_icons
+
+  profession = PlayerWindow.profession_map[pc_noun.to_s.downcase]
+  return "" unless profession
+  return "" if PlayerWindow.profession_display_filter && !PlayerWindow.profession_display_filter.include?(profession)
+
+  icon = PW_PROFESSION_ICONS[profession]
+  icon ? "#{icon} " : ""
+end
+
+def PlayerWindow.oak_wand_check
+  wands = {}
+  GameObj.containers.each do |container|
+    obj = GameObj[container[0]]
+    next unless obj&.contents
+
+    wands[container[0]] = obj.contents.select { |item| item.name =~ /oak(?:en)? (?:rod|wand)$/ }
+  end
+  wands.find { |_id, items| items.any? }
+end
+
+# ";e fput('get oak wand'); fput('wave wand at ##{player_id}')"
+# Determine action based on player status.
+def PlayerWindow.action_for_status(status, pc)
+  case status
+  when "stunned"
+    if Spell[108].known?
+      return ";e Spell[108].force_cast('##{pc.id}') if Spell[108].affordable?"
+    elsif (wand_object = PlayerWindow.oak_wand_check)
+      wand_container_id = wand_object[0]
+      wand = wand_object[1].first # Get the first wand in the array
+      if wand # Ensure there's a wand to work with
+        return ";e empty_hand; fput 'get ##{wand.id}'; fput 'wave ##{wand.id} at ##{pc.id}'; fput '_drag ##{wand.id} ##{wand_container_id}'; fill_hand"
+      end
+    end
+  when "sitting", "kneeling", "prone"
+    return "pull ##{pc.id}"
+  when "sleeping", "unconscious"
+    return "poke ##{pc.id}"
+  when "webbed"
+    if Spell[209].known?
+      return ";e Spell[209].force_cast('##{pc.id}') if Spell[209].affordable?"
+    end
+  when nil
+    return "look ##{pc.id}"
+  end
+  "look ##{pc.id}"
+end
+
+# Extracts the noun from the XML-based name format: <a exist="-11226620" noun="Lamamelodia">Lamamelodia</a>
+def PlayerWindow.extract_noun(pc)
+  return pc.noun if pc.respond_to?(:noun) && pc.noun
+  return pc.name # Fallback to name if noun is unavailable
+end
+
+def PlayerWindow.current_group_snapshot
+  group = Lich::Gemstone::Group
+
+  needs_refresh = !group.checked?
+  if !needs_refresh
+    begin
+      needs_refresh = group.broken?
+    rescue StandardError
+      needs_refresh = false
+    end
+  end
+  group.check if needs_refresh
+
+  leader_name =
+    if group.leader?
+      Char.name
+    else
+      group.leader&.noun
+    end
+
+  {
+    leader: leader_name,
+    members: group.members.map(&:noun).compact.sort
+  }
+rescue StandardError => e
+  echo "Playerwindow group snapshot error: #{e.class} - #{e.message}"
+  nil
+end
+
+def PlayerWindow.get_group_display(snapshot = nil)
+  snapshot ||= PlayerWindow.current_group_snapshot
+  return nil unless snapshot
+
+  names = Array(snapshot[:members])
+  leader_name = snapshot[:leader]
+  return nil if names.empty? && leader_name.nil?
+
+  # If there are no other members, you're effectively solo -> nil.
+  return nil if names.empty? && leader_name == Char.name
+
+  # Remove leader from the tail list (it may appear there if you're a follower)
+  display_members = names.reject { |n| n == leader_name }
+
+  # Replace your own name with "YOU" in the tail list
+  display_members.map! { |n| n == Char.name ? "YOU" : n }
+
+  # Add the leader at the front, highlighted
+  if leader_name == Char.name
+    display_members.unshift("*YOU*")
+  elsif leader_name
+    display_members.unshift("*#{leader_name}*")
+    # Group.members generally excludes self, so ensure YOU is represented.
+    display_members << "YOU" unless display_members.include?("YOU")
+  end
+
+  ordered_unique = []
+  seen = {}
+  display_members.each do |name|
+    next if seen[name]
+
+    ordered_unique << name
+    seen[name] = true
+  end
+
+  "Group: #{ordered_unique.join(', ')}"
+end
+
+# Build and push the player list to the window, sorting by noun with dead players on top and arranged in two columns
+def PlayerWindow.push_players_to_window(pcs, group_display = nil)
+  group_display ||= PlayerWindow.group_display
+  group_display = nil unless PlayerWindow.show_group_display
+  sorted_pcs = pcs.sort_by do |pc|
+    status = pc.respond_to?(:status) ? PlayerWindow.player_status_fix(pc.status) : nil
+    is_dead = status == "dead" ? 0 : 1
+    [is_dead, PlayerWindow.extract_noun(pc).downcase]
+  end
+
+  output = "<dialogData id='PlayerWindow' clear='t'>"
+  current_top = 0
+
+  row_height = PlayerWindow::PLAYER_ROW_HEIGHT
+  col_width = PlayerWindow::PLAYER_COLUMN_WIDTH
+  cols = [PlayerWindow.columns, 1].max
+
+  if PlayerWindow.show_filter_buttons
+    # Lay the four filter toggles out cols-per-row. Checkmark/x instead of
+    # "Filter: ON"/"Filter: OFF" text -- same on/off meaning in about half
+    # the width, so all four toggles have a better chance of fitting on
+    # one row instead of wrapping to a 2x2 grid.
+    check = "&#x2713;" # U+2713 check mark
+    xmark = "&#x2717;" # U+2717 ballot x
+    toggles = [
+      ["filter_toggle",      "Spam #{PlayerWindow.filter_spam ? check : xmark}",        "*filterspam",    "Toggling Spam Filter..."],
+      ["flare_toggle",       "Flare #{PlayerWindow.filter_flares ? check : xmark}",      "*filterflares",  "Toggling Flare Filter..."],
+      ["combat_math_toggle", "Combat #{PlayerWindow.filter_combat_math ? check : xmark}", "*filtercombat",  "Toggling Combat Filter..."],
+      ["animal_toggle",      "Animal #{PlayerWindow.filter_animals ? check : xmark}",    "*filteranimals", "Toggling Animal Filter..."],
+    ]
+    toggles.each_with_index do |(id, value, cmd, echo), idx|
+      col  = idx % cols
+      left = col * col_width
+      output += "<link id='#{id}' value='#{value}' cmd='#{cmd}' echo='#{echo}' justify='bottom' left='#{left}' top='#{current_top}' width='#{col_width}' height='#{row_height}' />"
+      current_top += row_height if col == cols - 1 || idx == toggles.size - 1
+    end
+  end
+
+  render_group = lambda do |left, top, width, single_line = false|
+    if single_line
+      output += "<label id='group' value='#{group_display}' justify='bottom' left='#{left}' top='#{top}' width='#{width}' height='#{row_height}' wrap='false'/>"
+      next row_height
+    end
+
+    chars_per_row = [(width / 7), 1].max
+    group_rows = [(group_display.length.to_f / chars_per_row).ceil, 1].max
+    group_height = group_rows * row_height
+    output += "<label id='group' value='#{group_display}' justify='bottom' left='#{left}' top='#{top}' width='#{width}' height='#{group_height}' wrap='true'/>"
+    group_height
+  end
+
+  player_count = sorted_pcs.size + (PlayerWindow.hidden_player_detected ? 1 : 0)
+  total_value = "PCs: #{player_count}#{PlayerWindow.claim_status_text}"
+  render_header = lambda do |left, top, width, single_line = false|
+    if single_line
+      output += "<label id='total' value='#{total_value}' justify='bottom' left='#{left}' top='#{top}' width='#{width}' height='#{row_height}' wrap='false'/>"
+      next row_height
+    end
+
+    total_chars_per_row = [(width / 7), 1].max
+    total_rows = [(total_value.length.to_f / total_chars_per_row).ceil, 1].max
+    total_height = total_rows * row_height
+    output += "<label id='total' value='#{total_value}' justify='bottom' left='#{left}' top='#{top}' width='#{width}' height='#{total_height}' wrap='true'/>"
+    total_height
+  end
+
+  if cols > 1 && group_display && PlayerWindow.show_headers
+    # With 2+ columns, place PCs: first and Group: in the second actual column.
+    header_width = col_width
+    total_height = render_header.call(0, current_top, header_width, true)
+    group_height = render_group.call(header_width, current_top, header_width, true)
+    current_top += [total_height, group_height].max
+  else
+    if group_display
+      group_width = [cols * col_width, PlayerWindow::PLAYER_HEADER_WIDTH].min
+      current_top += render_group.call(0, current_top, group_width)
+    end
+
+    current_top += render_header.call(0, current_top, [cols * col_width, PlayerWindow::PLAYER_HEADER_WIDTH].min) if PlayerWindow.show_headers
+  end
+  # Player rows in a cols-wide grid
+  top_offset = current_top / row_height
+  player_rows = []
+
+  if PlayerWindow.hidden_player_detected
+    player_rows << {
+      label: "Hidden Player",
+      cmd: nil
+    }
+  end
+
+  sorted_pcs.each do |pc|
+    base_noun = PlayerWindow.extract_noun(pc)
+    noun = "#{PlayerWindow.saga_profession_icon(base_noun)}#{base_noun}"
+    status = (pc.respond_to?(:status) && pc.status) ? PlayerWindow.player_status_fix(pc.status) : nil
+    label_value = PlayerWindow.saga_wrap_status(noun, status)
+    player_rows << {
+      label: label_value,
+      cmd: PlayerWindow.action_for_status(status, pc)
+    }
+  end
+
+  player_rows.each_slice(cols).with_index do |group, row|
+    group.each_with_index do |entry, col|
+      left = col * col_width
+      top = row_height * (row + top_offset)
+
+      label = PlayerWindow.saga_status_display(entry[:label])
+      if entry[:cmd]
+        output += "<link id='player_#{row}_#{col}' value='#{label}' cmd=\"#{entry[:cmd]}\" echo=\"#{entry[:cmd]}\" justify='bottom' left='#{left}' top='#{top}' width='#{col_width}' height='#{row_height}' />"
+      else
+        output += "<label id='player_#{row}_#{col}' value='#{label}' justify='bottom' left='#{left}' top='#{top}' width='#{col_width}' height='#{row_height}' />"
+      end
+    end
+  end
+
+  output += "</dialogData>"
+  _respond(output) if Frontend.supports_room_window?
+end
+
+# Set the column count (1-8), persist it, keep single_column in sync, and
+# refresh both the Wrayth panel and the GTK window. Returns the applied count.
+def PlayerWindow.apply_column_setting(n)
+  n = [[n.to_i, 1].max, 8].min
+  PlayerWindow.columns = n
+  PlayerWindow.single_column = (n == 1)
+  PlayerWindow.update_player_setting("columns", n)
+  PlayerWindow.update_player_setting("single_column", n == 1)
+
+  pcs = GameObj.pcs.reject { |pc| pc.name == Char.name }
+  PlayerWindow.push_players_to_window(pcs)
+  PlayerWindowGtk.update_players(pcs, PlayerWindow.group_display) if defined?(PlayerWindowGtk)
+  n
+end
+
+upstream_hook_id = "#{Script.current.name}_upstream"
+downstream_hook_id = "#{Script.current.name}_downstream"
+
+upstream_proc = proc do |command|
+  case command.strip.downcase
+  when /\*filterspam/i
+    PlayerWindow.filter_spam = !PlayerWindow.filter_spam
+    respond "Spam filtering is now #{PlayerWindow.filter_spam ? 'ENABLED' : 'DISABLED'}."
+    PlayerWindow.update_player_setting("filter_spam", PlayerWindow.filter_spam)
+
+    pcs = GameObj.pcs.reject { |pc| pc.name == Char.name }
+    PlayerWindow.push_players_to_window(pcs)
+    nil
+
+  when /\*filteranimal(s)?/i
+    PlayerWindow.filter_animals = !PlayerWindow.filter_animals
+    respond "Animal filtering is now #{PlayerWindow.filter_animals ? 'ENABLED' : 'DISABLED'}."
+    PlayerWindow.update_player_setting("filter_animals", PlayerWindow.filter_animals)
+
+    pcs = GameObj.pcs.reject { |pc| pc.name == Char.name }
+    PlayerWindow.push_players_to_window(pcs)
+    nil
+
+  when /\*(pwflare|filterflare(s)?)/i
+    if PlayerWindow.flare_patterns.empty?
+      respond "Flare filtering unavailable. flare_patterns.rb not loaded."
+      next nil
+    end
+
+    PlayerWindow.filter_flares = !PlayerWindow.filter_flares
+    respond "Flare filtering is now #{PlayerWindow.filter_flares ? 'ENABLED' : 'DISABLED'}."
+    PlayerWindow.update_player_setting("filter_flares", PlayerWindow.filter_flares)
+
+    pcs = GameObj.pcs.reject { |pc| pc.name == Char.name }
+    PlayerWindow.push_players_to_window(pcs)
+    nil
+
+  when /\*(pwcombat|filtercombat)/i
+    PlayerWindow.filter_combat_math = !PlayerWindow.filter_combat_math
+    respond "Combat filtering is now #{PlayerWindow.filter_combat_math ? 'ENABLED' : 'DISABLED'}."
+    PlayerWindow.update_player_setting("filter_combat_math", PlayerWindow.filter_combat_math)
+
+    pcs = GameObj.pcs.reject { |pc| pc.name == Char.name }
+    PlayerWindow.push_players_to_window(pcs)
+    nil
+
+  when /\*pwcol3\b/i
+    n = PlayerWindow.apply_column_setting(3)
+    respond "Column Layout: #{n} columns"
+    nil
+
+  when /\*pwcol4\b/i
+    n = PlayerWindow.apply_column_setting(4)
+    respond "Column Layout: #{n} columns"
+    nil
+
+  when /\*pwcol5\b/i
+    n = PlayerWindow.apply_column_setting(5)
+    respond "Column Layout: #{n} columns"
+    nil
+
+  when /\*pwcol6\b/i
+    n = PlayerWindow.apply_column_setting(6)
+    respond "Column Layout: #{n} columns"
+    nil
+
+  when /\*pwcol7\b/i
+    n = PlayerWindow.apply_column_setting(7)
+    respond "Column Layout: #{n} columns"
+    nil
+
+  when /\*pwcol8\b/i
+    n = PlayerWindow.apply_column_setting(8)
+    respond "Column Layout: #{n} columns"
+    nil
+
+  when /\*pwcol\b/i
+    # Classic single/double toggle (drops back to 1/2 even from 3/4).
+    n = PlayerWindow.apply_column_setting(PlayerWindow.columns == 2 ? 1 : 2)
+    respond "Column Layout: #{n == 1 ? 'Single' : 'Double'} (#{n} column#{n == 1 ? '' : 's'})"
+    nil
+
+  when /\*pwstatus/i
+    modes = PlayerWindow::SAGA_STATUS_MODES
+    next_mode = modes[(modes.index(PlayerWindow.saga_status_mode).to_i + 1) % modes.size]
+    PlayerWindow.saga_status_mode = next_mode
+    PlayerWindow.update_player_setting("saga_status_mode", next_mode)
+
+    label = {
+      "text"    => "TEXT (plain status words)",
+      "unicode" => "UNICODE (\u{262E} \u{2744} \u{2327} \u{1DBB}\u{1DBB}\u{1DBB} \u{203B} \u{2739} \u{21D3})",
+      "emoji"   => "EMOJI (\u{1F60C} \u{2744}\u{FE0F} \u{26D3}\u{FE0F} \u{1F4A4} \u{1F578}\u{FE0F} \u{26A1} \u{1F6CC} \u{1FA91} \u{1F9CE} \u{1FAA6})"
+    }[next_mode]
+    respond "Playerwindow Saga status display: #{label}"
+
+    pcs = GameObj.pcs.reject { |pc| pc.name == Char.name }
+    PlayerWindow.push_players_to_window(pcs)
+    nil
+
+  when /\*pwprofession(?:\s+(.+))?/i
+    args = $1.to_s.strip
+
+    if args.empty?
+      # Bare toggle -- unchanged from before, doesn't touch the filter.
+      PlayerWindow.show_profession_icons = !PlayerWindow.show_profession_icons
+      PlayerWindow.update_player_setting("show_profession_icons", PlayerWindow.show_profession_icons)
+      filter_note = PlayerWindow.profession_display_filter ? " (currently filtered to: #{PlayerWindow.profession_display_filter.join(', ')})" : ""
+      respond "Playerwindow profession icons are now #{PlayerWindow.show_profession_icons ? 'ENABLED' : 'DISABLED'}#{filter_note}#{PlayerWindow.show_profession_icons && PlayerWindow.profession_map.empty? ? ' (use *pwparse <profession> to populate the roster, e.g. *pwparse warrior)' : ''}."
+    elsif args.casecmp?('all')
+      # Clears the filter -- every parsed profession shows its icon again.
+      PlayerWindow.profession_display_filter = nil
+      PlayerWindow.update_player_setting("profession_display_filter", nil)
+      PlayerWindow.show_profession_icons = true
+      PlayerWindow.update_player_setting("show_profession_icons", true)
+      respond "Playerwindow: profession icon filter cleared -- showing all parsed professions."
+    else
+      requested = args.split(/\s+/)
+      invalid = requested.reject { |r| PlayerWindow::PROFESSION_NAMES.any? { |p| p.casecmp?(r) } }
+      if !invalid.empty?
+        respond "Playerwindow: invalid profession(s): #{invalid.join(', ')}. Choose from #{PlayerWindow::PROFESSION_NAMES.join(', ')}, or 'all'."
+      else
+        filter = requested.map { |r| PlayerWindow::PROFESSION_NAMES.find { |p| p.casecmp?(r) } }.uniq
+        PlayerWindow.profession_display_filter = filter
+        PlayerWindow.update_player_setting("profession_display_filter", filter)
+        PlayerWindow.show_profession_icons = true
+        PlayerWindow.update_player_setting("show_profession_icons", true)
+        respond "Playerwindow: now only displaying icons for #{filter.join(', ')} (still tracking everyone parsed -- switch back with *pwprofession all)."
+      end
+    end
+
+    pcs = GameObj.pcs.reject { |pc| pc.name == Char.name }
+    if PlayerWindow.show_profession_icons && !pcs.empty?
+      matches = pcs.select { |pc| PlayerWindow.profession_map[PlayerWindow.extract_noun(pc).downcase] }
+      if matches.empty?
+        respond "Playerwindow: none of the #{pcs.size} player(s) currently visible are on record yet."
+      else
+        respond "Playerwindow: #{matches.size} of #{pcs.size} visible player(s) matched: #{matches.map { |pc| noun = PlayerWindow.extract_noun(pc); "#{noun} (#{PlayerWindow.profession_map[noun.downcase]})" }.join(', ')}"
+      end
+    end
+    PlayerWindow.push_players_to_window(pcs)
+    nil
+
+  when /\*pwparse\s*(\S+)?/i
+    requested = $1.to_s.strip
+    if requested.empty?
+      respond "Usage: *pwparse <profession>|all -- profession is one of #{PlayerWindow::PROFESSION_NAMES.join(', ')}"
+    elsif requested.casecmp?('all')
+      PlayerWindow.pending_parse_queue.concat(PlayerWindow::PROFESSION_NAMES - PlayerWindow.pending_parse_queue)
+      respond "Playerwindow: queued all #{PlayerWindow::PROFESSION_NAMES.size} professions for lookup, in order (#{PlayerWindow::PROFESSION_NAMES.join(', ')})."
+    elsif !PlayerWindow::PROFESSION_NAMES.any? { |p| p.casecmp?(requested) }
+      respond "Playerwindow: '#{requested}' isn't a valid profession. Choose one of #{PlayerWindow::PROFESSION_NAMES.join(', ')}, or 'all'."
+    else
+      profession = PlayerWindow::PROFESSION_NAMES.find { |p| p.casecmp?(requested) }
+      unless PlayerWindow.pending_parse_queue.include?(profession)
+        PlayerWindow.pending_parse_queue << profession
+      end
+      respond "Playerwindow: looking up the #{profession} roster..."
+    end
+    nil
+
+  when /\*pwmove/i
+    PlayerWindow.show_movement = !PlayerWindow.show_movement
+    respond "Player movement filtering: #{PlayerWindow.show_movement ? 'ON' : 'OFF'}"
+    PlayerWindow.update_player_setting("show_movement", PlayerWindow.show_movement)
+
+    pcs = GameObj.pcs.reject { |pc| pc.name == Char.name }
+    PlayerWindow.push_players_to_window(pcs)
+    nil
+
+  when /\*pwbuttons/i
+    PlayerWindow.show_filter_buttons = !PlayerWindow.show_filter_buttons
+    respond "Playerwindow filter buttons: #{PlayerWindow.show_filter_buttons ? 'SHOWN' : 'HIDDEN'}"
+    PlayerWindow.update_player_setting("show_filter_buttons", PlayerWindow.show_filter_buttons)
+
+    pcs = GameObj.pcs.reject { |pc| pc.name == Char.name }
+    PlayerWindow.push_players_to_window(pcs)
+    nil
+
+  when /\*pwclaim/i
+    PlayerWindow.show_claim_status = !PlayerWindow.show_claim_status
+    respond "Playerwindow claim status: #{PlayerWindow.show_claim_status ? 'SHOWN' : 'HIDDEN'}"
+    PlayerWindow.update_player_setting("show_claim_status", PlayerWindow.show_claim_status)
+
+    pcs = GameObj.pcs.reject { |pc| pc.name == Char.name }
+    PlayerWindow.push_players_to_window(pcs)
+    if PlayerWindow.gtk_enabled?
+      PlayerWindowGtk.update_players(pcs, PlayerWindow.group_display)
+    end
+    nil
+
+  when /\*pwgtk/i
+    PlayerWindow.use_gtk_playerwindow = !PlayerWindow.use_gtk_playerwindow
+    respond "GTK Playerwindow is now #{PlayerWindow.use_gtk_playerwindow ? 'ENABLED' : 'DISABLED'}."
+
+    # persist the new setting
+    settings = PlayerWindow.load_window_settings
+    settings["playerwindow"] ||= {}
+    settings["playerwindow"]["use_gtk_playerwindow"] = PlayerWindow.use_gtk_playerwindow
+    PlayerWindow.save_window_settings(settings)
+
+    if PlayerWindow.use_gtk_playerwindow
+      if PlayerWindow.gtk_available
+        Gtk.queue { PlayerWindowGtk.create_main_window }
+        Thread.new { PlayerWindow.start_gtk_main_if_needed }
+      else
+        PlayerWindow.use_gtk_playerwindow = false
+        settings["playerwindow"]["use_gtk_playerwindow"] = false
+        PlayerWindow.save_window_settings(settings)
+        respond "GTK unavailable. Install gtk3 gem to enable GTK Playerwindow."
+      end
+    else
+      # close it if it exists
+      if PlayerWindow.gtk_available && defined?(PlayerWindowGtk) && PlayerWindowGtk.instance_variable_get(:@window)
+        Gtk.queue do
+          PlayerWindowGtk.instance_variable_get(:@window).close
+        end
+      end
+    end
+
+    nil
+
+  when /\*pwgroup\b/i
+    PlayerWindow.show_group_display = !PlayerWindow.show_group_display
+    PlayerWindow.update_player_setting("show_group_display", PlayerWindow.show_group_display)
+    respond "Playerwindow group display: #{PlayerWindow.show_group_display ? 'SHOWN' : 'HIDDEN'}"
+
+    pcs = GameObj.pcs.reject { |pc| pc.name == Char.name }
+    PlayerWindow.push_players_to_window(pcs)
+    PlayerWindowGtk.update_players(pcs, PlayerWindow.group_display) if defined?(PlayerWindowGtk)
+    nil
+
+  when /\*pwheaders\b/i
+    PlayerWindow.show_headers = !PlayerWindow.show_headers
+    PlayerWindow.update_player_setting("show_headers", PlayerWindow.show_headers)
+    respond "Playerwindow PCs/Players header: #{PlayerWindow.show_headers ? 'SHOWN' : 'HIDDEN'}"
+
+    pcs = GameObj.pcs.reject { |pc| pc.name == Char.name }
+    PlayerWindow.push_players_to_window(pcs)
+    PlayerWindowGtk.update_players(pcs, PlayerWindow.group_display) if defined?(PlayerWindowGtk)
+    nil
+
+  when /\*pwdebug/i
+    PlayerWindow.debug_filter_enabled = !PlayerWindow.debug_filter_enabled
+    respond "Playerwindow filter debug is now #{PlayerWindow.debug_filter_enabled ? 'ON' : 'OFF'}."
+    nil
+
+  else
+    command
+  end
+end
+
+def PlayerWindow.debug_filter(reason, line)
+  echo "*** FILTERED by #{reason}: #{line.inspect}" if PlayerWindow.debug_filter_enabled
+end
+
+@pw_skip_next_line = false
+@pw_combat_block_active = false
+
+downstream_proc = proc { |line, _server_string|
+  line = line.to_s # Ensure line is always a String.
+  plain_line = PlayerWindow.plain_text(line)
+
+  if PlayerWindow.prompt_line?(line)
+    @pw_combat_block_active = false
+    next line
+  end
+
+  # Combat message filtering -- recognized via lich-5's own Gemstone combat
+  # definitions (PlayerWindow::CombatClassifier, built the same way
+  # combatstream.lic builds its own), not the hand-rolled "You swing/
+  # slash/..." + AS:/CS:/SSR/SMR regex this used before. An attack (self
+  # or otherwise), a damage line, or an AS/DS/CS/TD resolution roll stays
+  # visible and opens a block; everything else the classifier recognizes
+  # as combat -- and any unclassified flavor text in between -- is
+  # dropped until the next damage/death line or prompt. Unlike
+  # combatstream.lic, nothing here gets moved to another window: this
+  # filter only omits.
+  if PlayerWindow.filter_combat_math
+    family, _result = PlayerWindow::CombatClassifier.classify(PlayerWindow.combat_families, line)
+
+    if family == :attack || family == :damage || family == :resolution
+      @pw_combat_block_active = true
+      next line
+    end
+
+    if @pw_combat_block_active
+      if PlayerWindow.combat_death_line?(line)
+        if PlayerWindow.filter_spam
+          death_noun = PlayerWindow.extract_noun_from_line(line)
+          if death_noun && death_noun.downcase != Char.name.downcase
+            respond "#{death_noun} dies {?}".upcase.center(45)
+            next nil
+          end
+        end
+
+        next line
+      end
+
+      PlayerWindow.debug_filter("COMBAT BLOCK (...)", line)
+      next nil
+    end
+
+    if family
+      PlayerWindow.debug_filter("COMBAT (#{family})", line)
+      next nil
+    end
+  end
+
+  # Always pass through prompt/nav/timing XML early so packet-level filters
+  # cannot accidentally suppress core client update signals.
+  if line =~ /<prompt time=["']\d+["']>.*?<\/prompt>/i ||
+     line =~ /<roundTime value=["']\d+["']\/>/i ||
+     line =~ /<castTime value=["']\d+["']\/>/i ||
+     line =~ %r{^(<nav rm=["']|<d cmd=["']go )}i
+    if line =~ %r{^(<nav rm=["']|<d cmd=["']go )}i
+      @pw_recent_self_movement = true
+      @pw_pending_joins&.clear
+      @pw_pending_leavers&.clear
+      @pw_skip_next_line_after_player_component = false
+      PlayerWindow.set_hidden_player_detected(false)
+    end
+    next line
+  end
+
+  # Early suppression so XML dialog pass-through rules do not leak this line.
+  if PlayerWindow.filter_spam && plain_line =~ /You feel more refreshed\./i
+    PlayerWindow.debug_filter("CERTAIN YOU LINE (...)", line)
+    next nil
+  end
+
+  # Daenamaryllis-only custom line filters (static rules, no timing windows).
+  if PlayerWindow.filter_spam && Char.name.to_s.casecmp("Daenamaryllis").zero?
+    if plain_line =~ /Activating a .*?(?:black panther pin|flyrsilk flower|silk flower)\s*\./i ||
+       plain_line =~ /Blood red mist erupts from your silver\-runed belt and engulfs you\!/i ||
+       plain_line =~ /\s*\d+d\d+:\s*\d+\s*\+\s*Modifiers:\s*\d+\s*==\s*\d+/i ||
+       plain_line =~ /The spell misfires!/i ||
+       plain_line =~ /Cast Roundtime \d+ Seconds\./i ||
+       plain_line =~ /The (?:black panther pin|flyrsilk flower|silk flower) only has \d+ charge(?:s)? remaining\./i ||
+       plain_line =~ /The flaming aura enshrouding you interferes with the magic\./i ||
+       plain_line =~ /\ARoundtime: \d+ sec(?:ond)?s?\.\z/i ||
+       plain_line =~ /\ARoundtime changed to \d+ second(?:s)?\.\z/i ||
+       plain_line =~ /\[Spell Hindrance for a suit of/i ||
+       plain_line =~ /The fingers of the lunatic hand briefly open to take your remaining silver and close with almost a life of their own/i ||
+       plain_line =~ /your silvery fossil charm, which takes off in search of silvers.  They locate/i ||
+       plain_line =~ /\A(?:\.\.\.)?wait 1 sec(?:ond)?s?\.\z/i ||
+       plain_line =~ /I could not find what you were referring to\./i ||
+       plain_line =~ /Your spell falters\, then steadies as the magic finds another path\./i
+      next nil
+    end
+  end
+
+  if PlayerWindow.filter_animals && line =~ /noun="([^"]+)"/i
+    nouns = line.scan(/noun="([^"]+)"/i).flatten.map(&:downcase)
+
+    if line =~ /^<pushBold\/>(Weapons|Armor|Containers|Wands|Magic Items|Scrolls|Clothing|Special) \[/
+      next line
+    end
+
+    # Allow structured room data through unconditionally
+    if line =~ /<(component|compDef) id='(room name|room desc|room objs)'/i
+      next line
+    end
+
+    # Allow talking animals
+    if line =~ /\b(says|asks|exclaims|shouts|mutters|growls|meows|snarls|purrs|sings|chants),\s*[""''']/
+      next line
+    end
+
+    # Allow room descriptions that include "You also see"
+    if line =~ /You also see .*<a .*?noun="([^"]+)"/
+      next line
+    end
+
+    if line =~ /Uncapping the base of your .*? you easily pluck/
+      next line
+    end
+
+    # Block everything else if a blocked animal noun is present
+    if (nouns & PlayerWindow::BLOCKED_NOUNS).any?
+      PlayerWindow.debug_filter("ANIMAL (...)", line)
+      next nil
+    end
+
+    # Animates
+    if PlayerWindow.filter_animals && line =~ /<a .*?>([^<]*animated[^<]*)<\/a>/i
+      PlayerWindow.debug_filter("ANIMAL (...)", line)
+      next nil
+    end
+  end
+
+  if PlayerWindow.filter_flares && !PlayerWindow.flare_patterns.empty?
+    if PlayerWindow.flare_patterns.any? { |pattern| line =~ pattern }
+      PlayerWindow.debug_filter("FLARE (...)", line)
+      next nil
+    end
+  end
+
+  # Always keep damage lines, even when mixed into larger raw XML packets.
+  # (Independent of the filter_combat_math toggle above -- this unconditional
+  # rule predates it and is a baseline safety net for any filter state.)
+  if PlayerWindow.combat_damage_line?(line)
+    next line
+  end
+
+  # Suppress whitespace-only lines only while any filter is enabled.
+  any_filter_enabled = (
+    PlayerWindow.filter_spam ||
+    PlayerWindow.filter_animals ||
+    PlayerWindow.filter_flares ||
+    PlayerWindow.filter_combat_math
+  )
+  if any_filter_enabled && line.strip.empty?
+    next nil
+  end
+
+  if PlayerWindow.room_text_state_line?(line)
+    PlayerWindow.set_hidden_player_detected(PlayerWindow.hidden_player_line?(line))
+  end
+
+  next line unless PlayerWindow.filter_spam
+
+  # Condensed death messaging (separate from decay filters below).
+  # Keep this early so broad pattern filters do not swallow death lines first.
+  if PlayerWindow.combat_death_line?(line)
+    death_noun = PlayerWindow.extract_noun_from_line(line)
+    if death_noun && death_noun.downcase != Char.name.downcase
+      respond "#{death_noun} dies {?}".upcase.center(45)
+      next nil
+    end
+  end
+
+  # Filter spell-expiration lines from enemies/other players using built-in spell end messages.
+  if PlayerWindow.spell_falloff_line?(line)
+    PlayerWindow.debug_filter("SPELL FALLOFF (...)", line)
+    next nil
+  end
+
+  # Looting - No Silver
+  if line =~ /(?:<[^>]+>)*\s*(?:He|She|It)(?:<[^>]+>)*\s+didn't carry any silver\./i
+    PlayerWindow.debug_filter("No Silver (loot)", line)
+    next nil
+  end
+
+  # Looting - Nothing of Interest / Value
+  if line =~ /(?:<[^>]+>)*\s*(?:He|She|It)(?:<[^>]+>)*\s+had nothing (?:of interest|else of value)\./i
+    PlayerWindow.debug_filter("Nothing of Interest (loot)", line)
+    next nil
+  end
+
+  # Looting - Decay Message (raw XML-safe, snippet style)
+  if line =~ /goes still in death|immense form decays away into a mound of|crumbles and decays away\.|sublimates rapidly into luminous mist that swiftly disperses into the air|seep into the ground and vanish|collapsing into a lightless sphere that erupts soundlessly\, bathing the area in momentary darkness|falls away to reveal only crumbling bones|quickly decays away|flesh crumbles to reveal the corpse of|Traceries of mold race to reclaim|Rivulets of golden light blush beneath the skin of|Shadows coil around the broken form of|body rots away\, leaving only a small stain on the ground|decays away, leaving behind little more than dust|finally stops twitching and decays away|body\, leaving little behind\.|corpse succumbs to rot|^Creeping decay races across|collapses into a pile of tangled wool and huge bones|remnants rapidly dissolving into the air\.|dissolve away\, leaving nothing behind\.|decays into compost\.|quickly scattering and dissolving out of sight\.|body crumbles until only a pile of rubble marks|then fades from view like a dissipating phantom|decays into a pile|bony form as fingers of rust race to consume|collapses into blanched powder and blows away\.|dance before drifting away\.|leaving little but brittle bones\.|breaking into fine black powder\.|yellowing bones and stinking effluvia\.|the remaining folds of skin\.|into shards of inert ice\.|ruined meat and patchy bristles\.|and soon nothing more than a grim| pile of reddish\-black grit\.|surrenders to decay\.|erupts into a cloud of dust\!|fades into nothingness\,|body crumbles|then fades from view like a dissipating phantom\.|decays into a pile|\, leaving nothing behind\.|leaves no corpse behind\.|body is engulfed by shimmers of luminous color|^Colors race over the still form of|exoskeleton cracks and dries\, collapsing in upon itself in places|naught but glittering black dust left to mark|sags inward\, the caustic fluids within (?:<[^>]*>)*(?:him|her|it)(?:<[^>]*>)* eating away at flesh and bone until only a grisly smudge remains|vast abdomen deflates\, oozing fluids as (?:<[^>]*>)*the (?:<[^>]*>)*ravager(?:<[^>]*>)* succumbs to rapid decay|the corpse of .+? is no longer where it was lying/i
+    PlayerWindow.debug_filter("Decay Message (loot)", line)
+    next nil
+  end
+
+  # Always allow core XML state signals through
+  if line =~ /<indicator /
+    next line
+  end
+
+  # always let the room-exits component through
+  if line =~ /^<compDef id='room exits'>/i
+    next line
+  end
+
+  if line =~ /^<spell exist/i
+    next line
+  end
+
+  # always let the compass XML through
+  if line =~ /^<compass>/i
+    next line
+  end
+
+  if line =~ /^<pushBold\/>(Weapons|Armor|Containers|Wands|Magic Items|Scrolls|Clothing|Special) \[/
+    next line
+  end
+
+  if line =~ /^<right\b/i
+    next line
+  end
+
+  if line =~ /^<left\b/i
+    next line
+  end
+
+  if line =~ /^<dialogData id='combat'/i
+    next line
+  end
+
+  if line =~ /^<dialogData id='minivitals'/i
+    next line
+  end
+
+  if line =~ /^<dialogData id='injuries'/i
+    next line
+  end
+
+  if line =~ /^<dialogData id='stance'/i
+    next line
+  end
+
+  if line =~ /^<dialogData id='Buffs'/i
+    next line
+  end
+
+  if line =~ /^<dialogData id='encum'/i
+    next line
+  end
+
+  if line =~ /<style id="roomName"/i
+    next line
+  end
+
+  if line =~ /<style id="roomDesc"/i
+    next line
+  end
+
+  if line =~ /^Also here:/i
+    next line
+  end
+
+  if line =~ /<style id=".*?"\/>\s*You also see/i
+    next line
+  end
+
+  if line =~ /^Obvious (paths|players):/i
+    next line
+  end
+
+  if line =~ /<roundTime value=["']\d+["']\/>/
+    next line
+  end
+
+  if line =~ /<castTime value=["']\d+["']\/>/
+    next line
+  end
+
+  if line =~ /<prompt time=["']\d+["']>(.*?)<\/prompt>/
+    next line
+  end
+
+  # Was hardcoded to double quotes (<preset id="speech">), which never
+  # matches the game's actual single-quoted XML (<preset id='speech'>,
+  # confirmed via a live raw-XML capture) -- this guard has silently never
+  # fired. Fixed to accept either quote style, and broadened to
+  # whisper/thought too (same "always let conversation through" intent as
+  # combatstream.lic's own CONVERSATION guard).
+  if line =~ /<preset id=["'](?:speech|whisper|thought)["']>/i
+    next line
+  end
+
+  if line =~ /Speaking in .*? says something you don't understand\.|Borne on threads of spun magic and will, you cast forth your summons/
+    next line
+  end
+
+  if line =~ %r{^(<nav rm=["']|<d cmd=["']go )}
+    @pw_skip_next_line_after_player_component = false
+    next line
+  end
+
+  # Skip certain You lines
+  if line =~ /You are blinded momentarily by a flash of intense light\.|You notice .*? moving stealthily|You hear someone reciting a series of mystical phrases|You hear someone calling upon the powers of the elements|You hear someone chanting an arcane phrase|You feel more refreshed|You hear a distant song that lifts your spirits and touches memories of revelry long past|As your sight returns\, you realize|You see a blur out of the corner of your eye\, and .*? suddenly appears\.|You hear very soft footsteps\.|You hear someone deeply intoning a sonorous mantra|You see a golden ripple of light out of the corner of your eye that is reminiscent of a forge|You notice quicksilver seeping up from a nearby crack in the ground\,|You hear someone preparing a spell nearby|^You hear a slight crackling sound as .* slides .* into .*\.|Rising on the air\, the sound of horses\' clip\-clopping hooves greets your ears\, and within seconds you|^A veritable horde of butterflies descends on the area from every direction\,|^Pale\, swirling mist begins to billow out from nothingness before you\, and quickly coalesces into a small orb of shifting essence\.|^A large iridescent bubble floats into view and drifts down to the ground\,|^A greenish pulsing glow builds around|^A whirling bluish\-gray mist quickly coalesces nearby|^Shattered pieces of porcelain arrive on an errant breeze and begin to assemble themselves before your very eyes|^You feel .* protection extend to you as an incandescent veil coalesces around you|^You discard the .*? useless equipment\.|^You twinge slightly as your Empathic Link to|^You feel the unnatural surge of necrotic power wane away|^You are now in an offensive stance|^You currently have no valid target|You feel more refreshed|You hear a sound like a child weeping as a white glow separates itself from/i
+    PlayerWindow.debug_filter("CERTAIN YOU LINE (...)", line)
+    next nil
+  end
+
+  if line =~ /^You|You prepare to cast/
+    next line
+  end
+
+  if line =~ /^Your/
+    next line
+  end
+
+  if line =~ /\byou\b/i && line =~ /\byour\b/i
+    next line
+  end
+
+  # SECOND LINE OF SPELL CAST
+  if @pw_skip_next_line
+    @pw_skip_next_line = false
+    PlayerWindow.debug_filter("SKIPPING SECOND LINE OF SPELL CAST (...)", line)
+    next nil
+  end
+
+  # Gesture & Sing
+  if line =~ /gestures at you\./
+    @pw_skip_next_line = false
+  elsif line =~ /<a [^>]+>[^<]+<\/a> gestures at <a [^>]+>[^<]+<\/a>\./i ||
+        line =~ /<a [^>]+>[^<]+<\/a> gestures at a/i ||
+        line =~ /<a [^>]+>[^<]+<\/a> makes a complex gesture at <a [^>]+>[^<]+<\/a>\./i ||
+        line =~ /gestures\.|makes a complex gesture\.|continues to wax\.|skillfully begins to weave another verse into|sings a melody\.|gestures into the air\./
+    PlayerWindow.debug_filter("GESTURE (...)", line)
+    @pw_skip_next_line = true
+    next nil
+  end
+
+  # STANDARD SPELL PREP
+  if line =~ /\.\.\.\s*$/ && line !~ /^You\b/ && line !~ /^Your\b/ && line !~ /#{Regexp.escape(Char.name)}/
+    PlayerWindow.debug_filter("STANDARD SPELL PREP (...)", line)
+    next nil
+  end
+
+  # CUSTOM SPELL PREP
+  if line =~ /rips the ethereal image asunder\, the motes coalescing at the tips of|rests a hand on .* chest\, eyes closed\, as a faint hum slowly builds in the air nearby\.|begins to make sinuous gestures with both hands\.|^Weaving .* hands in a complicated pattern\,|.* murmurs words of power into the air, summoning the elements to do .* bidding\.|.* intones a mystical orison, petitioning for the aid of .* patron\.|.* murmurs soft words into the air, the liquid syllables summoning the spirits to .* aid\.|.* traces a burning rune into the air, melding the spiritual and elemental powers by sheer force of will\.|.* whispers quietly into the wind, summoning the forces of nature to .* call\.|.* raises .* voice in rhythmic song, commanding the aid of the elements\.|.* lifts .* voice in a rallying cry, calling confidently on the power of .* patron for aid\.|.* weaves .* hands through the air, streamers of elemental mana twisting between .* fingers\.|.* raises .* clasped hands, fervently calling on the guidance of .* patron\.|.* outlines a luminous rune in the air, summoning the spirits to .* aid\.|.* scribes a hazy, dark sigil into the air, fusing elemental and spiritual power\.|.* casts .* voice into the air, causing the spirits to swirl around (?:him|her|them) with a sound like rustling leaves\.|.* lifts .* voice in song, skillfully twining elemental mana into .* harmony\.|.* traces .* patron's holy symbol in the air, using it to focus .* invocation\.|.* quickly intones a battle chant, imploring .* patron to lend (?:him|her|them) aid\.|.* melds a climactic chord into .* melody, .* voice rising in a crescendo\.|.* murmurs a twisting phrase, commanding both the elements and spirits together\.|.* invokes a short blessing, .* hands clasped in prayer\.|.* chants a short phrase, embers leaping from .* fingertips, as .* clenches .* hand into a smoke-shrouded fist\.|.* intones a mystical phrase, .* words flowing in a burst of speed, as .* hands move rapidly\.|.* chants a reverent prayer, imploring .* patron for aid in restoring the fallen to life\.|.* whispers a mystical phrase, as a nebulous haze shimmers into view around .* hands, casting them in murky shadows\.|.* whispers a mystical phrase, as pearlescent energy builds around .* hands, casting them in an opalescent silhouette\.|.* utters a sharp phrase, tiny thorns rippling across .* arms in a wave that moves toward .* hands\.|.* tucks .* hand behind .* back for a moment before moving it back to .* side\.|.* shower of sparks cascade from .* hands as .* intones a few words\.|.* gallimaufry of sounds pours from .* mouth as .* stumbles over some words\.|.* utters a plaintive plea to .*\.|.* lips move soundlessly\.|.* whispers a short prayer to .* followed by a soft incantation\.|.* fingertips momentarily glow a deep sanguine red as .* murmurs a few words\.|Looking bored, .* drones out a few words in a monotone\.|.* steeples .* fingers together and touches .* forehead to .* thumbs as .* prepares a spell\.|.* makes small, intricately twisting movements with .* hands at .* chest before projecting them outward abruptly\.|Inky shadows and twinkling lights commix around .* in a hypnotic eddy\.|.* rasps out a few words as tendrils of white smoke slither from .* mouth\.|Seven phantom tentacles sprout from the base of .* spine, wrapping .* in a binding embrace\.|.* gestures and quietly utters a phrase of magic\.|.* whispers something softly, and a whirlwind of flower petals envelops (?:him|her|them) before fading away into nothingness\.|Crystalline snowflakes drift softly down upon .* as .* says a few words\.|The scent of mournblooms fills the air as .* speaks a few words\.|A loud ticking sound emanates from .* as .* murmurs a short phrase\.|.* invokes the fury of a storm as .* prepares a spell\.|Anguished whispers amplify into a cacophony of sound that nearly drowns out .* attempts to prepare a spell\.|.* sketches a tart symbol and mutters an invocation to an unintelligible arkati followed by cheerful recitation\.|As .* slowly chants, swirls of tea-scented steam twist about .* before fading to nothingness\.|hands over the ground\, and a sudden chill fills the air as shadows rise to|chants in an arcane language which causes|face suddenly darkens as a ghostly death mask pinches|calling the forces of nature to aid|A swarm of ethereal crimson butterflies circle around|Polychromatic tentacles wrap about .* as .* chants a magical phrase\.|wrists and condenses into thrice\-wrapped coils as|face twisted with pain as if .* very bones are aflame|upturned palms and drift upwards as they build in intensity|traces a series of glowing runes along|whispers a quiet invocation\.|intones a sonorous mantra and shifts|Reciting the mystical phrases of|skin is suffused with a subtle gold glow as|pulses with a white-blue light\!|murmurs a brief incantation with a casual gesture\.|A soft\, white glow briefly surrounds|A strange cracking noise cuts across|hums an ancient hymnal that causes the shadows to strectch towards|intones a soft prayer and the patterns, which now dance like eels beneath waves|Calling out to the powers of chaos and life|Mystical phrases fill the air|whispers and a strawberry-hued wisp is summoned, flitting around|sending the cat back down its awkward perch as it accepts its bounty|murmurs a prayer to the spirits of the|eyes to the heavens as the fading image of Liabo appears behind|quickly growing in size as numerous sinuous misty tentacles reach out from within their untold depths|Someone begins singing|As someone sings|Someone unseen begins singing|eyes in concentration\, the runes on|murmurs a prayer to the dead that is an entreaty for aid|renews .* songs|stops singing\.|shaped vortex of air moves|releases upon .* a flurry of abjurations|Suddenly, a small bolt of energy arcs between them|eyes, looking slightly drained\.|strains, but nothing happens\.|The powerful look leaves|The light blue glow leaves|The very powerful look leaves|The white light leaves|The deep blue glow leaves|an eerie white glow blurring the outline of the bones beneath|Grating out an incomprehensible phrase|asking to be empassioned and have his desires fulfilled\.|fingers weave gossamer threads of energy into a weblike sigil\.|quickly intones a battle chant\, imploring|beseeches a reverent phrase while manifesting the elements\.|beseeches a reverent phrase while manifesting the elements\.|eyes flare and then emanate an amalgamation of elemental energy|With a sudden burst of enthusiasm, the sparks jump into .*? seems to glow with power\.|A vibrant stream of rainbow colors burst forth\, streaming alongside .*? motions before dispersing into an imperceptible mist\.|languidly traces a rune in the air\.|patron as sunlit gold radiance begins to take form\, swirling violently around|removes one of the chords from .*? harmony while maintaining the symmetry of those that remain\.|fingers\.\.\. but little else happens\.|gestures discreetly while murmuring a quiet incantation|stirring fingers through the ephemeral wings on|plucks two illusory strands out of the air and knots them together\.|gestures and utters a phrase of magic\.|prepares to sing\.|skillfully begins to weave another verse into|sings\, a squall of wind briefly swirls about|gestures while calling upon the lesser spirits for aid|A caliginous power manifests around|completes several complex gestures while an incantation tumbles from|intonation carrying a somber but determined quality\.|hums an ancient hymnal that causes the shadows to stretch towards|A salty sea breeze stirs as .* chants an old sailor's ditty|invokes the spirits of the harvest|sings a melody\, directing the sound of|hums a nearly inaudible tune\.|hand through the air\, cutting invisible runes\.|skillfully weaves another verse into|hisses a magical phrase at an incomprehensibly rapid pace\.|^Flickers of verdant green light emanate from|whispers arcane incantations\, and the air about|eyes glow crimson as a swarm of ethereal crimson\-eyed scarabs envelop|invokes the virtues of the stars, swirls of constellations appearing momentarily beneath|^The branches of .* sprout fresh green leaves in harmony with .* magical incantations\.|^The folds of .* float for a moment\, drifting in the currents of a phantom wind as .* calls the spirits to his aid\.|^As .* begins .* incantations\, the .* encircling .* begin to brighten as the fire lashes out\, engulfing|head\, reciting a quiet prayer of reverence as divine energy radiates from|^A vereri mirage briefly materializes to embrace|ripples with multihued elemental mana\, slowly unfurling into wispy tendrils of colorful light|liltingly begins to sing a sea chanty|you hear a number of ingredients being listed with a count of outstretched fingers|Wisps of .* light begin to swirl around|the drifting grains briefly sketching runes in the air\.|whispers something softly\, and a whirlwind of flower petals envelops|hands like effervescent cyclones before abruptly popping in unison\.|releases an audible breath of air\, something between a gasp and a sigh\.|^Rivulets of glowing mana trickle from|knuckles\, causing an ethereal coin of mana to appear\./i
+    PlayerWindow.debug_filter("CUSTOM SPELL PREP (...)", line)
+    next nil
+  end
+
+  # Effects or Spells Beginning
+  if line =~ /is surrounded by a white light\.|energy flicker restlessly about|A shimmering aura surrounds|form seems to momentarily waver and blend with the shadows\.|form shifts back from the shadows\.|With a crackling and splintering sound\, a latticework|vines dotted with crimson\-tipped thorns wrap eagerly about|carefully recombining the two halves of|body seems to glow with an internal strength\.|Wisps of blue flame crackle like static around|appears considerably more powerful.|The barrier of thorns surrounding|gains a look of renewed cognition of|assumes a stern, rough countenance, though|A faint blue glow surrounds|As the fragrant haze settles over .*? looks revitalized\.|blurs before your eyes\.|exhibits a much more regal air, power coursing through|appears to be keenly aware of|A faint .*? haze briefly tints the air about|appearance shimmers briefly\.|A brilliant aura surrounds|stands tall and appears more confident\.|as the violet flames surrounding it gain new life|causing violet flames to spring to life around it|blurs before your eyes\.|A fiery aura envelops|stops shimmering\.|The evanescent shield shrouding|Granules of cobalt light coalesce and dance around|Motes of .*? light appear and begin to swirl around|A sphere of snapping and crackling ethereal ripples expands outward from|Bolts of electricity dance restlessly around|The tempest of electricity swirls violently around|The sanguine liquid is visible for only an instant before it sinks into|Strands of translucent mana swirl about .*? in a protective barrier\.|You hear a loud \*POP\* come from .*? muscles\!|A churning spectral aura suddenly materializes around|appears filled with a confident and fearless composure\.|Dark red droplets seep out of .*? skin and evaporate\.|body suddenly grows darker\.|stands taller\, as if bolstered with a sense of confidence\.|body is surrounded by a dim dancing aura\.|is surrounded by a shimmering field of energy\.|appears somehow changed\.|is again\.  Perhaps it was a trick of the light\.|muscles seem to strain for an instant\.  A sense of loss can be seen in|face takes on a curiously blank expression\.|gives .*? arms a quick shake\.|sings something in Guildspeak that you don't understand\.|The .*? seems to respond to the magic of .*? song\.|A look of intense focus comes over|seems to blend into the surroundings better|The air about .*? shimmers slightly\.|looks more aware of the surroundings\.eyes begin to shine with an inner strength\.is surrounded by an aura of natural confidence\.|begins to move with cat\-like grace\.|suddenly looks much more dextrous\.|looks charged with power\.|basks in a divine force that suddenly surrounds|and it dissolves into a puff of emerald-hued smoke\.  A verdant mist seeps from|the gem appears to improve in quality and color\.|sparkles a little more and is void of some natural imperfections\.|the gem appears to improve in quality and color\.|is surrounded by an aura of natural confidence\.|With a stuttering jolt\,|focuses intently\, and a faint shimmer of mystic energy ripples across|The divine force suddenly surrounds|A wave of snapping and crackling ethereal ripples moves outward from|Rippling cylinders of spiritual force encompass|The dully illuminated mantle surrounding|acquires a look of determination and appears more clearly focused\.|appears filled with a renewed confidence and fearlessness\./ && line !~ /#{Regexp.escape(Char.name)}/
+    PlayerWindow.debug_filter("EFFECTS BEGINNING (...)", line)
+    next nil
+  end
+
+  # Effects or Spells Ending
+  if line =~ /seems hesitant, looking unsure of|seems slightly different|air stops shimmering around|spirits are no longer lifted|undulate and grow stronger|slow down and become less nimble|slow down and become a bit less nimble|energy fades from around|gleam fades from|creaks and twists briefly before disintegrating|returns to its natural state|look of grim determination|slowly exhales as|suddenly appears less powerful|appears less powerful\.|seems somewhat less buoyant|posture becomes noticeably more relaxed|The bright luminescence fades from around|appears to be less protected|appears to lose some confidence|The shimmering aura fades from around|loses some awareness\.|seems a bit less imposing\.|appears slightly less composed\.|The wall of force disappears from around|The mote of white light next to|becomes unbalanced for a second, then recovers\.|appears to lose some internal strength\.|The appearance of great calm leaves|The brilliant aura fades away from|The faint blue glow fades from around|complexion returns to normal\.|dull golden nimbus fades from around|look of renewed cognition fades\.|seems to thin slightly\.|becomes solid again\.|aura suddenly vanishes from around|undulate and fade away\.|movements no longer appear to be influenced by a divine power|seems less resolute\.|chest slows before dying away with a final burst of energy|blood shield shrivel and dry|doesn't seem quite the same as|The lust for blood fades from|flare up one last time before vanishing with a staticky crackle\.|suddenly stops moving light\-footedly|is no longer moving so silently\.|no longer moving so silently\.|A few withered tendrils of .*? fall away from|body\, swiftly dissipating into the air\.|relaxes a little\.|seems to lose some dexterity\.|returns to normal color\.|The brilliant luminescence fades from around|regal air swiftly drifts away\.|Cobalt light separates itself from|Slowly evaporating, a faint hint of brine is all that remains upon|falls away\, unraveling as it fades\.|ethereal censer fades away\, leaving only a faint lingering scent of incense\.|The .*? fades from .*? eyes\.|The misty halo fades from|The focused look leaves|A blue\-green aura briefly flares up .*? before dissipating into nothingness\.|An incandescent veil fades from|The shimmering multicolored sphere fades from around|The tingling sensation and sense of security leaves|The silvery luminescence fades from around|glances around, looking a bit less confident\.|surge of empowerment fades\.|posture relaxes briefly\.|The sparking electricity surrounding|hazy and indistinct form returns to normal\.|appears somehow different\.|is no longer protected by the shimmering field of energy\.|no longer bristles with energy\.|The layer of raw elemental energy surrounding|spell falters as it takes hold on|one last time before fading entirely\.|The swirling whirlwind around|A faint silvery glow fades from around|The forceful strain in|glistening faintly before stilling to normalcy|looks less calm and refreshed than a moment ago\.|skin withdraw\, submerging out of sight|appears less dazed and confused\.|The rage fades from|The fiery aura surrounding|The ineffable aura of allure fades from|A look of concentration briefly passes across|loses .*? murky complexion\.|skin settles into quiescence\.|tension abates somewhat\.|suddenly shoot off in all directions, then quickly fade away\.|appears less confident\.|begins to breathe less deeply\.|The dim aura fades from around|Deep blue motes swirl away from|The opalescent aura fades from around|The dim aura fades from around|The air calms down around|A silvery fog coalesces around|stance\, no longer braced for impact|barrier flashes rapidly and the sound of breaking crystal can be heard as it cascades down around|sloughing away with a faint shimmer\.|The scant motes of darkness clinging to|The subtle nimbus that radiates from|The blood red haze dissipates from around|Swirls of mana encircling .*? slowly dissipate|seems to lose some internal strength\.|flickers once and shudders before fading completely\.|Dim steel grey lines of energy flicker one last time about|The radiant golden light that fills|As abruptly as it began\, the tailwind embracing .*? goes still\.|looks slightly less tense than he did a moment ago\.|intense rage dwindles away\.|appears less secure\.|The pure white radiance swirling around|shimmers and flickers briefly before fading\.|^An ethereal golden collection bowl drifts out of|Darkness punctuated by a constellation of starry pinpoints wells up around|^A white glow rushes away from|shimmers momentarily before the evanescent shield surrounding|A silver light faintly flickers around|The layer of raw elemental energy surrounding|You twinge slightly as your Empathic Link to|loses its focused look\.|seems to lose some focus as his eyes narrow and shift momentarily to one side\.|^The last hints of auroral color die from around|exhales the last of a virulent green mist\.|looks momentarily uneasy\, but quickly recovers\.|^A shadow seems to detach itself from/ && line !~ /#{Regexp.escape(Char.name)}/
+    PlayerWindow.debug_filter("EFFECTS ENDING (...)", line)
+    next nil
+  end
+
+  # Scroll Infusion
+  if line =~ /^An ethereal wisp suddenly leaps from/ && line !~ /#{Regexp.escape(Char.name)}/
+    PlayerWindow.debug_filter("Scroll Infusion (...)", line)
+    next nil
+  end
+
+  # Scripted Items
+  if line =~ /idly spins the base of|and adopts a nefarious expression\.|center-most crystal winks briefly, but nothing else happens|A ripple of .*? light shimmers over the surface of the|A brief shimmer of .*? light erupts from inside the|A fiery plume of hissing smoke trails|then sets to work on each piece, meticulously checking the shaft, fletching, and tips for damage|the illumination of its sigils slowly ebbs away|touch, a number of sigils worked into its grain take on a faint luminescence|tracing the outline of an arcane sigil before sinking away|armoire|and the .*? flying above .*? shoulder glow slightly\.|shoulder places its hands out in front of itself|shoulder whispers something to|single .*? tentacle rises from its surface|at the top of .* disappearing back into the|The .*? flying over .*? shoulder says|and removes the silky strands that were binding it to|pushes the heel of .*? empty hand against|Fibrous tendrils of mana coalesce from the surroundings and coats|ear as the magical ward protecting|ripples faintly with contained energy\.|burst into baneful white flames|Impenetrable darkness erupts midair for a moment before vanishing into nothingness\.|separates the weapon into two halves\.|appears incorporated into some of the decorations on the|their rhythmic movement an ever\-shifting constellation|The distorted surface begins to mend as glyphs appear and fade across its surface|shoulder vanishes in a brief, white flash of light\.|eyes glow brightly for a moment and .*? appears energized\!|and adopts a grim look of empowerment\.|burst into pure white flames\!|Several sigils incised along .*? flicker briefly with|A low thrumming \*BOOM\* fills the area as ethereal motes form into a small pile of flickering sand that collects at|by the loop on the end of its handle\.|The latticework of .*? surrounding the|murmured invocation\, the sigil\'s power blazes forth in trails of pale energy and surges into|gently taps and strokes the vines wrapped around .*? and the vines recede|A wayward .*? shoulder and drifts to the floor.|glimmers of .*? energy flicker away from its billowing fabric like sparks and swirl around|runes scribed into the grain of its pole flare bright and fade in sequence one after another in a pattern reminiscent of tumbling embers|and an impenetrable darkness erupts around|fist\, a faint flicker of energy dances about|with a flash of .*?  A powerful burst of .*? lingers briefly in the air\.|hand drags itself by dint of arm strength and sheer will up|A low crackling sound accompanies the momentary flare of a sigil on|The mirror-like clones of the .*? fade away\.|flying over .*? shoulder says|skin painfully rip away\, vines quickly retreating\.|the shroud of misty white thorns coalescing around it part slightly|causing the coraesine relic bound to hilt to take on|invokes the .*? name of the gods|light\.  A low rumble lingers briefly in the air\.|bracer twice in quick succession\, opening a small spring-loaded compartment|easily plucks .*? out of it and twists the end cap back into place\.|With a quick flourish .*? notes the foraged item with a few strokes of chalk before placing the writing instrument back into the|Bending over .*? and plucks it free from|^A lump bulges the skin of|opening its lid and shaking a|into a series of straps on the back of|A hissing cloud of green necrotic haze trails|^With careful precision\,|^With a sudden cross\-body motion toward|lifts the sheer gauze veil on|dramatically brushes .*? fingers lightly across .*? case\, causing a spark to ignite across the surface\.|^A .* energy trails .*? as .*? stows it in|^Ribbons of bluish\-green light burn into existence and swirl around|^An ethereal bluish\-green light swirls around the blade of|^A haze of virescent fumes dissipates from around .*? as .*? slings it over .*? shoulder\.|glyph winks briefly\, but nothing else happens\.|moths flutters out from inside|slowly raises one hand to the sky and lets loose a sonorous shout|With a raised arm and sonorous howl|\, and adopts a malicious expression\.|shoulder glows brightly as a single .*? sphere begins to circle around|^The shadows disperse from around the sinuous body and the serpent returns to its customary position\./ && line !~ /#{Regexp.escape(Char.name)}/
+    PlayerWindow.debug_filter("SCRIPTED ITEM (...)", line)
+    next nil
+  end
+	
+	# Arcariums
+	if line =~ /pulses a malevolent crimson before inexorably drawing a/ && line !~ /#{Regexp.escape(Char.name)}/
+    PlayerWindow.debug_filter("ARCARIUMS (...)", line)
+    next nil
+  end
+
+  # Selling Interaction
+  if line =~ /<a [^>]*?noun="([^"]+)">[^<]*<\/a>\s*?(steps)|glances at it briefly\, then hands <a [^>]*?noun="[^"]+">(?:him|her)<\/a>|^[A-Z][a-z]+ asks .* if .* would like to buy.*|^[A-Z][a-z]+ asks .* to appraise|^The <pushBold\/><a [^>]*?noun="([^"]+)">[^<]*<\/a><popBold\/> says\, \"Sorry\, <a [^>]*?noun="([^"]+)">[^<]*<\/a>\, I'm not buying anything this valuable today\.  Maybe tomorrow\.\"|^The <pushBold\/><a [^>]*?noun="([^"]+)">[^<]*<\/a><popBold\/> removes the gems and hands|^The <pushBold\/><a [^>]*?noun="([^"]+)">[^<]*<\/a><popBold\/> takes .*?\, inspects the contents carefully\, and removes the gems|and says\, \"I don't have that much spare silver\, so I will have to give you a|^The <pushBold\/><a [^>]*?noun="([^"]+)">[^<]*<\/a><popBold\/> takes .*? inspects (?:it|the contents) carefully|^The <pushBold\/><a [^>]*?noun="([^"]+)">[^<]*<\/a><popBold\/> says\, \"That's not quite my field\,|^The <pushBold\/><a [^>]*?noun="([^"]+)">[^<]*<\/a><popBold\/> then returns .*? to|^<a [^>]*?noun="([^"]+)">[^<]*<\/a> touches .*? as .*? asks <pushBold\/><a [^>]*?noun="([^"]+)">[^<]*<\/a><popBold\/> a question\.|^[A-Z][a-z]+ steps aside to talk with .*? about|^<pushBold\/><a [^>]*?noun="([^"]+)">[^<]*<\/a><popBold\/> takes .*?\, examines it\, and quickly returns it to .*? with a shrug\.|^<a [^>]*?noun="([^"]+)">[^<]*<\/a> asks .*? (?:to appraise|if he would like to buy)|Grundael takes .*?\.  Realizing it's empty\, his face reddens and he returns it\.|Grundael frowns and says\, \"Oh no no\.\.\.|hesitantly before paying <a [^>]*?noun="([^"]+)">[^<]*<\/a> some silvers\.|hands it back to <a [^>]*?noun="([^"]+)">[^<]*<\/a> along with some silver\.|exclaims\, \"Quit wasting my time <a [^>]*?noun="([^"]+)">[^<]*<\/a>\!\"/ && line !~ /#{Regexp.escape(Char.name)}/
+    PlayerWindow.debug_filter("SELLING (...)", line)
+    next nil
+  end
+
+  # Inventory Interaction
+  if line =~ /^<a [^>]*?noun="([^"]+)">[^<]*<\/a>\s*?(absent\-mindedly drops|adjusts|attaches|brushes|carefully adds|carefully eyes|carefully hangs|carefully pins|carefully places|carefully pours|carefully removes|carefully secures|carefully unpins|carefully straps|casually tosses|deftly removes|digs|discreetly stows|discreetly removes|drapes|draws|equips|fiddles with the|flips|flutters out from inside .*? dropping|gently layers|grabs|hangs|is admiring|just opened|just closed|passes|pops|pours|presses|produces|pulls|pulls back|pulls on|pushes|puts|put .*? in|quickly whips|raises|reaches|removes|retrieves|rummages|searches through|secures|securely attaches|seizes|sheathes|slides|slings|slips|stows|summons a swarm|swaps|takes|throws|traces|tosses|tries|tucks|twists|unsheathes|vanishes|withdraws|works|opens the various containers on|closes the various containers on)|reaches toward the|slides out a|With a slight roll of .*? shoulder|vanishes into the depths of|seemingly floats up out of|^Slipping its loop from|^Flicking .*? opens the blades of .*? in one smooth\, silent motion\.|^As .*? draws a|from a series of straps on the back of|then suddenly several articles of clothing fly out of the|one of the smaller compartments inside|squeezes .*? with all of .*? might and it shatters apart, revealing|carefully applies dollops of .*? poison to key areas of|picks at the knot holding|ties .*? shut tightly\./ && line !~ /#{Regexp.escape(Char.name)}/
+    PlayerWindow.debug_filter("INVENTORY (...)", line)
+    next nil
+  end
+
+  # Drinking, Eating, Healing, Transferring
+  if line =~ /takes a drink|takes a bite|concentrates|gradually fades\, forming on|dwarf empath tattoo|begins to look better as the cuts on|focuses on .* with intense concentration|The cuts on .*? close and the bruises fade|The scar on .*? glows faintly white before fading altogether|The bruises around .*? fade\.|begins to look a little better\.|appears entirely restored\.|looks much more calm and refreshed\.|veins stand out briefly\.|begins to look better|gradually fades\, affecting|fingertips using a gentle\, circular motion\.|pours a dose|flesh as dark essence restores|wavers with sudden fatigue|looks better\.|skin looks healthier\.|loses some of .*? pallor.|bears the wound in|gobbles down a big bite|in one enormous bite|There is a bright flash and|flinches visibly in pain as|with an air of determination\.|An image of Liabo reflects in|is bathed in a column of silver moonlight\, invigorating|is bathed in a column of silver moonlight\, fully restored at|own keeping\, leaving behind new-grown flesh\.|Golden\-green warmth extends from|looks a little better\.|forages around briefly|forages briefly and manages to find|A swarm of scarabs erupts below .*? removing|^Crimson mist seeps from|skin takes on a slight flush as|wounds begin to mend as the argent cocoon pulses with light|then dissolves into thousands of tiny lights before fading away|mouth open\, and pours in a small amount of/ && line !~ /#{Regexp.escape(Char.name)}/
+    @pw_skip_next_line = true
+    next nil
+  end
+
+  # Lockpicking
+  if line =~ /^<a [^>]*?noun="([^"]+)">[^<]*<\/a>\s*?(begins to meticulously examine|detaches a|settles into the difficult task of picking the lock on|appears extremely focused|looks up with a big grin on|goes about disarming|no longer appears focused|speaks briefly with|fiddles with .*? for a moment|gets .*? stuck in the lock|carefully pushes a small wad of cotton into the lock mechanism.\|removes a pair of metal grips from|refines .*? a bit\.)|Then\.\.\.CLICK\!  It opens\!|and slips it into the crack between the lid and the base, apparently cutting something within|and carefully reaches into the locking mechanism|The scintillating light fades from .*? hands\.|Using a pair of metal grips|peers thoughtfully into the lock mechanism of|Taking a small lump of putty from/ && line !~ /#{Regexp.escape(Char.name)}/
+    PlayerWindow.debug_filter("LOCKPICKING(...)", line)
+    next nil
+  end
+
+  # Magic Items
+  if line =~ /rubs a.*?<a [^>]*?noun="[^"]+">[^<]+<\/a>.*?in <a [^>]*?noun="[^"]+">(?:his|her)<\/a> hand\./
+    PlayerWindow.debug_filter("MAGIC ITEM (...)", line)
+    @pw_skip_next_line = true
+    next nil
+  elsif line =~ /rubs <a [^>]*?noun="[^"]+">(?:his|her)<\/a> <a [^>]*?noun="[^"]+">[^<]+<\/a>/
+    PlayerWindow.debug_filter("MAGIC ITEM (...)", line)
+    @pw_skip_next_line = true
+    next nil
+  elsif line =~ /suddenly disintegrates\!/i && line !~ /^Your .* suddenly disintegrates\!/
+    PlayerWindow.debug_filter("MAGIC ITEM (...)", line)
+    next nil
+  end
+
+  # Disks
+  if line =~ /goes off in search of its master.|arrives in the room, shivering violently.  It then disintegrates./
+    PlayerWindow.debug_filter("DISK (...)", line)
+    next nil
+  end
+
+
+  # Player Ambients
+  if line =~ /A feral golden gleam flashes through .*? eyes\./
+    PlayerWindow.debug_filter("PLAYER AMBIENTS (...)", line)
+    next nil
+  end
+
+  # Environment Ambients
+  if line =~ /^A swirling current tugs .*? gently back and forth\.|^The sand shifts beneath .*? feet\, sending up small clouds of sea bottom\.|^Something silver and swift darts between .*? ankles\.|^A crab scuttles sideways across a rock carpeted in mossy growth before darting away from|^Shifting currents set .*? hair aswirl in a slow .*? cloud about .*? head and face\.|^Tiny bubbles drift upward from a hidden fissure in the seabed\, floating around .*? before disappearing into the depths\.|^A swell of turbulence sends .*? drifting off to one side\.|^A tiny bubble escapes .*? mustache\.|^A sub\-surface swell bobs .*? lightly up and down\.|almost loses its content as it sways about in the water\.|^A wee bubble of air escapes .*? beard\./
+    PlayerWindow.debug_filter("ENVIRONMENT (...)", line)
+    next nil
+  end
+
+  # NPCs
+  if line =~ /stops to speak with|confers quietly with|lumbers in, swathed in darkness\.|falls deeper into bloodthirst\, the darkness swathing|lumbers .*? desiccated tendons in .*? legs popping as he goes\.|slack lips release a tormented moan\.|missing ears as if beset by voices only|taking on monstrous proportions before diminishing back to its original shape\.|decaying teeth in a horrible parody of a warrior's snarl\.|glowing tattoos pulses once, brightening precipitously before returning to normal\.|scampers up to .*? on its wooden legs\./
+    PlayerWindow.debug_filter("NPC (...)", line)
+    next nil
+  end
+
+  # Duskruin
+  if line =~ /An announcer shouts\, \"Our next combatant/
+    PlayerWindow.debug_filter("Duskruin (...)", line)
+    next nil
+  end
+
+  # ManaTrawl
+  if line =~ /negotiates with a robe\-draped trawl\-caster in order to play Mana Trawl|waggles with intent|waggle steadies into rhythm|waggle appears right this time|stuffing some consolation aevit into .*? pocket\.|gesture is perfect\, at least in theory|waggles through apparent injury|A robe\-draped trawl\-caster chuckles\. \"<a [^>]*?noun="[^"]+">[^<]+<\/a> did something\!\" they exclaim\, while handing|, passing <a [^>]*?noun="[^"]+">[^<]+<\/a> a box in exchange\.|They hand <a [^>]*?noun="[^"]+">[^<]+<\/a> a faintly humming container as acknowledgment\.|<a [^>]*?noun="[^"]+">[^<]+<\/a> waggles with measured grace\.|offers <a [^>]*?noun="[^"]+">[^<]+<\/a> a token package in its place\.|and hands <a [^>]*?noun="[^"]+">[^<]+<\/a> a box in quiet recognition\.|<a [^>]*?noun="[^"]+">[^<]+<\/a> humming creation wrapped in a impressive package\.|giggles while speaking with <a [^>]*?noun="[^"]+">[^<]+<\/a>\.|<a [^>]*?noun="[^"]+">[^<]+<\/a> waggles in rhythm with your pulse\./
+    PlayerWindow.debug_filter("ManaTrawl (...)", line)
+    next nil
+  end
+
+  # initialize tracking variables
+  @pw_pending_joins        ||= {}   # name => Time.first_seen
+  @pw_confirmed_players    ||= []   # names we've announced "enters" for
+  @pw_pending_leavers      ||= []   # names queued for directional-leave handling
+  @pw_last_seen_players    ||= []   # remember who was here last
+
+  if PlayerWindow.show_movement
+    # drop fluff movement descriptions
+    if line =~ /just arrived\.|just left\.|Motes of .*? light flow in and resolve into|A softly scented breeze begins to swirl around|figure partially obscured by the flickering form|the shadows retreat back into the surroundings|belongings into a pile of dust that is swiftly borne away on the wind|tied to a red ribbon jingling follows|the door slams shut and vanishes\, leaving no traces of its existence|slowly fades into view with a gasp of breath and a slightly disoriented look|just moved quietly .*? group following closely\.|flounces in amidst a diffuse cloud of .*? glitter\.|The unmistakable scents of sulphur\, ether\, and brimstone rise from the ground near you\.|The faint sound of .*? tied to a red ribbon jingling touts|body grows more and more translucent until you realize|leaving a fading trail of multicolored footprints behind\.|suddenly appears out of nowhere\, one hand moving away from|You see a blur out of the corner of your eye|dissolves into motes of .*? light that flow|suddenly appears in a flash of .*? light\./
+      PlayerWindow.debug_filter("MOVEMENT (...)", line)
+      next nil
+    end
+
+    # detect your own movement so we don't mis-attribute joins/leaves
+    if line =~ %r{^(?:<nav rm='\d+'/>|<d cmd='go \w+'>\w+</d>|You (?:go|walk|move) \w+)}i
+      @pw_recent_self_movement = true
+      @pw_pending_joins.clear
+      @pw_pending_leavers.clear
+      @pw_skip_next_line_after_player_component = false
+      PlayerWindow.set_hidden_player_detected(false)
+      next line
+    end
+
+    # raw XML room-player updates
+    if line =~ /<(?:component|compDef) id=['"]room players['"]>(.*?)<\/(?:component|compDef)>/i
+      current_players = $1.scan(/noun="([^"]+)"/i).flatten.map(&:capitalize).uniq
+      PlayerWindow.group_dirty = true
+      self_movement = @pw_recent_self_movement
+
+      unless self_movement
+        # schedule joins
+        (current_players - @pw_last_seen_players).each do |name|
+          @pw_pending_joins[name] = Time.now
+        end
+
+        # schedule leaves
+        leaves = @pw_confirmed_players & (@pw_last_seen_players - current_players)
+        @pw_confirmed_players -= leaves
+        @pw_pending_leavers = leaves.reject { |n| n == Char.name }
+      else
+        @pw_pending_leavers = []
+      end
+
+      @pw_skip_next_line_after_player_component = !self_movement
+
+      @pw_last_seen_players    = current_players
+      @pw_recent_self_movement = false
+      PlayerWindow.debug_filter("ROOM PLAYERS (...)", line)
+      next nil
+    end
+
+    # announce delayed joins
+    now    = Time.now
+    joined = []
+
+    @pw_pending_joins.dup.each do |name, first_seen|
+      if now - first_seen >= 3
+        if @pw_last_seen_players.include?(name)
+          joined << name
+          @pw_confirmed_players << name unless @pw_confirmed_players.include?(name)
+        end
+        @pw_pending_joins.delete(name)
+      end
+    end
+
+    case joined.size
+    when 1 then respond "#{joined.first} enters."
+    when 0 then # nothing
+    else respond "#{joined.last}'s group enters."
+    end
+
+    # handle directional and plain leaves
+    if @pw_skip_next_line_after_player_component
+
+      if line =~ /AS\:/i
+        next line
+      end
+
+      if line =~ /CS\:/i
+        next line
+      end
+
+      @pw_skip_next_line_after_player_component = false
+
+      if line =~ %r{^<a [^>]+>[^<]+</a>\s+(?:kneels|stands|sits|lies)}
+        next line
+      end
+
+      if line =~ /<a .*?noun="([^"]+)">[^<]+<\/a> just went (?:<d cmd='go (\w+)'>\w+<\/d>|through a <a .*?>(.*?)<\/a>)/i
+        name      = $1.capitalize
+        direction = $2 || $3&.downcase
+        if @pw_pending_leavers.include?(name)
+          respond "#{name} leaves #{direction}."
+          @pw_pending_leavers.delete(name)
+          next nil
+        end
+      end
+
+      if @pw_pending_leavers.any?
+        respond "#{@pw_pending_leavers.shift} leaves."
+      end
+      @pw_pending_leavers = []
+
+      next nil
+    end
+  end
+
+  if PlayerWindow.debug_filter_enabled && line.strip == ">"
+    echo "*** DEBUG: Unfiltered '>' line passed through: #{line.inspect} ***"
+  end
+
+  line
+}
+
+# downstream_proc has ~40 separate "next nil" suppression points across its
+# combat/arrival/spam filters. If the server ever bundles a genuine
+# <output class="..."/> mono-formatting tag onto a line one of those
+# branches drops, the tag goes with it -- and since the matching open/close
+# tag isn't necessarily on the SAME line, dropping just one half leaves the
+# FE stuck thinking it's still in (or out of) mono mode with no balancing
+# tag ever arriving to clear it. Rather than audit/patch every branch
+# individually, wrap the whole proc: whatever it decides to suppress, any
+# <output> tag riding on that line still gets forwarded on its own.
+#
+# Originally only covered <output>. A live raw-XML capture showed the
+# server can glue a <popBold/> directly onto a <prompt .../> with no
+# separator on the same chunk (e.g. "<popBold/><prompt time='...'>&gt;
+# </prompt>", seen right after a speech line that happened to be
+# re-sent bold-wrapped) -- if any suppression branch ever matches a line
+# like that, the exact same stuck-mono-mode class of bug applies to the
+# prompt cycle itself (the FE never gets the prompt refresh that line
+# carried) and to bold state (a lone <popBold/> with no matching
+# <pushBold/> ever arriving, or vice versa). Widened to preserve those
+# too, for the same reason <output> already was.
+downstream_proc_filtered = downstream_proc
+downstream_proc = proc { |line, server_string|
+  result = downstream_proc_filtered.call(line, server_string)
+  next result unless result.nil?
+
+  preserved = line.to_s.scan(/<output class="[^"]*"\s*\/>|<prompt\b[^>]*>.*?<\/prompt>|<(?:pushBold|popBold)\s*\/>/).join
+  preserved.empty? ? nil : preserved
+}
+
+UpstreamHook.remove(upstream_hook_id) rescue nil
+DownstreamHook.remove(downstream_hook_id) rescue nil
+UpstreamHook.add(upstream_hook_id, upstream_proc)
+DownstreamHook.add(downstream_hook_id, downstream_proc)
+
+before_dying do
+  UpstreamHook.remove(upstream_hook_id)
+  DownstreamHook.remove(downstream_hook_id)
+
+  if PlayerWindow.gtk_available && defined?(PlayerWindowGtk) && PlayerWindowGtk.instance_variable_get(:@window)
+    Gtk.queue { PlayerWindowGtk.instance_variable_get(:@window).close }
+  end
+end
+
+echo "Playerwindow is active." if Frontend.supports_room_window?
+
+PlayerWindow.group_dirty = true
+@pw_last_group_snapshot = PlayerWindow.current_group_snapshot
+PlayerWindow.group_display = PlayerWindow.get_group_display(@pw_last_group_snapshot)
+@pw_next_group_snapshot_check_at = Time.at(0)
+@pw_next_hook_check_at = Time.at(0)
+
+# Main update loop.
+loop do
+  if Time.now >= @pw_next_hook_check_at
+    UpstreamHook.add(upstream_hook_id, upstream_proc) unless UpstreamHook.list.include?(upstream_hook_id)
+    DownstreamHook.add(downstream_hook_id, downstream_proc) unless DownstreamHook.list.include?(downstream_hook_id)
+    @pw_next_hook_check_at = Time.now + 5
+  end
+
+  if Time.now >= @pw_next_group_snapshot_check_at
+    current_snapshot = PlayerWindow.current_group_snapshot
+    if current_snapshot != @pw_last_group_snapshot
+      @pw_last_group_snapshot = current_snapshot
+      PlayerWindow.group_dirty = true
+    end
+    @pw_next_group_snapshot_check_at = Time.now + 2.0
+  end
+
+  if PlayerWindow.group_dirty
+    snapshot = @pw_last_group_snapshot || PlayerWindow.current_group_snapshot
+    @pw_last_group_snapshot = snapshot
+    PlayerWindow.group_display = PlayerWindow.get_group_display(snapshot)
+    pcs = GameObj.pcs.reject { |pc| pc.name == Char.name }
+    if Frontend.supports_room_window?
+      PlayerWindow.push_players_to_window(pcs, PlayerWindow.group_display)
+    end
+    if PlayerWindow.gtk_enabled?
+      PlayerWindowGtk.update_players(pcs, PlayerWindow.group_display)
+    end
+    PlayerWindow.group_dirty = false
+  end
+
+  pcs = GameObj.pcs.reject { |pc| pc.name == Char.name }
+  pcs_snapshot = pcs.sort_by { |pc| pc.id.to_i }.map do |pc|
+    "#{pc.id}:#{pc.status}:#{pc.name}"
+  end.join("|")
+
+  current_filter_state = [
+    PlayerWindow.filter_spam,
+    PlayerWindow.filter_animals,
+    PlayerWindow.filter_flares,
+    PlayerWindow.filter_combat_math,
+    PlayerWindow.show_claim_status,
+    PlayerWindow.hidden_player_detected
+  ]
+  current_claim_label = PlayerWindow.claim_label
+
+  if pcs != @pw_last_pcs ||
+     pcs_snapshot != @pw_last_pcs_snapshot ||
+     current_filter_state != @pw_last_filter_state ||
+     current_claim_label != @pw_last_claim_label
+    @pw_last_pcs = pcs
+    @pw_last_pcs_snapshot = pcs_snapshot
+    @pw_last_filter_state = current_filter_state
+    @pw_last_claim_label = current_claim_label
+    if Frontend.supports_room_window?
+      PlayerWindow.push_players_to_window(pcs, PlayerWindow.group_display)
+    end
+    if PlayerWindow.gtk_enabled?
+      PlayerWindowGtk.update_players(pcs, PlayerWindow.group_display)
+    end
+  end
+
+  if defined?(PlayerWindowGtk) && PlayerWindowGtk.pending_command
+    fput PlayerWindowGtk.pending_command
+    PlayerWindowGtk.pending_command = nil
+  end
+
+  # Dequeues one profession per loop tick (rather than draining the whole
+  # queue in one go) so *pwparse all -- which can involve up to 10 blocking
+  # "who profession" round trips -- doesn't stall the window/other commands
+  # for the entire run in a single tick.
+  if (profession = PlayerWindow.pending_parse_queue.shift)
+    roster = PlayerWindow.fetch_profession_roster(profession)
+    if roster == :invalid
+      respond "Playerwindow: the game rejected '#{profession}' as a profession."
+    else
+      PlayerWindow.profession_map.delete_if { |_name, prof| prof == profession }
+      roster.each { |name| PlayerWindow.profession_map[name.downcase] = profession }
+      PlayerWindow.save_profession_map!
+      remaining = PlayerWindow.pending_parse_queue.size
+      remaining_note = remaining > 0 ? " (#{remaining} more queued: #{PlayerWindow.pending_parse_queue.join(', ')})" : ""
+      respond "Playerwindow: #{profession} roster updated (#{roster.size} player#{roster.size == 1 ? '' : 's'})#{remaining_note}."
+
+      pcs = GameObj.pcs.reject { |pc| pc.name == Char.name }
+      PlayerWindow.push_players_to_window(pcs)
+    end
+  end
+
+  sleep 0.1
+end

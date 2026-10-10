@@ -1,0 +1,39 @@
+=begin
+
+  This script automatically handles REACTION based Weapon Skills.
+  Safely delays execution ONLY if you are mid-Assault, mid-Flurry, or mid-Thrash.
+
+  ;reactive
+  ;autostart add reactive
+
+    author: Malifren (Dynamic Animation Isolation Edition)
+      game: Gemstone
+      tags: weapon,skill
+   version: 0.4
+=end
+
+# A continuous, zero-lag downstream text listener loop
+while line = get
+
+  # 1. Listen for your dynamic reaction opportunity trigger
+  if line =~ /You could use this opportunity to (.*?)\!/
+    weaponskill = $1
+    
+    # 2. DYNAMIC ASSAULT DETECTION GATE
+    # Inspects the client memory registers directly for active assault animations.
+    # It ignores standard roundtime completely, freezing only for your combos.
+    if defined?(Lich::Gemstone::Effects::Cooldowns)
+      while Lich::Gemstone::Effects::Cooldowns.active?("Assault") || 
+            Lich::Gemstone::Effects::Cooldowns.active?("Flurry") || 
+            Lich::Gemstone::Effects::Cooldowns.active?("Thrash") ||
+            Lich::Gemstone::Effects::Cooldowns.active?("Barrage") ||
+            Lich::Gemstone::Effects::Cooldowns.active?("Fury")
+        sleep 0.05
+      end
+    end
+    
+    # 3. Cleanly execute the reactive skill the moment the combo loop safely completes
+    fput "weapon #{weaponskill.gsub(/\s+/, "").downcase}"
+  end
+  
+end

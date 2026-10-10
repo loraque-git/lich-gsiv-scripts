@@ -1,0 +1,80 @@
+# ==============================================================================
+# Script: throwpoison.lic
+# Description: Automated rogue poison retrieval, weapon stancing, and weapon execution.
+# ==============================================================================
+
+# 1. THREAD QUEUE LOCK: Wait for previous copies of THIS script to finish 
+timeout_counter = 0
+
+while Script.list.any? { |s| s.name == Script.current.name && s != Script.current }
+  sleep 0.1
+  timeout_counter += 0.1
+  
+  if timeout_counter >= 5.0
+    respond "[#{Script.current.name}: Previous thread timed out. Forcing lock release!]"
+    break
+  end
+end
+
+# CENTRAL CONFIGURATION VARIABLES
+POISON_BAG = "sack"
+
+# Pre-flight roundtime hold
+waitrt?
+
+# 2. PARSE MANUALLY TYPED POISON ARGUMENT (e.g. viscous)
+poison_type = script.vars.uniq.join(" ")
+
+if poison_type.nil? || poison_type.empty?
+  echo "❌ Error: You must specify a poison type! (Usage: ;throwpoison viscous)"
+  exit
+end
+
+# Put your weapon away securely before handling poison
+fput "put katar in my scab"
+
+# 3. CORE RETRIEVAL SEQUENCE
+fput "get #{poison_type} poison from my #{POISON_BAG}"
+
+# 4. MAIN COMBAT SEQUENCE
+# Clean, deduplicated stance up using client memory registers (0 = Offensive)
+if percentstance > 0
+  @combat_sending = true
+  fput "stance offensive"
+  @combat_sending = false
+  sleep 0.05 until percentstance == 0
+end
+
+# Execute the rogue martial feat
+fput "feat throwpoison"
+
+# Wait out physical recovery time from the throw before manipulating items or stancing
+sleep 0.1
+waitrt?
+
+# 5. CLEANUP & RETRACT SEQUENCE
+# Ensure physical roundtime is fully cleared before acting
+waitrt?
+
+# Only attempt to store the poison if it didn't disintegrate and is still in your hand
+if GameObj.right_hand.name =~ /vial|poison/i || GameObj.left_hand.name =~ /vial|poison/i
+  stow_result = fput "put poison in my #{POISON_BAG}"
+  
+  # If the bag is full or you are somehow still stunned/immobilized, alert you
+  if stow_result =~ /won't fit|full/i
+    respond "⚠️ [throwpoison.lic: Your #{POISON_BAG} is FULL! Poison vial left in hand.]"
+  end
+else
+  respond "✨ [throwpoison.lic: Vial was completely consumed by the throw!]"
+end
+
+# Return safely to defensive stance (100 = Defensive)
+if percentstance < 100
+  @combat_sending = true
+  fput "stance defensive"
+  @combat_sending = false
+  sleep 0.05 until percentstance == 100
+end
+
+# Pull your primary armament back out
+fput "get katar from my scabb"

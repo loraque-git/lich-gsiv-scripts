@@ -1,0 +1,144 @@
+=begin
+  shard-origin.lic  (managed by Saga - it is rewritten on each Via-Lich launch)
+
+  A back-compat shim for Lich builds older than 5.19. Saga launches Lich with
+  --saga; Lich 5.19+ understands that flag and does EVERYTHING this script
+  exists for natively: it labels this client Frontend.client == "saga",
+  prefixes the origin sentinel to each downstream line (lib/games.rb, via the
+  :sentinel frontend capability), treats Saga as a Wrayth-equivalent
+  room_window client for room-number injection, and re-emits the playerID to
+  each attaching client (lib/main/main.rb). On such a Lich, Saga does not
+  auto-start this script at all, and if run anyway (manually, or via an old
+  autostart entry) it detects the native support and exits immediately.
+
+  On older Lich builds, which ignore --saga and label us "profanity", this
+  script provides all three jobs:
+
+  1. ORIGIN TAGGING. Prepends a sentinel byte (\x1f, the ASCII "unit separator")
+     to the start of every game-server line on its way to the frontend, so Saga
+     can tell real game text apart from Lich's own injected output (script echoes,
+     "--- Lich:" status lines, lich5-update tables, etc.). Lich's OWN output does
+     not pass through the downstream hook, so it arrives unmarked; Saga strips the
+     sentinel and dims any unmarked main-stream line. \x1f is non-printing.
+
+  2. FRONTEND NORMALIZATION. The detachable-client attach makes Lich label us
+     'profanity' (Frontend.client), and Lich gates its room-number injection -
+     "[Name - <lichid>] (u<uid>)" in the room/Story window - on a 'wrayth' /
+     'stormfront' client (see lib/games.rb). Saga IS a Wrayth-XML client, so we
+     re-assert Frontend.client = 'wrayth' here, on the downstream path that runs
+     just before that injection, so room numbers reach Saga exactly as Wrayth.
+     (This touches only Frontend.client; $frontend / GSL handling are untouched.)
+
+  3. PLAYERID RE-EMIT (native since Lich 5.19: lib/main/main.rb re-emits per
+     attach via Frontend.player_id_tag; before that, done here).
+     When Saga attaches as a --detachable-client, Lich has ALREADY consumed the
+     game's one-time <playerID id='...'/> during its own login handshake, so
+     that tag never reaches Saga. Saga's cloud profile sync keys each character
+     on its playerID, so without it a Via-Lich character silently never syncs
+     (while the SAME character logged in Direct - e.g. on the web client - does,
+     because it sees the tag). Lich stores the id verbatim
+     (xmlparser.rb: @player_id = attributes['id']), so re-emitting
+     <playerID id='#{XMLData.player_id}'/> reproduces exactly what a Direct
+     login delivers, and both surfaces resolve the same sync key. We emit it
+     once per attached client, so a Saga that RE-attaches mid-session (a
+     reconnect after a socket blip, or a Saga restart against a surviving Lich)
+     also relearns the id. The loop that watches for an attach polls briskly
+     only until the first client is served, then settles to a lazy tick.
+
+  Saga auto-starts this via --start-scripts on every Via-Lich login. You can
+  also run it manually (;shard-origin) or add it to autostart.
+
+  CAVEAT: if other Lich scripts' waitfor / matchwait / get stop matching game
+  lines while this runs, the sentinel is leaking into the script line buffer on
+  your Lich build - ;kill shard-origin and report back.
+=end
+
+# Lich 5.19+ launched with --saga does all three jobs natively; nothing below
+# would do unique work (the loop would only duplicate main.rb's per-attach
+# playerID emit). Saga skips --start-scripts on such a Lich, so this guard only
+# fires for manual runs and old autostart entries. Feature-detect instead of a
+# version compare: Frontend.player_id_tag shipped in the same Lich release as
+# the rest of the native support, so its presence (with the saga label, proof
+# the running Lich actually parsed --saga) means all of it is present.
+if defined?(Frontend) && Frontend.client.eql?('saga') && Frontend.respond_to?(:player_id_tag)
+  exit
+end
+
+# JOB 3 (pre-5.19 Lich): re-emit the <playerID> tag to the Saga frontend.
+# Lich consumed the game's one-time <playerID> during its own login handshake
+# before Saga's detachable-client attached, so Saga never sees it - and Saga's
+# cloud profile sync keys on the playerID, so without this a Via-Lich character
+# silently never syncs. XMLData.player_id holds the id verbatim, so this
+# reproduces exactly what a Direct login delivers. _respond routes to the
+# detachable client (global_defs.rb) and gates on XMLData.safe_to_respond?.
+# The emit itself happens in the resident loop below, once per attached client
+# (Saga usually attaches AFTER this script starts, so a startup-only emit would
+# race ahead of the attach and _respond would drop it against a not-yet-alive
+# client).
+def saga_player_id
+  (defined?(XMLData) ? XMLData.player_id.to_s : '')
+end
+
+# The live detachable client, or nil when none is attached. Every attach wraps a
+# freshly accepted socket in a NEW SynchronizedSocket (lib/main/main.rb), and
+# alive? is a one-way latch (a dead socket never revives), so the object itself
+# identifies one attach: a client we have already served can never come back,
+# and a re-attach is always a different object. The loop keys on that instead of
+# on an alive/not-alive EDGE, which a lazy poll could straddle and miss.
+def saga_detachable_client
+  return nil unless defined?($_DETACHABLE_CLIENT_) && $_DETACHABLE_CLIENT_
+  $_DETACHABLE_CLIENT_.alive? ? $_DETACHABLE_CLIENT_ : nil
+end
+
+def saga_emit_player_id
+  pid = saga_player_id
+  _respond("<playerID id='#{pid}'/>") if pid =~ /\A\d+\z/
+end
+
+# On a --saga-aware Lich the sentinel + frontend normalization happen natively
+# in lib/games.rb, so skip our now-redundant DownstreamHook. Older Lich builds
+# still label us 'profanity' and rely on the hook below.
+unless defined?(Frontend) && Frontend.client.eql?('saga')
+  DownstreamHook.add('shard-origin', proc { |server_string|
+    # (A) Frontend label: the detachable-client attach makes Lich call us
+    # 'profanity'; Lich gates its MOVEMENT room-number injection on a
+    # wrayth/stormfront client (lib/games.rb). Saga speaks Wrayth XML, so say so.
+    Frontend.client = 'wrayth' if defined?(Frontend) && Frontend.client != 'wrayth'
+
+    # (B) Origin sentinel: prefix \x1f to the start of each line so Saga can tell
+    # genuine game output from Lich's own injected lines - EXCEPT the room-name
+    # line. Lich injects the room number by matching that line with a ^-anchored
+    # regex (process_room_information, lib/games.rb); a leading sentinel breaks the
+    # match and suppresses the number. Mirror Lich's own anchor so we skip exactly
+    # that line and tag every other line as before.
+    roomname = /\A(?:<pushStream id="familiar"[^>]*\/>)?(?:<resource picture="\d+"\/>|<popBold\/>)?<style id="roomName"/
+    server_string.gsub(/^.+$/) { |line| line =~ roomname ? line : "\x1f" + line }
+  })
+
+  before_dying { DownstreamHook.remove('shard-origin') }
+end
+
+# Stay resident and emit the playerID once per attached client, as soon as the id
+# is known. This lands the tag inside Saga's post-attach wait for it
+# (waitForPlayerId, 15s) and covers every LATER attach too: Saga re-attaches to a
+# surviving Lich after a socket blip (LichTransport.startReconnect, retrying for
+# 30s), and each attach resets Saga's playerId, so a session handed the tag only
+# once silently drops to local-only settings after its first reconnect. That is
+# why this cannot simply exit after the first emit. On a pre---saga Lich the loop
+# is also what keeps the DownstreamHook above registered, since before_dying
+# strips it on exit.
+#
+# Only the FIRST attach is latency-sensitive (it holds Saga's sign-in splash
+# while Saga waits for the tag), so poll briskly until one client has been served
+# - time-bounded, so a Lich nobody ever attaches to settles down anyway - then
+# tick lazily. A re-attach only has to be noticed inside Saga's 15s wait.
+saga_served = nil
+saga_brisk_until = Time.now + 60
+loop do
+  client = saga_detachable_client
+  if client && client.object_id != saga_served && saga_player_id =~ /\A\d+\z/
+    saga_emit_player_id
+    saga_served = client.object_id
+  end
+  sleep(saga_served.nil? && Time.now < saga_brisk_until ? 0.2 : 2)
+end
