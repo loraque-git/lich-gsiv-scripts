@@ -1,0 +1,206 @@
+--- eloot.lic
++++ eloot-patched.lic
+@@ -10,15 +10,29 @@
+             author: elanthia-online
+    original author: SpiffyJr (sloot)
+         maintainer: elanthia-online
+-      contributors: SpiffyJr, Athias, Demandred, Tysong, Deysh, Ondreian, Lieo, Lobe, Etheirys
++      contributors: SpiffyJr, Athias, Demandred, Tysong, Deysh, Ondreian, Lieo, Lobe, Etheirys, loraque
+               wiki: https://gswiki.play.net/Lich:Script_Eloot
+               game: Gemstone
+               tags: loot
+           required: Lich >= 5.15.0
+-           version: 2.12.0
++           version: 2.12.1
++              name: eloot-patched
++
++  Community patch (loot stance): based on eloot 2.12.0. Local filename is
++  eloot-patched.lic so stock ;eloot updates do not wipe this. Re-apply with
++  scripts/eloot-loot-stance.patch after upgrading eloot.lic. Suitable to offer
++  upstream as a PR against eloot.lic (drop the name: eloot-patched line).
+ 
+   Improvements:
+   Major_change.feature_addition.bugfix
++  v2.12.1 (2026-10-08) [community patch — loraque]
++    - feature: selectable loot stance (off/offensive/advanced/forward/neutral/
++      guarded/defensive) replaces the boolean "Loot in defensive" checkbox
++    - setup UI: GtkComboBoxText dropdown for loot_stance
++    - CLI: ;eloot-patched settings loot_stance forward
++    - migrates loot_defensive=true profiles to loot_stance=defensive
++    - change_stance(..., exact: true) so Forward (and other mid stances) apply
++      even when already more defensive
+   v2.12.0 (2026-09-29)
+     - feature: hoarding tries your house's other lockers in town when one is in use
+     - feature: ;eloot list gem|reagent can take a name filter, e.g. ;eloot list gem uncut diamond
+@@ -821,7 +835,12 @@
+           },
+           loot_phase: { default: false },
+           use_disk: { default: true },
++          # Legacy boolean kept for migration / older profiles. Prefer loot_stance.
+           loot_defensive: { default: false },
++          # BEGIN loot_stance patch
++          # off | offensive | advanced | forward | neutral | guarded | defensive
++          loot_stance: { default: 'off' },
++          # END loot_stance patch
+           overflow_containers: { default: '' },
+           coin_hand_name: { default: '' },
+           charm_name: { default: '' },
+@@ -1147,7 +1166,7 @@
+         </packing></child><child><object class="GtkLabel"><property name="visible">True</property><property name="can-focus">False</property></object><packing><property name="left-attach">5</property><property name="top-attach">3</property></packing></child><child><object class="GtkCheckButton" id="loot_types:coins"><property name="label" translatable="yes">Coins (ground)</property><property name="visible">True</property><property name="can-focus">True</property><property name="receives-default">False</property><property name="halign">start</property><property name="draw-indicator">True</property>
+         </object><packing><property name="left-attach">4</property><property name="top-attach">0</property></packing></child><child><object class="GtkCheckButton" id="loot_types:breakable"><property name="label" translatable="yes">Breakable(?)</property><property name="visible">True</property><property name="can-focus">True</property><property name="receives-default">False</property><property name="halign">start</property><property name="draw-indicator">True</property></object><packing><property name="left-attach">3</property><property name="top-attach">0</property>
+         </packing></child><child><object class="GtkCheckButton" id="loot_types:lm trap"><property name="label" translatable="yes">Locksmith Traps</property><property name="visible">True</property><property name="can-focus">True</property><property name="receives-default">False</property><property name="halign">start</property><property name="draw-indicator">True</property></object><packing><property name="left-attach">2</property><property name="top-attach">2</property></packing></child></object></child><child type="label"><object class="GtkLabel"><property name="visible">True</property><property name="can-focus">False</property><property name="label" translatable="yes">Loot Types</property>
+-        </object></child></object><packing><property name="expand">False</property><property name="fill">True</property><property name="position">0</property></packing></child><child><object class="GtkFrame"><property name="visible">True</property><property name="can-focus">False</property><property name="border-width">10</property><property name="label-xalign">0</property><child><!-- n-columns=4 n-rows=5 --><object class="GtkGrid"><property name="visible">True</property><property name="can-focus">False</property><property name="margin-top">5</property><property name="margin-bottom">5</property><property name="row-spacing">2</property><property name="column-spacing">5</property><property name="column-homogeneous">True</property><child><object class="GtkCheckButton" id="loot_defensive"><property name="label" translatable="yes">Loot in defensive(?)</property><property name="visible">True</property><property name="can-focus">True</property><property name="receives-default">False</property><property name="halign">start</property><property name="draw-indicator">True</property>
++        </object></child></object><packing><property name="expand">False</property><property name="fill">True</property><property name="position">0</property></packing></child><child><object class="GtkFrame"><property name="visible">True</property><property name="can-focus">False</property><property name="border-width">10</property><property name="label-xalign">0</property><child><!-- n-columns=4 n-rows=5 --><object class="GtkGrid"><property name="visible">True</property><property name="can-focus">False</property><property name="margin-top">5</property><property name="margin-bottom">5</property><property name="row-spacing">2</property><property name="column-spacing">5</property><property name="column-homogeneous">True</property><child><object class="GtkComboBoxText" id="loot_stance"><property name="visible">True</property><property name="can-focus">False</property><property name="halign">start</property><property name="tooltip-text" translatable="yes">Stance to adopt while looting. Off leaves your current stance alone. Forward is a common AFK-hunt choice.</property><items><item translatable="yes" id="off">Loot stance: Off</item><item translatable="yes" id="offensive">Loot stance: Offensive</item><item translatable="yes" id="advanced">Loot stance: Advanced</item><item translatable="yes" id="forward">Loot stance: Forward</item><item translatable="yes" id="neutral">Loot stance: Neutral</item><item translatable="yes" id="guarded">Loot stance: Guarded</item><item translatable="yes" id="defensive">Loot stance: Defensive</item></items>
+         </object><packing><property name="left-attach">0</property><property name="top-attach">0</property></packing></child><child><object class="GtkCheckButton" id="loot_phase"><property name="label" translatable="yes">Phase boxes(?)</property><property name="visible">True</property><property name="can-focus">True</property><property name="receives-default">False</property><property name="halign">start</property><property name="draw-indicator">True</property></object><packing><property name="left-attach">0</property><property name="top-attach">1</property>
+         </packing></child><child><object class="GtkCheckButton" id="use_disk"><property name="label" translatable="yes">Disking(?)</property><property name="visible">True</property><property name="can-focus">True</property><property name="receives-default">True</property><property name="halign">start</property><property name="draw-indicator">True</property></object><packing><property name="left-attach">1</property><property name="top-attach">0</property></packing></child><child><object class="GtkCheckButton" id="track_full_sacks"><property name="label" translatable="yes">Track Full Containers(?)</property><property name="visible">True</property><property name="can-focus">True</property><property name="receives-default">False</property><property name="halign">start</property><property name="draw-indicator">True</property>
+         </object><packing><property name="left-attach">1</property><property name="top-attach">3</property></packing></child><child><object class="GtkCheckButton" id="favor_left"><property name="label" translatable="yes">Favor Left(?)</property><property name="visible">True</property><property name="can-focus">True</property><property name="receives-default">False</property><property name="halign">start</property><property name="draw-indicator">True</property></object><packing><property name="left-attach">0</property><property name="top-attach">2</property>
+@@ -1360,7 +1379,7 @@
+       def set_tooltips
+         # Looting Tab
+         self['loot_types:breakable'].tooltip_text = "Porous chunks of rock released as part of The Hive 12/17/2023"
+-        self['loot_defensive'].tooltip_text = "Swap to defensive before looting if there are hostile enemies."
++        self['loot_stance'].tooltip_text = "Stance to adopt while looting. Off leaves your current stance alone.\nAlso set via: #{$lich_char}#{Script.current.name} settings loot_stance forward"
+         self['loot_phase'].tooltip_text = "Phases boxes if you are able to."
+         self['favor_left'].tooltip_text = "Will favor left hand to stow for looting (defaults to right)"
+         self['log_unlootables'].tooltip_text = "This will log items you can not loot into the Unlootable section (Loot Grid) otherwise it will ignore that section."
+@@ -1944,7 +1963,30 @@
+ end
+ 
+ module ELoot # Profile loading/saving and settings
++  # BEGIN loot_stance patch
++  LOOT_STANCE_PERCENTS = {
++    'offensive' => 0,
++    'advanced'  => 20,
++    'forward'   => 40,
++    'neutral'   => 60,
++    'guarded'   => 80,
++    'defensive' => 100
++  }.freeze
++  LOOT_STANCE_NAMES = (['off'] + LOOT_STANCE_PERCENTS.keys).freeze
++  # END loot_stance patch
++
+   def self.coerce_setting_value(setting_name, default, input)
++    # BEGIN loot_stance patch
++    if setting_name == :loot_stance
++      value = input.join(" ").strip.downcase
++      unless LOOT_STANCE_NAMES.include?(value)
++        ELoot.msg(type: "error", text: %{loot_stance must be one of: #{LOOT_STANCE_NAMES.join(', ')} (got "#{value}")})
++        exit
++      end
++      return value
++    end
++    # END loot_stance patch
++
+     case default
+     when TrueClass, FalseClass
+       fix_option = { 'on' => true, 'true' => true, 'yes' => true, 'off' => false, 'false' => false, 'no' => false }
+@@ -1982,8 +2024,19 @@
+     ELoot.migrate_overflow_settings(ELoot.data.settings)
+   end
+ 
++  # BEGIN loot_stance patch
++  def self.migrate_loot_stance(settings)
++    return false if settings.key?(:loot_stance)
++
++    settings[:loot_stance] = settings[:loot_defensive] ? 'defensive' : 'off'
++    ELoot.msg(text: " Migrated loot_defensive=#{settings[:loot_defensive]} to loot_stance=#{settings[:loot_stance]}")
++    true
++  end
++  # END loot_stance patch
++
+   def self.migrate_overflow_settings(settings)
+     migrated_settings = ELoot.seed_missing_defaults(settings)
++    migrated_settings = true if ELoot.migrate_loot_stance(settings)
+     # Migration helper: Convert old overflow_container and secondary_overflow to new overflow_containers format
+     if settings.key?(:overflow_container) || settings.key?(:secondary_overflow)
+       containers = []
+@@ -2045,6 +2098,7 @@
+       :loot_phase                      => false,
+       :use_disk                        => true,
+       :loot_defensive                  => false,
++      :loot_stance                     => "off",
+       :coin_hand_name                  => "",
+       :sigil_determination_on_fail     => false,
+       :charm_name                      => "",
+@@ -2515,7 +2569,7 @@
+     ELoot.data.right_hand = GameObj.right_hand
+     ELoot.data.left_hand = GameObj.left_hand
+ 
+-    ELoot.change_stance(100) if ELoot.data.settings[:loot_defensive]
++    ELoot.apply_loot_stance!
+ 
+     Loot.skin if ELoot.data.settings[:skin_enable]
+     Loot.search
+@@ -2773,6 +2827,8 @@
+     rows << [{ value: "Single value settings (on/off, number, or plain text)", alignment: :left }]
+     rows << ["  #{$lich_char}#{Script.current.name} settings gambling_kit_lock on"]
+     rows << ["  #{$lich_char}#{Script.current.name} settings sell_appraise_gemshop 5000"]
++    rows << ["  #{$lich_char}#{Script.current.name} settings loot_stance forward"]
++    rows << ["  #{$lich_char}#{Script.current.name} settings loot_stance off|offensive|advanced|forward|neutral|guarded|defensive"]
+     rows << :separator
+     rows << [{ value: "List/array settings replace the ENTIRE list -- there is no CLI append or remove", alignment: :left }]
+     rows << [{ value: "One word per entry, space separated:", alignment: :left }]
+@@ -3000,11 +3056,39 @@
+     return [GameObj.right_hand, GameObj.left_hand].find { |hand| hand.type =~ /box/ }
+   end
+ 
+-  def self.change_stance(new_stance)
+-    ELoot.msg(type: "debug", text: "new_stance: #{new_stance}")
++  # BEGIN loot_stance patch
++  def self.loot_stance_name
++    name = ELoot.data.settings[:loot_stance].to_s.strip.downcase
++    return name if LOOT_STANCE_NAMES.include?(name)
++    # Legacy checkbox profiles that predate loot_stance.
++    return 'defensive' if ELoot.data.settings[:loot_defensive]
++    'off'
++  end
++
++  def self.apply_loot_stance!
++    name = loot_stance_name
++    return if name == 'off' || name.empty?
++
++    pct = LOOT_STANCE_PERCENTS[name]
++    return unless pct
++
++    change_stance(pct, exact: true)
++  end
++  # END loot_stance patch
++
++  def self.change_stance(new_stance, exact: false)
++    ELoot.msg(type: "debug", text: "new_stance: #{new_stance} exact: #{exact}")
+     return if Effects::Debuffs.active?("Frenzy") || dead?
+-    return if Char.percent_stance >= new_stance
+-    return if new_stance == 100 && Char.percent_stance >= 80
++
++    # exact: true is used by selectable loot_stance so Forward/etc. apply even
++    # when already more defensive. Default (exact: false) keeps prior "only
++    # move more defensive" behaviour for other callers.
++    if exact
++      return if Char.percent_stance == new_stance
++    else
++      return if Char.percent_stance >= new_stance
++      return if new_stance == 100 && Char.percent_stance >= 80
++    end
+ 
+     stances = {
+       0   => 'offensive',
+@@ -5967,7 +6051,7 @@
+         next if thing.name =~ /child/
+         next if thing.status =~ /gone/
+ 
+-        ELoot.change_stance(100) if ELoot.data.settings[:loot_defensive]
++        ELoot.apply_loot_stance!
+ 
+         if ELoot.data.settings[:use_bloodbands]
+           fput "raise ##{ELoot.data.blood_band.id} at ##{thing.id}"
+@@ -6017,8 +6101,8 @@
+         end
+       end
+ 
+-      # if the setting is on always end in defensive
+-      ELoot.change_stance(100) if ELoot.data.settings[:loot_defensive]
++      # if a loot stance is selected, end the search loop in that stance
++      ELoot.apply_loot_stance!
+     end
+ 
+     def self.skin_obj_types(objs, type) # skins type (blunt/dagger) group of dead critters

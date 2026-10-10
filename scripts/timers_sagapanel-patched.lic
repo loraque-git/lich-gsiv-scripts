@@ -1,0 +1,2714 @@
+=begin
+  timers_sagapanel.lic
+
+  Saga-only panel for live Active Spells, Buffs, Debuffs, and Cooldowns.
+  Durations use Saga's h:mm:ss/m:ss format, and each category has its own
+  icon. Entries and category headers are clickable.
+
+  A watch list can show missing spells above or below the live categories.
+  Red-triangle actions hide active entries or remove missing entries from the
+  watch list. Track-all operations scan every active effect regardless of
+  display hiding.
+
+  Optional Society, Offense, Defense, and Both categories pull matching
+  active spells, buffs, and debuffs from their normal sections. Cooldowns
+  always remain in Cooldowns. Offense/Defense classification uses the
+  spell's parsed bonus data; spell 1611 is treated as Offense and converts
+  its Combat Maneuvers bonus to half-value pAS.
+
+  Recast macros: *tm <#> <command chain> registers a ">"-separated chain of
+  commands against a spell number, e.g.
+    *tm 509 chain 1 store all > get white crystal > rub my white crystal > stow my white crystal
+  Once registered, that spell's name in Missing Spells becomes clickable
+  (instead of plain text) and runs the whole chain, one command per ">"
+  step, with a short pause between each. *tm macros lists what's
+  registered; *tm clearmacro <#> removes one. Handy for spells that need
+  more than just casting to bring back up (e.g. a prep item to rub after
+  recasting).
+
+  Usage:
+    ;timers_sagapanel.lic   - Start the panel
+
+  Commands:
+    *tm track <name or #>    - Watch a spell; shows in Missing Spells
+                                whenever it isn't currently active (same as
+                                clicking its name in a live category)
+    *tm track all              - Watch everything currently active across
+                                all 4 categories (the same set "spell
+                                active" reports), wherever Spell[] can
+                                resolve it
+    *tm untrack <name or #>  - Stop watching a spell (same as clicking the
+                                red triangle on a Missing Spells entry)
+    *tm untrack all            - Stop watching everything
+    *tm tracked               - List your watched spells, grouped under
+                                spell circle headers (Minor Spiritual,
+                                Empath Base, etc.), number first within
+                                each group (e.g. "218 Spirit Servant")
+    *tm diag                   - Dump Buffs/Active Spells dialog keys and
+                                tracked/missing to Story (debug)
+    *tm ignore <name>         - Hide a name from the live categories (same
+                                as clicking the red triangle on a live entry)
+    *tm unignore <name>       - Un-hide a previously ignored name
+    *tm unignore all           - Un-hide everything currently hidden
+    *tm ignored                - List currently hidden names, grouped by
+                                spell circle the same way as *tm tracked
+                                (anything that isn't a real spell lists
+                                under "Other")
+    *tm missing top            - Show Missing Spells above the 4 categories
+    *tm missing bottom         - Show Missing Spells below the 4 categories
+    *tm sort az                - Sort each category alphabetically, A-Z
+    *tm sort za                - Sort each category alphabetically, Z-A
+    *tm sort dhigh              - Sort each category by duration, highest
+                                first
+    *tm sort dlow                - Sort each category by duration, lowest
+                                first
+    *tm display name           - Panel rows show just the name (default)
+    *tm display number          - Panel rows show just the spell number
+                                (falls back to the name for anything
+                                Spell[] can't resolve, e.g. most buffs/
+                                debuffs)
+    *tm display both             - Panel rows show number and name
+                                together (same fallback as above)
+    *tm pheaders                 - Toggle spell circle sub-headers within
+                                each of the 4 live categories in the panel
+                                itself (off by default), same grouping as
+                                *tm tracked/*tm ignored -- anything that
+                                isn't a real spell lists under "Other"
+    *tm headers                  - Toggle the main "<icon> Category -
+                                Click to Track All" header row per category
+                                (on by default). Each row's own icon still
+                                identifies its category either way.
+    *tm cat o / *tm cat offense   - Toggle pulling net-positive-offense
+                                active spells/buffs/debuffs into their own
+                                Offense category (off by default). Cooldowns
+                                are never pulled -- they always stay in
+                                Cooldowns, with the cooldown icon.
+    *tm cat d / *tm cat defense   - Same, for net-positive-defense, into
+                                Defense
+    *tm cat b / *tm cat both      - Same, for anything granting both, into
+                                Both
+    *tm bonuses                  - Toggle nonzero bonus details under rows.
+                                Known formulas include spell bonuses, Rage
+                                Armor, Surge of Blessings, Item Supercharger,
+                                Brine of the Rusalka, and spell 1611.
+    *tm setbonus <name>|<text>   - Pin a fixed bonus sub-line for a buff
+                                that has no known formula, e.g.
+                                *tm setbonus Soul Crusher|AS +25
+                                The "|" can be left out entirely as long
+                                as <name> is currently showing somewhere
+                                in the panel (or was already tracked/set
+                                before) -- it's matched against those
+                                known names to find where the name ends
+                                and the bonus text begins, e.g.
+                                *tm setbonus Soul Crusher AS +25
+                                "*tm set bonus ..." (with a space) also
+                                works, same as "*tm setbonus ...".
+    *tm clearbonus <name>        - Remove a pinned bonus set with setbonus
+                                ("*tm clear bonus <name>" also works)
+    *tm enchant <#>              - Set your wielded weapon's total enchant
+                                bonus (Lich can't read this off the item).
+                                The full value counts toward pAS in Grand
+                                Totals unconditionally (a weapon's
+                                enchant is a standing property, not a
+                                buff); if Item Supercharger is currently
+                                active, its own +half-of-that shows up
+                                separately via *tm bonuses/the "From
+                                Buffs/Spells" totals, since that part IS
+                                conditional on the buff being up
+    *tm zelnorn <#>              - Set a Zelnorn (or similar) set bonus
+                                with no known formula -- adds that flat
+                                amount to BOTH bAS and pAS in Grand
+                                Totals until changed again
+    *tm gemstone <name> <N label[, N label...]>
+                                Add a NAMED always-on bonus (gemstones,
+                                set bonuses, anything with no formula
+                                Lich can compute) to Grand Totals, e.g.
+                                *tm gemstone Journey Tactician 10 pAS
+                                Unlike *tm zelnorn, multiple gemstones
+                                can coexist (each tracked by its own
+                                name) and can grant any label(s), not
+                                just bAS/pAS.
+    *tm gemstones                - List all gemstones currently set
+    *tm cleargemstone <name>     - Remove a gemstone set with *tm gemstone
+    *tm totalscheck              - Show bonus sources, subtotals, character
+                                contributions, Casting Strength breakdowns,
+                                and Grand Totals in Story.
+    *tm totals                   - Toggle From Buffs/Spells and Grand Totals.
+                                Grand Totals include live STR/DEX, weapon
+                                skills, Combat Maneuvers, enchant, Zelnorn,
+                                gemstone contributions, and Casting Strength
+                                (per gswiki.play.net/Casting_strength) for
+                                every spell circle you have ranks in --
+                                minS/majS/minE/majE/minM/majM for circles
+                                that split minor/major, elemCS/spirCS/
+                                sorcCS (grouped by casting stat) for the
+                                base circles that don't, calculated
+                                automatically like every other Grand
+                                Total, no separate command needed.
+    *tm bars                     - Toggle countdown bars below each row.
+    *tm <#> <command chain>   - Register a recast macro for a spell number
+                                (see above); makes its name in Missing
+                                Spells clickable
+    *tm run <#>                 - Run a spell's registered macro (same as
+                                clicking its name in Missing Spells)
+    *tm clearmacro <#>          - Remove a spell's registered macro
+    *tm macros                  - List all registered macros
+    *tm width <N>                - Set the duration column width (gap
+                                before the red triangle) -- mirrors *exp
+                                width in exp_sagapanel.lic; enter the
+                                same N in both for a matching look.
+                                Default 35.
+    *tm hidearrows                - Toggle every red hide-triangle link
+                                off/on (missing-spell untrack, row ignore,
+                                totals ignore) -- a pure declutter toggle;
+                                doesn't change what's tracked/ignored,
+                                just whether the triangles themselves
+                                render. Mirrors *exp hidearrows in
+                                exp_sagapanel.lic.
+    *tm trandest <0-10>           - Set your Transcend Destiny ascension
+                                rank. Each rank adds +1 to a "phantom
+                                level" used only by the Casting Strength
+                                calc (Grand Total elemCS/spirCS/sorcCS/
+                                minE/majE/minS/majS/minM/majM rows) --
+                                rank 1 casts as level 101, rank 10 as
+                                level 110, matching every level-dependent
+                                piece of that formula (base, and the
+                                primary/secondary circle-bonus tiers).
+                                Doesn't affect anything else in this
+                                script. Default 0.
+
+  Tags: saga, frontend, mod, window, spells, buffs, debuffs, cooldowns
+  Author: Claude, RuseofFools
+  Contributors: loraque (loraque@gmail.com)
+  Version: 1.6.5
+  Recently changed:
+    1.6.5 - PATCH (loraque): 1.6.4 froze all long timers at 10:00:00
+            (one digit too wide, overlapped the hide icon). Cap only
+            dialog-sourced rows, and at 9:59:59. Spell.active rows
+            (Focus Barrier, Slippery Mind) tick again.
+    1.6.4 - PATCH (loraque): Meditative Resistance duration no longer
+            dumps a huge digit string. Dialog rows use the same cap as
+            ActiveSpell / Focus Barrier / Slippery Mind: remaining over
+            5 hours displays as ~10:00:00 (9:59:59).
+    1.6.3 - PATCH (loraque): 1.6.2 still missed this. MED CRUSH appears,
+            *tm track reports 9062, then the live row vanishes and Missing
+            lists it. ActiveSpell.putdown happens because dialog text is
+            not an exact Spell.name, and the effect is often only an
+            integer id on the Active Spells dialog (not Buffs strings).
+            :spells now also draws Effects::Spells dialog rows; missing
+            treats 9060-9074 / any "Meditative Resistance" dialog string
+            as present. *tm diag dumps dialog keys to Story.
+            Diff: scripts/patches/timers_sagapanel-1.6.3-missing-meditative-resistance.patch
+    1.6.2 - PATCH (loraque): 1.6.1 was not enough. After *tm track, the
+            live Meditative Resistance (crush) row vanished and Missing
+            listed 9062 again. The Buffs dialog often stores this as
+            integer 9062 with no matching string key; category_entries
+            skipped non-String keys, and live_effect_named? only compared
+            names. Now dialog integer ids resolve via Spell[id], and
+            missing_entries treats spell.num in Spells/Buffs/Debuffs/
+            Cooldowns as present. Revert: live_effect?, dialog_effect_rows,
+            and the missing_entries next-nil. Diff:
+            scripts/patches/timers_sagapanel-1.6.2-missing-meditative-resistance.patch
+    1.6.1 - PATCH (loraque): Missing Spells no longer lists a tracked
+            effect that is already live by exact name in Buffs/Debuffs/
+            Cooldowns/Spell.active. Superseded by 1.6.2.
+    1.6.0 - Added *tm trandest <0-10>: sets your Transcend Destiny
+            ascension rank, per the user -- each rank raises a "phantom
+            level" by +1 (rank 1 = level 101, rank 10 = level 110) used
+            by cs_effective_level for every level-dependent piece of the
+            Casting Strength formula (base, primary/secondary circle-
+            bonus tiers), not just the Level*3 term. Only affects CS;
+            nothing else in this script reads level through this path.
+    1.5.0 - Added *tm hidearrows: toggles every red hide-triangle link
+            off/on (missing-spell untrack, row ignore, totals ignore)
+            without touching what those triangles would have hidden --
+            a pure declutter toggle. Persisted alongside every other
+            *tm setting. Mirrors exp_sagapanel.lic's *exp hidearrows.
+    1.4.0 - Per the user: Grand Total CS rows now use short labels instead
+            of "CS (Circle Name)" -- minS/majS/minE/majE/minM/majM for the
+            circles that split minor/major, and the existing elemCS/
+            spirCS/sorcCS labels (grouped by casting stat) for the base
+            circles that don't (Wizard/Bard -> elemCS; Cleric/Ranger/
+            Empath/Paladin -> spirCS; Sorcerer -> sorcCS). This
+            deliberately reuses bonus_totals' own label names rather than
+            avoiding them like 1.3.0 did -- "Grand Total sorcCS" is now
+            the full Sorcerer CS number itself, not a separate row next to
+            the raw buff bonus. totals_entries skips adding the raw
+            bonus_totals amount for any label casting_strength_
+            contributions also produces, so it still isn't double-counted
+            -- it's simply folded into the CS number instead of shown
+            twice. No base circle uses plain Logic, so "mentCS" is never
+            produced by a circle and still only ever reflects raw buff
+            bonuses, unchanged.
+    1.3.0 - Casting Strength (per gswiki.play.net/Casting_strength's
+            published formula: CS = Level*3 + round(primary circle
+            bonus) + ceiling(secondary circle bonuses) + round(stat
+            bonus) + round(spell effects)) is now calculated
+            automatically as part of *tm totals' Grand Totals, one
+            "CS (Circle Name)" row per spell circle you have ranks in --
+            no separate command; the earlier standalone *tm cs was
+            removed in favor of this. Circle ranks come from
+            Lich::Gemstone::Spells, the casting stat's live bonus from
+            Lich::Gemstone::Stats.<stat>.enhanced.bonus (same already-
+            validated source *tm totalscheck uses), and "spell effects"
+            reuses bonus_totals' own elemCS/spirCS/mentCS/sorcCS totals
+            (Elemental Targeting, etc.) instead of re-deriving active-buff
+            CS bonuses from scratch -- these CS rows never reuse those
+            same label names, though, since that raw spell-effects number
+            is an INPUT to the CS formula, not the CS total itself; double-
+            counting it under one shared label would be wrong. Secondary-
+            circle scoping is a deliberate generalization of the wiki's
+            literal "Circle A/B" (exactly two slots): every OTHER circle
+            the character has any rank in counts as secondary, since most
+            characters only ever have ranks in their own profession's
+            small circle set anyway -- see the comment on
+            casting_strength_for for when this could overcount. Paladin's
+            casting stat isn't listed on that wiki page; Wisdom is used
+            as the best-supported guess.
+    1.1.0 - *tm width <N> makes the duration-column/triangle gap
+            user-adjustable at runtime instead of a fixed DURATION_WIDTH
+            constant, and mirrors exp_sagapanel.lic's *exp width so the
+            same N gives both panels the same look.
+=end
+
+no_kill_all
+
+require 'yaml'
+
+module Timers
+  extend self
+  include Lich::Common if defined?(Lich::Common)
+
+  ROW_HEIGHT = 18
+  ICON_WIDTH = 16
+  NAME_LEFT = 18
+  NAME_WIDTH = 164
+  # 4 characters (~7px each) tighter than the original 210, so the duration
+  # sits closer to the name instead of floating in a wide gap.
+  DURATION_LEFT = 182
+  # Tight enough for "h:mm:ss" (7 chars, the longest format this ever
+  # shows) plus a hair of padding -- used to be a frozen 80, leaving a wide
+  # dead gap before the removal triangle since real duration text rarely
+  # fills that much space. Now user-adjustable (*tm width <N>, mirrors
+  # *exp width in exp_sagapanel.lic -- entering the same N in both gives
+  # both panels the same gap-before-the-triangle look), so this is just
+  # the default, not a hard limit -- see duration_width/remove_left below.
+  DEFAULT_DURATION_WIDTH = 38
+  REMOVE_WIDTH = 20
+
+  # Society circles pulled out of Buffs into their own category -- zombie
+  # for Order of Voln, troll for Guardians of Sunfist, vampire for Council
+  # of Light. Keyed by circle number (spell.num / 100), same scheme
+  # Lich::Gemstone::Spells.get_circle_name expects.
+  SOCIETY_ICONS = {
+    98 => "&#x1F9DF;", # Order of Voln
+    97 => "&#x1F9CC;", # Guardians of Sunfist
+    99 => "&#x1F9DB;"  # Council of Light
+  }.freeze
+  SOCIETY_HEADER_ICON = "&#x1F9DF;&#x1F9CC;&#x1F9DB;".freeze
+
+  # *tm cat o/d/b -- pulls anything that grants a net-positive offense
+  # and/or defense combat bonus out of its normal category and into its
+  # own, same idea as Society. Classification comes straight from the
+  # spell's own parsed bonus data (Spell#_bonus/lib/common/spell.rb, built
+  # from data/effect-list.xml), evaluated for the character's actual
+  # current bonus amounts via Spell's method_missing -- not a hardcoded
+  # name list, so it stays correct as ranks/gear change and covers any
+  # spell effect-list.xml has data for. -as/-cs bonus types are "makes you
+  # hit harder/more often" (offense); -ds/-td/dodging/block are "makes you
+  # get hit less/take less damage" (defense). Only counts a bonus if it's
+  # currently a net positive (a spell with a negative side-effect bonus,
+  # e.g. Spirit Barrier trading away some of your own AS for DS, isn't
+  # "offense" just because an offense-shaped bonus entry exists on it).
+  OFFENSE_BONUS_TYPES = %w[bolt-as physical-as damagefactor unarmed-af elemental-cs mental-cs sorcerer-cs spirit-cs asg].freeze
+  DEFENSE_BONUS_TYPES = %w[bolt-ds physical-ds dodging block elemental-td mental-td sorcerer-td spirit-td fof-offset].freeze
+
+  # One icon per category, used two ways: prefixed onto the header text
+  # (CATEGORY_LABELS) and shown standalone on the left of every row in that
+  # category, in the slot the removal X used to occupy -- so at a glance
+  # each row's category is identifiable without reading the header it's
+  # grouped under. :society is deliberately absent -- its row icon is
+  # resolved per-entry instead (see build_dialog), since it varies by which
+  # of the 3 societies that particular spell belongs to.
+  CATEGORY_ICONS = {
+    spells: "&#x2705;",
+    offense: "&#x1F5E1;&#xFE0F;",
+    defense: "&#x1F6E1;&#xFE0F;",
+    both: "&#x2696;&#xFE0F;",
+    buffs: "&#x2B06;&#xFE0F;",
+    debuffs: "&#x26A0;&#xFE0F;",
+    cooldowns: "&#x23F0;"
+  }.freeze
+  # Clickable (see build_dialog/UpstreamHook "*tm trackall") -- clicking a
+  # header attempts to Spell[] every name currently in that category and
+  # adds whichever resolve to real spells to the watch list in one go.
+  CATEGORY_LABELS = {
+    spells: "#{CATEGORY_ICONS[:spells]} Active Spells - Click to Track All",
+    offense: "#{CATEGORY_ICONS[:offense]} Offense - Click to Track All",
+    defense: "#{CATEGORY_ICONS[:defense]} Defense - Click to Track All",
+    both: "#{CATEGORY_ICONS[:both]} Both - Click to Track All",
+    society: "#{SOCIETY_HEADER_ICON} Society - Click to Track All",
+    buffs: "#{CATEGORY_ICONS[:buffs]} Buffs - Click to Track All",
+    debuffs: "#{CATEGORY_ICONS[:debuffs]} Debuffs - Click to Track All",
+    cooldowns: "#{CATEGORY_ICONS[:cooldowns]} Cooldown - Click to Track All"
+  }.freeze
+  # The 4 that read straight from Effects::*/Spell.active. :offense/
+  # :defense/:both/:society don't have a source of their own -- they're
+  # populated by pulling matching entries out of these 4 (see
+  # category_entries/active_names).
+  NORMAL_CATEGORIES = [:spells, :buffs, :debuffs, :cooldowns].freeze
+  # :offense/:defense/:both only actually populate when their *tm cat
+  # toggle is on (see classify_entry); :society always does. Society sorts
+  # above Buffs specifically per how this was asked for; offense/defense/
+  # both sort right after Active Spells since they're closely related to it.
+  BUCKET_CATEGORIES = [:offense, :defense, :both, :society].freeze
+  CATEGORY_ORDER = [:spells, :offense, :defense, :both, :society, :buffs, :debuffs, :cooldowns].freeze
+
+  MISSING_ICON = "&#x2757;".freeze
+  # Down-pointing red triangle -- replaces the old X entirely, moved to the
+  # far right of each row (after the duration) instead of the left, since
+  # the left slot now holds the category icon.
+  REMOVE_ICON = "&#x1F53B;".freeze
+  # *tm totals section, at the very bottom of the panel (see build_dialog).
+  TOTALS_ICON = "&#x1F4CA;".freeze
+  # *tm bars -- every row's bar fills relative to this same fixed
+  # ceiling (4h10m), not its own original duration, so a long buff and
+  # a short one read on one consistent scale (see render_row).
+  BARS_MAX_SECONDS = (4 * 3600) + (10 * 60)
+  BARS_CELL_COUNT  = 10
+  BARS_EMPTY_ICON  = "&#x2B1B;".freeze # black large square
+  # Filled-cell color shifts by remaining time, not by fill fraction --
+  # a nearly-full bar on a long buff still needs to visibly warn once
+  # THAT buff itself is about to run out.
+  BARS_GREEN_ICON  = "&#x1F7E9;".freeze # > 10 min left
+  BARS_YELLOW_ICON = "&#x1F7E8;".freeze # <= 10 min left, > 1:40 left
+  BARS_RED_ICON    = "&#x1F7E5;".freeze # <= 1:40 left
+  BARS_YELLOW_THRESHOLD_SECONDS = 10 * 60       # 10 min -- yellow tier's own refill window
+  BARS_RED_THRESHOLD_SECONDS    = (1 * 60) + 40 # 1:40 -- red tier's own refill window
+
+  # No "unless defined?" guard -- this module persists in Lich's Ruby
+  # process across script restarts (only killing Lich itself clears it), so
+  # a guard would freeze this constant at whatever shape it had the first
+  # time the script loaded this session. See the identical reasoning in
+  # effectsbar_sagapanel.lic.
+  SORT_MODES = %w[name_asc name_desc duration_asc duration_desc].freeze
+  # *tm display name/number/both -- how every row's name column renders.
+  # "number"/"both" fall back to the plain name for anything Spell[]
+  # can't resolve to a real spell number (most buffs/debuffs aren't
+  # spells), so nothing ever renders blank.
+  NAME_DISPLAYS = %w[name number both].freeze
+
+  ST_DEFAULT_SETTINGS = {
+    "timers" => {
+      "tracked"          => [],
+      "ignored"          => [],
+      "missing_position" => "top",
+      "sort_mode"        => "name_asc",
+      "name_display"     => "name",
+      "panel_headers"    => false,
+      "macros"           => {},
+      "category_headers" => true,
+      "cat_offense"      => false,
+      "cat_defense"      => false,
+      "cat_both"         => false,
+      "show_bonuses"     => false,
+      "manual_bonuses"   => {},
+      "weapon_enchant"   => 0,
+      "show_totals"      => false,
+      "show_bars"        => false,
+      "zelnorn_bonus"    => 0,
+      "gemstones"        => {},
+      "duration_width"   => DEFAULT_DURATION_WIDTH,
+      "hide_arrows"      => false,
+      "trandest_rank"    => 0
+    }
+  }
+  TRANDEST_MAX_RANK = 10
+
+  class << self
+    attr_accessor :tracked, :ignored, :missing_position, :sort_mode, :name_display, :panel_headers, :macros,
+                  :category_headers, :cat_offense, :cat_defense, :cat_both, :show_bonuses, :manual_bonuses,
+                  :weapon_enchant, :show_totals, :show_bars, :zelnorn_bonus, :gemstones, :duration_width,
+                  :hide_arrows, :trandest_rank
+  end
+
+  # Derived live from duration_width rather than a frozen constant, since
+  # *tm width can change duration_width at runtime.
+  def self.remove_left
+    DURATION_LEFT + duration_width + 2
+  end
+
+  def self.window_settings_path(name: Char.name)
+    base_dir = "#{$data_dir}#{XMLData.game}/#{name}"
+    Dir.mkdir("#{$data_dir}#{XMLData.game}") unless File.exist?("#{$data_dir}#{XMLData.game}")
+    Dir.mkdir(base_dir) unless File.exist?(base_dir)
+    File.join(base_dir, "lichwindows.yaml")
+  end
+
+  def self.load_window_settings
+    filename = Timers.window_settings_path
+    settings_hash = File.exist?(filename) ? YAML.load_file(filename) : {}
+    settings_hash = {} unless settings_hash.is_a?(Hash)
+    settings_hash["timers"] = Timers::ST_DEFAULT_SETTINGS["timers"].merge(settings_hash["timers"] || {})
+    settings_hash["timers"]["tracked"] = Array(settings_hash["timers"]["tracked"]).map(&:to_i).uniq
+    settings_hash["timers"]["ignored"] = Array(settings_hash["timers"]["ignored"]).map { |name| Timers.key(name) }.uniq
+    unless %w[top bottom].include?(settings_hash["timers"]["missing_position"])
+      settings_hash["timers"]["missing_position"] = "top"
+    end
+    unless Timers::SORT_MODES.include?(settings_hash["timers"]["sort_mode"])
+      settings_hash["timers"]["sort_mode"] = "name_asc"
+    end
+    unless Timers::NAME_DISPLAYS.include?(settings_hash["timers"]["name_display"])
+      settings_hash["timers"]["name_display"] = "name"
+    end
+    settings_hash["timers"]["panel_headers"] = !!settings_hash["timers"]["panel_headers"]
+    raw_macros = settings_hash["timers"]["macros"]
+    raw_macros = {} unless raw_macros.is_a?(Hash)
+    settings_hash["timers"]["macros"] = raw_macros.each_with_object({}) { |(num, cmd), acc| acc[num.to_i] = cmd.to_s }
+    settings_hash["timers"]["cat_offense"] = !!settings_hash["timers"]["cat_offense"]
+    settings_hash["timers"]["cat_defense"] = !!settings_hash["timers"]["cat_defense"]
+    settings_hash["timers"]["cat_both"] = !!settings_hash["timers"]["cat_both"]
+    settings_hash["timers"]["show_bonuses"] = !!settings_hash["timers"]["show_bonuses"]
+    raw_manual_bonuses = settings_hash["timers"]["manual_bonuses"]
+    raw_manual_bonuses = {} unless raw_manual_bonuses.is_a?(Hash)
+    # Re-key through Timers.key every load, same as "ignored" above -- so
+    # a bonus pinned before Timers.key started stripping "(N)" suffixes
+    # keeps matching a name whose trailing number has since changed,
+    # instead of going stale the moment it first ticks over.
+    settings_hash["timers"]["manual_bonuses"] = raw_manual_bonuses.each_with_object({}) { |(k, v), acc| acc[Timers.key(k)] = v.to_s }
+    settings_hash["timers"]["weapon_enchant"] = settings_hash["timers"]["weapon_enchant"].to_i
+    settings_hash["timers"]["show_totals"] = !!settings_hash["timers"]["show_totals"]
+    settings_hash["timers"]["show_bars"] = !!settings_hash["timers"]["show_bars"]
+    settings_hash["timers"]["zelnorn_bonus"] = settings_hash["timers"]["zelnorn_bonus"].to_i
+    raw_gemstones = settings_hash["timers"]["gemstones"]
+    raw_gemstones = {} unless raw_gemstones.is_a?(Hash)
+    settings_hash["timers"]["gemstones"] = raw_gemstones.each_with_object({}) do |(k, v), acc|
+      v = v.is_a?(Hash) ? v : {}
+      acc[Timers.key(k)] = { "name" => v["name"].to_s, "text" => v["text"].to_s }
+    end
+    width = settings_hash["timers"]["duration_width"].to_i
+    settings_hash["timers"]["duration_width"] = width.positive? ? width : Timers::DEFAULT_DURATION_WIDTH
+    settings_hash["timers"]["hide_arrows"] = !!settings_hash["timers"]["hide_arrows"]
+    trandest = settings_hash["timers"]["trandest_rank"].to_i
+    settings_hash["timers"]["trandest_rank"] = trandest.clamp(0, Timers::TRANDEST_MAX_RANK)
+    settings_hash
+  end
+
+  def self.set_duration_width!(width)
+    return false unless width.positive?
+
+    settings = load_window_settings
+    self.duration_width = width
+    settings["timers"]["duration_width"] = width
+    save_window_settings(settings)
+    true
+  end
+
+  # *tm hidearrows -- mirrors exp_sagapanel.lic's *exp hidearrows exactly:
+  # suppresses every red hide-triangle link (missing-spell untrack, row
+  # ignore, totals ignore) without touching what those triangles would
+  # have hidden -- purely a "declutter the panel" toggle, not the same
+  # thing as *tm ignore hiding individual rows.
+  def self.toggle_hide_arrows!
+    settings = load_window_settings
+    self.hide_arrows = !hide_arrows
+    settings["timers"]["hide_arrows"] = hide_arrows
+    save_window_settings(settings)
+    hide_arrows
+  end
+
+  # *tm trandest <0-10> -- the Transcend Destiny ascension ability. Each
+  # rank raises your "phantom level" by +1 (rank 1 casts as if level 101,
+  # rank 10 as if level 110), per the user -- used ONLY by the Casting
+  # Strength calc (cs_effective_level), nowhere else in this script, since
+  # every other level-dependent thing here (missing spells, macros, etc.)
+  # has nothing to do with CS.
+  def self.set_trandest_rank!(rank)
+    return false unless (0..Timers::TRANDEST_MAX_RANK).cover?(rank)
+
+    settings = load_window_settings
+    self.trandest_rank = rank
+    settings["timers"]["trandest_rank"] = rank
+    save_window_settings(settings)
+    true
+  end
+
+  def self.save_window_settings(settings)
+    File.write(Timers.window_settings_path, settings.to_yaml)
+  end
+
+  # Normalizes a name for identity purposes (ignored list, manual bonus
+  # overrides, ignored/track membership checks) -- strips everything from
+  # the first "(" onward. Some debuffs/buffs carry a value that varies
+  # over time right in the name text the game itself sends, e.g. the raw
+  # Debuffs dialog line is literally text="Hypothermia (90) 32 mins" (not
+  # just a trailing "(N)" -- there's freeform text *after* the paren
+  # too), and Surge of Blessings' stack count ticks "(1)" -> "(2)" -> "(3)".
+  # Stripping from the first "(" instead of anchoring a "(\d+)" pattern
+  # at the end handles both shapes, so hiding or pinning a bonus for one
+  # of these tracks the base name alone and keeps matching as the
+  # trailing text changes, instead of silently stopping the moment it
+  # first ticks over.
+  def self.key(name)
+    name.to_s.strip.sub(/\s*\(.*\z/, '').strip.downcase
+  end
+
+  def self.sanitize_xml(value)
+    value.to_s.gsub("&", "&amp;").gsub("<", "&lt;").gsub(">", "&gt;").gsub("'", "&apos;").gsub('"', "&quot;")
+  end
+
+  # Pushes plain-text lines into the Story window (streamWindow id='main')
+  # rather than wherever a bare respond/echo call from inside the
+  # UpstreamHook proc would otherwise land -- used for *tm totalscheck's
+  # (potentially long) debug report.
+  def self.send_to_story(lines)
+    body = Array(lines).map { |line| Timers.sanitize_xml(line) }.join("\r\n")
+    _respond("<pushStream id=\"main\"/>#{body}\r\n<popStream/>\r\n")
+  end
+
+  # Saga's own h:mm:ss / m:ss convention (see the exp/status report style
+  # duration formatting already used elsewhere) -- not effectsbar's
+  # single-dominant-unit "3h"/"45m" style, deliberately, to match the
+  # native Active Spells/Cooldowns dialog this panel is modeled on.
+  def self.format_duration(seconds)
+    return "" if seconds.nil? || seconds <= 0
+
+    total = seconds.to_i
+    hours = total / 3600
+    minutes = (total % 3600) / 60
+    secs = total % 60
+
+    hours > 0 ? format("%d:%02d:%02d", hours, minutes, secs) : format("%d:%02d", minutes, secs)
+  end
+
+  # 10-second buckets for duration sorting (see category_entries) --
+  # Float::INFINITY (indefinite-duration entries) can't be floored, so it's
+  # passed through as-is; it already sorts as the "highest" bucket either
+  # way.
+  def self.duration_bucket(seconds)
+    return Float::INFINITY if seconds.infinite?
+
+    (seconds / 10.0).floor
+  end
+
+  # PATCH 1.6.5: dialog-only cap. 9:59:59 fits the duration column;
+  # 10:00:00 overlapped the hide triangle. Frozen display is fine for
+  # indefinite XML; do not use this on Spell.active rows that should tick.
+  DIALOG_CAP_SECONDS = (9 * 3600) + (59 * 60) + 59
+
+  def self.capped_remaining(seconds)
+    return seconds if seconds.nil?
+    return DIALOG_CAP_SECONDS if seconds.respond_to?(:infinite?) && seconds.infinite?
+    return seconds if seconds <= 0
+    seconds > (300 * 60) ? DIALOG_CAP_SECONDS : seconds
+  end
+
+  def self.set_missing_position!(position)
+    return false unless %w[top bottom].include?(position)
+
+    settings = load_window_settings
+    self.missing_position = position
+    settings["timers"]["missing_position"] = position
+    save_window_settings(settings)
+    true
+  end
+
+  def self.set_sort_mode!(mode)
+    return false unless SORT_MODES.include?(mode)
+
+    settings = load_window_settings
+    self.sort_mode = mode
+    settings["timers"]["sort_mode"] = mode
+    save_window_settings(settings)
+    true
+  end
+
+  def self.set_name_display!(mode)
+    return false unless NAME_DISPLAYS.include?(mode)
+
+    settings = load_window_settings
+    self.name_display = mode
+    settings["timers"]["name_display"] = mode
+    save_window_settings(settings)
+    true
+  end
+
+  # What a row actually shows for a given entry name, per *tm display. Falls
+  # back to the plain name whenever Spell[] can't resolve it (most buffs/
+  # debuffs/cooldowns aren't real spells), so "number"/"both" never render
+  # a blank row.
+  def self.display_text(name)
+    case name_display
+    when "number"
+      spell = Spell[name]
+      spell ? spell.num.to_s : name
+    when "both"
+      spell = Spell[name]
+      spell ? "#{spell.num} #{name}" : name
+    else
+      name
+    end
+  rescue StandardError
+    name
+  end
+
+  def self.toggle_panel_headers!
+    settings = load_window_settings
+    self.panel_headers = !panel_headers
+    settings["timers"]["panel_headers"] = panel_headers
+    save_window_settings(settings)
+    panel_headers
+  end
+
+  # *tm headers -- the main "<icon> Category - Click to Track All" header
+  # row per category (default on). Distinct from *tm pheaders, which is the
+  # spell-circle sub-headers. Each row's own icon (leftmost column) still
+  # identifies its category either way, so turning this off just removes
+  # the header text/click-to-track-all row, not the per-row identification.
+  def self.toggle_category_headers!
+    settings = load_window_settings
+    self.category_headers = !category_headers
+    settings["timers"]["category_headers"] = category_headers
+    save_window_settings(settings)
+    category_headers
+  end
+
+  def self.toggle_cat_offense!
+    settings = load_window_settings
+    self.cat_offense = !cat_offense
+    settings["timers"]["cat_offense"] = cat_offense
+    save_window_settings(settings)
+    cat_offense
+  end
+
+  def self.toggle_cat_defense!
+    settings = load_window_settings
+    self.cat_defense = !cat_defense
+    settings["timers"]["cat_defense"] = cat_defense
+    save_window_settings(settings)
+    cat_defense
+  end
+
+  def self.toggle_cat_both!
+    settings = load_window_settings
+    self.cat_both = !cat_both
+    settings["timers"]["cat_both"] = cat_both
+    save_window_settings(settings)
+    cat_both
+  end
+
+  def self.toggle_bonuses!
+    settings = load_window_settings
+    self.show_bonuses = !show_bonuses
+    settings["timers"]["show_bonuses"] = show_bonuses
+    save_window_settings(settings)
+    show_bonuses
+  end
+
+  def self.toggle_totals!
+    settings = load_window_settings
+    self.show_totals = !show_totals
+    settings["timers"]["show_totals"] = show_totals
+    save_window_settings(settings)
+    show_totals
+  end
+
+  def self.toggle_bars!
+    settings = load_window_settings
+    self.show_bars = !show_bars
+    settings["timers"]["show_bars"] = show_bars
+    save_window_settings(settings)
+    show_bars
+  end
+
+  # *tm setbonus <name>|<text> -- pins a fixed bonus sub-line for a name
+  # that never carries effect-list.xml bonus data (an artifact/vissi
+  # effect the game itself doesn't publish a formula for, e.g. Soul
+  # Crusher or Lumnis' Enlightenment). Checked before NAME_BONUS_PROCS and
+  # the normal Spell[] lookup, so it always wins if set.
+  def self.set_manual_bonus!(name, text)
+    settings = load_window_settings
+    self.manual_bonuses = manual_bonuses.merge(Timers.key(name) => text)
+    settings["timers"]["manual_bonuses"] = manual_bonuses
+    save_window_settings(settings)
+  end
+
+  def self.clear_manual_bonus!(name)
+    key = Timers.key(name)
+    return false unless manual_bonuses.key?(key)
+
+    settings = load_window_settings
+    self.manual_bonuses = manual_bonuses.reject { |k, _v| k == key }
+    settings["timers"]["manual_bonuses"] = manual_bonuses
+    save_window_settings(settings)
+    true
+  end
+
+  # Every name currently showing anywhere in the panel (all 4 normal
+  # categories -- bucket categories are just a subset of these, so no
+  # need to scan them separately), plus anything already tracked or
+  # already manually-bonused. What *tm setbonus matches against to find
+  # where the name ends and the bonus text begins when no "|" is given.
+  def self.known_entry_names
+    names = NORMAL_CATEGORIES.flat_map { |c| Timers.raw_category_entries(c).map { |name, _d, _s| name } }
+    names += manual_bonuses.keys
+    names += tracked.filter_map { |n| Spell[n]&.name }
+    names.compact.uniq
+  rescue StandardError
+    []
+  end
+
+  # Splits "<name> <text>" (no separator) into [name, text] by matching
+  # the longest known/currently-active name that prefixes rest, so
+  # *tm setbonus doesn't need an explicit "|" as long as the buff is
+  # currently showing in the panel (or was tracked/set before). Requires
+  # a word boundary right after the matched name (whitespace, comma, or
+  # end of string) so "Bulwark" can't wrongly match inside "Bulwark of
+  # Souls". Returns nil if nothing known prefixes rest.
+  def self.split_name_and_text(rest)
+    known_entry_names.uniq.sort_by { |n| -n.length }.each do |candidate|
+      next unless rest.downcase.start_with?(candidate.downcase)
+
+      remainder = rest[candidate.length..-1].to_s
+      next unless remainder.empty? || remainder[0] =~ /[\s,]/
+
+      return [candidate, remainder.strip]
+    end
+    nil
+  rescue StandardError
+    nil
+  end
+
+  # *tm enchant <N> -- the wielded weapon's total enchant bonus. Lich has
+  # no way to read this off the item itself, so it's set once by hand and
+  # reused by Item Supercharger's own formula below (half of it, as Phys
+  # AS) until changed again (e.g. after swapping weapons).
+  def self.set_weapon_enchant!(value)
+    settings = load_window_settings
+    self.weapon_enchant = value.to_i
+    settings["timers"]["weapon_enchant"] = weapon_enchant
+    save_window_settings(settings)
+    weapon_enchant
+  end
+
+  # *tm zelnorn <N> -- a Zelnorn (or similar) set bonus with no formula
+  # Lich can compute on its own, added flat and equally to BOTH bAS and
+  # pAS in Grand Totals until changed again.
+  def self.set_zelnorn_bonus!(value)
+    settings = load_window_settings
+    self.zelnorn_bonus = value.to_i
+    settings["timers"]["zelnorn_bonus"] = zelnorn_bonus
+    save_window_settings(settings)
+    zelnorn_bonus
+  end
+
+  # *tm gemstone <name> <text> -- a named, always-on character-level
+  # bonus (gemstones, set bonuses, anything else with no formula Lich can
+  # compute) added to Grand Totals unconditionally, same idea as
+  # *tm zelnorn but multiple can coexist since each is keyed by its own
+  # name. <text> is parsed the same "N label[, N label...]" way as
+  # bonus_summary's own output (see BONUS_LINE_RE) when folding it into
+  # Grand Totals.
+  def self.set_gemstone!(name, text)
+    settings = load_window_settings
+    self.gemstones = gemstones.merge(Timers.key(name) => { "name" => name.to_s.strip, "text" => text.to_s.strip })
+    settings["timers"]["gemstones"] = gemstones
+    save_window_settings(settings)
+  end
+
+  def self.clear_gemstone!(name)
+    key = Timers.key(name)
+    return false unless gemstones.key?(key)
+
+    settings = load_window_settings
+    self.gemstones = gemstones.reject { |k, _v| k == key }
+    settings["timers"]["gemstones"] = gemstones
+    save_window_settings(settings)
+    true
+  end
+
+  # Abbreviation shown for each effect-list.xml bonus type in the *tm
+  # bonuses sub-line -- lifted directly from bonuses.lic's own labels
+  # (";bonuses"), so the codes read the same in both places: bAS/pAS,
+  # bDS/pDS, elemCS/mentCS/spirCS/sorcCS, elemTD/mentTD/spirTD/sorcTD,
+  # str, dodge, con, health, CM, UAF, AsG. damagefactor/block are percent
+  # values (see bonus_summary below) rather than flat +N, same as there.
+  BONUS_ABBREVIATIONS = {
+    "bolt-as"           => "bAS",
+    "physical-as"       => "pAS",
+    "elemental-cs"      => "elemCS",
+    "mental-cs"         => "mentCS",
+    "sorcerer-cs"       => "sorcCS",
+    "spirit-cs"         => "spirCS",
+    "bolt-ds"           => "bDS",
+    "physical-ds"       => "pDS",
+    "elemental-td"      => "elemTD",
+    "mental-td"         => "mentTD",
+    "sorcerer-td"       => "sorcTD",
+    "spirit-td"         => "spirTD",
+    "dodging"           => "dodge",
+    "block"             => "block",
+    "asg"               => "AsG",
+    "damagefactor"      => "DF",
+    "unarmed-af"        => "UAF",
+    "fof-offset"        => "FoF offset",
+    "combatmaneuvers"   => "CM",
+    "stamina-reduction" => "stamRed",
+    "constitution"      => "con",
+    "strength"          => "str",
+    "health"            => "health"
+  }.freeze
+
+  # bolt-as/physical-as/etc. render as "+N label"; damagefactor and block
+  # are percentages and render as "N% label", matching bonuses.lic.
+  PERCENT_BONUS_TYPES = %w[damagefactor block].freeze
+
+  # -- Rage Armor tracking (self-contained -- no ragetracker.lic needed) -----
+  #
+  # Mirrors ragetracker.lic's own detection: the "rage ignites"/"as the
+  # rage within surges" line doesn't carry the damage amount itself, so a
+  # short rolling buffer of recent lines is kept to find the "N points of
+  # damage!" line that triggered it. Each proc adds its own 30-second,
+  # capped-at-50-total AS bonus, same numbers ragetracker.lic used.
+  RAGE_TRIGGER_RE   = /rage ignites within you|your .*? as the rage within surges/i.freeze
+  RAGE_DAMAGE_RE    = /(\d+) points? of damage!/i.freeze
+  RAGE_BUFF_SECONDS = 30
+  RAGE_CAP          = 50
+  RAGE_LINE_BUFFER_SIZE = 5
+
+  def self.rage_line_buffer
+    @rage_line_buffer ||= []
+  end
+
+  def self.rage_buffs
+    @rage_buffs ||= []
+  end
+
+  # Called on every incoming game line (see the DownstreamHook near the
+  # bottom of this script).
+  def self.rage_observe(line)
+    buffer = rage_line_buffer
+    buffer << line
+    buffer.shift while buffer.length > RAGE_LINE_BUFFER_SIZE
+
+    return unless line =~ RAGE_TRIGGER_RE
+
+    recent_damage = buffer.reverse.find { |prev| prev =~ RAGE_DAMAGE_RE }
+    return unless recent_damage
+
+    damage = recent_damage.match(RAGE_DAMAGE_RE)[1].to_i
+    rage_buffs << { bonus: damage, end_time: Time.now.to_i + RAGE_BUFF_SECONDS }
+  rescue StandardError
+    nil
+  end
+
+  # Current Rage Armor bonus (Physical AS only), capped at 50 same as
+  # ragetracker.lic. Purges expired procs as a side effect.
+  def self.rage_bonus
+    now = Time.now.to_i
+    rage_buffs.reject! { |b| now > b[:end_time] }
+    [rage_buffs.sum { |b| b[:bonus] }, RAGE_CAP].min
+  rescue StandardError
+    0
+  end
+
+  # Seconds until the combined bonus fully decays -- the latest end_time
+  # among active procs, not the soonest (each expires independently and
+  # the total only drops as each one falls off).
+  def self.rage_seconds_left
+    return 0 if rage_buffs.empty?
+
+    [rage_buffs.map { |b| b[:end_time] }.max - Time.now.to_i, 0].max
+  rescue StandardError
+    0
+  end
+
+  # Brine of the Rusalka (weapon flare, "Salty" cooldown) -- +10 AS/+6 CS
+  # PER TARGET the wave knocks down, so unlike Surge of Blessings the
+  # magnitude isn't encoded anywhere in the buff name itself; it has to be
+  # counted from the room text when the wave actually fires. Watched via
+  # rusalka_observe (called from the DownstreamHook near the bottom of
+  # this script) rather than anything Effects::*/Spell.active exposes.
+  #
+  # RUSALKA_KNOCKDOWN_RE is a best-effort guess at the per-target knockdown
+  # line's wording (exact text not confirmed against a live multi-target
+  # proc) -- if it undercounts in practice, *tm setbonus Brine of the
+  # Rusalka|... overrides it entirely.
+  #
+  # Confirmed against a live multi-target proc transcript:
+  #   Strong currents tug at a stunted halfling bloodspeaker, pulling her
+  #   about in an attempt to roll over her.
+  #   [SMR result: 125 (Open d100: 36)]
+  #   Succumbing to the force of the tidal wave, a stunted halfling
+  #   bloodspeaker is thrown to the ground.
+  #   Strong currents tug at an immense gold-bristled hinterboar, ...
+  #   Succumbing to the force of the tidal wave, an immense gold-bristled
+  #   hinterboar is thrown to the ground.
+  #   Beads of saltwater cling to your skin, bolstering you with their
+  #   briny presence.
+  # -- one "tug" + "succumbing" pair per target actually knocked down, then
+  # a single "beads of saltwater" line once the whole wave has resolved
+  # and the buff is actually granted. Using that grant line to close the
+  # count out is far more precise than guessing a fixed timeout.
+  RUSALKA_TRIGGER_RE   = /Strong currents tug at .+?, pulling .+? about in an attempt to roll over/i.freeze
+  RUSALKA_KNOCKDOWN_RE = /Succumbing to the force of the tidal wave, .+? is thrown to the ground/i.freeze
+  RUSALKA_GRANT_RE     = /Beads of saltwater cling to your skin, bolstering you with their briny presence/i.freeze
+  RUSALKA_WINDOW_SECONDS = 5.0 # safety cap only, in case the grant line is somehow missed
+  RUSALKA_BUFF_SECONDS   = 10
+
+  def self.rusalka_state
+    @rusalka_state ||= { counting: false, count: 0, window_ends_at: 0.0, target_count: 0, expires_at: 0.0 }
+  end
+
+  # Called on every incoming game line (see the DownstreamHook near the
+  # bottom of this script). Opens a counting window on the first "tug" of
+  # a new wave, tallies each confirmed knockdown, and closes the window
+  # the moment the buff-grant line itself arrives (with a timeout as a
+  # fallback in case that line is ever missed).
+  def self.rusalka_observe(line)
+    state = rusalka_state
+    now = Time.now.to_f
+
+    if line =~ RUSALKA_TRIGGER_RE
+      unless state[:counting]
+        state[:counting] = true
+        state[:count] = 0
+        state[:window_ends_at] = now + RUSALKA_WINDOW_SECONDS
+      end
+      return
+    end
+
+    return unless state[:counting]
+
+    if line =~ RUSALKA_KNOCKDOWN_RE
+      state[:count] += 1
+      return
+    end
+
+    return unless line =~ RUSALKA_GRANT_RE
+
+    state[:counting] = false
+    if state[:count] > 0
+      state[:target_count] = state[:count]
+      state[:expires_at] = now + RUSALKA_BUFF_SECONDS
+    end
+  rescue StandardError
+    nil
+  end
+
+  # Fallback close-out if the grant line was somehow missed and the
+  # window timeout elapsed instead -- normally rusalka_observe already
+  # closes things out via RUSALKA_GRANT_RE before this ever applies.
+  def self.rusalka_finalize_if_ready
+    state = rusalka_state
+    return unless state[:counting]
+    return if Time.now.to_f <= state[:window_ends_at]
+
+    state[:counting] = false
+    if state[:count] > 0
+      state[:target_count] = state[:count]
+      state[:expires_at] = Time.now.to_f + RUSALKA_BUFF_SECONDS
+    end
+  rescue StandardError
+    nil
+  end
+
+  def self.rusalka_target_count
+    rusalka_finalize_if_ready
+    state = rusalka_state
+    return 0 if state[:expires_at] <= Time.now.to_f
+
+    state[:target_count]
+  rescue StandardError
+    0
+  end
+
+  # Regex => lambda(MatchData) table for buffs whose bonus is known but
+  # never carries effect-list.xml data (item flares/procs, not spells).
+  # Checked in order; the first match wins. A lambda returning nil/empty
+  # falls through to the normal Spell[]-based lookup below.
+  NAME_BONUS_PROCS = {
+    # Surge of Blessings -- Spiritual Lore: Blessings weapon flare. Each
+    # active stack (the game shows the count in the name, "(N)", 1-3) is
+    # worth +10 AS/+6 CS; 10s duration per stack, 3s cooldown between new
+    # stacks stacking up to 3 concurrent. Uses "bAS"/"pAS" (both, same
+    # value) rather than a bare "AS" -- a label bonus_totals/Grand Totals
+    # doesn't recognize as any of the tracked types never gets summed
+    # into anything, it just silently sits in its own orphan bucket.
+    /\ASurge of Blessings(?:\s*\((\d+)\))?\z/i => lambda do |m|
+      stacks = (m[1] || 1).to_i
+      "#{10 * stacks} bAS, #{10 * stacks} pAS, #{6 * stacks} CS"
+    end,
+
+    # Item Supercharger (9084) -- grants Physical AS equal to half the
+    # wielded weapon's total enchant bonus, rounded DOWN (player-
+    # confirmed against live numbers -- an odd enchant does not round up)
+    # per the item's own loresong text. That enchant value isn't readable
+    # from game data, so it's set once with *tm enchant <N> and reused
+    # here.
+    /\A(?:9084\s+)?Item Supercharger\z/i       => lambda do |_m|
+      enchant = Timers.weapon_enchant
+      enchant.zero? ? nil : "#{enchant / 2} pAS"
+    end,
+
+    # Enh. Strength -- enhancive Strength item, "Enh. Strength (+N)".
+    # Strength converts to Physical AS at 1 AS per 2 points of bonus.
+    /\AEnh\.?\s*Strength\s*\(\+?(\d+)\)\z/i    => lambda do |m|
+      as = m[1].to_i / 2
+      as.zero? ? nil : "#{as} pAS"
+    end,
+
+    # Brine of the Rusalka -- +10 AS/+6 CS per target knocked down by the
+    # wave, counted live (see rusalka_observe above). 0 targets counted
+    # (e.g. the buff is up but the knockdown line didn't match) falls
+    # through to the plain Spell[] lookup, which will find nothing either
+    # and correctly show no sub-line rather than a false "0 AS".
+    /\ABrine of the Rusalka\z/i                => lambda do |_m|
+      targets = Timers.rusalka_target_count
+      targets.zero? ? nil : "#{10 * targets} bAS, #{10 * targets} pAS, #{6 * targets} CS"
+    end,
+
+    # Elemental Targeting (425) -- effect-list.xml's own formula
+    # ([25+((Spells.minorelemental-25)/2),50].min for bolt-as/physical-
+    # as/elemental-cs, that /2 for sorcerer-cs) assumes you actually
+    # trained the Minor Elemental circle. Knowing it via a Scroll of
+    # Knowledge instead grants the spell at its baseline (as if ranks ==
+    # 25) rather than being penalized for having 0 real ranks in that
+    # circle -- player-confirmed live: 0 real ranks should show 25 bAS/
+    # 25 pAS, not the formula's own under-scaled 12/12. Reuses the exact
+    # same formula with ranks floored at 25, so this only overrides
+    # anything while under-ranked and stops applying the moment real
+    # Minor Elemental training reaches 25 on its own.
+    /\AElemental Targeting\z/i                 => lambda do |_m|
+      ranks = defined?(Lich::Gemstone::Spells) ? Lich::Gemstone::Spells.minorelemental.to_i : 25
+      next nil if ranks >= 25
+
+      # Formula floors ranks at 25 -> [25+((25-25)/2),50].min == 25 flat.
+      bas = 25
+      "#{bas} bAS, #{bas} pAS, #{bas} elemCS, #{bas / 2} sorcCS"
+    end
+  }.freeze
+
+  # "10 bDS, 5 elemTD, 8 sorcTD" style summary of every nonzero bonus a
+  # spell grants -- same "value label" order and abbreviations as
+  # bonuses.lic's own ";bonuses" output, no "+" on positive values (a
+  # negative value's own "-" still shows, e.g. Spirit Barrier's
+  # "-29 pAS, 29 bDS, 29 pDS"). Returns nil if name isn't a real spell or
+  # has no bonus right now (a formula-based bonus can evaluate to 0
+  # depending on current ranks/gear, same as combat_classification's own
+  # "net positive" check).
+  # Checks, in order: a user-pinned *tm setbonus override, the known
+  # item-proc table above, the synthetic Rage Armor row, then falls back
+  # to the normal spell-bonus lookup.
+  def self.bonus_summary(name)
+    if (manual = manual_bonuses[Timers.key(name)]) && !manual.empty?
+      return manual
+    end
+
+    NAME_BONUS_PROCS.each do |pattern, formatter|
+      next unless (match = name.to_s.match(pattern))
+
+      result = formatter.call(match)
+      return result if result && !result.empty?
+    end
+
+    return "#{Timers.rage_bonus} pAS" if name == "Rage Armor" && Timers.rage_bonus.positive?
+
+    spell = Spell[name]
+    return nil unless spell
+
+    # Patron's Blessing (1611) reports its bonus as Combat Maneuvers, but
+    # only half of that value contributes to physical AS. Integer division
+    # intentionally rounds down, matching the in-game calculation.
+    if spell.num.to_i == 1611
+      cman = spell.combatmaneuvers.to_i
+      pas = cman / 2
+      return pas.positive? ? "#{pas} pAS, #{cman} CM" : nil
+    end
+
+    parts = spell._bonus.keys.filter_map do |bonus_type|
+      value = spell.send(bonus_type.tr('-', '_')).to_i
+      next if value.zero?
+
+      label = BONUS_ABBREVIATIONS[bonus_type] || bonus_type
+      PERCENT_BONUS_TYPES.include?(bonus_type) ? "#{value}% #{label}" : "#{value} #{label}"
+    end
+
+    parts.empty? ? nil : parts.join(", ")
+  rescue StandardError
+    nil
+  end
+
+  # -- *tm totals -----------------------------------------------------------
+  #
+  # Two sections, both rendered at the very bottom of the panel (see
+  # build_dialog), each row individually hideable with the same red
+  # triangle/*tm ignore mechanism as every other row:
+  #
+  #   1. "Total <label>" -- every "N label" pair bonus_summary would show
+  #      for every currently active, non-ignored Spell/Buff/Debuff, summed
+  #      by label. This is the same data *tm bonuses already displays per
+  #      row -- these totals just add it up across everything at once,
+  #      including manual *tm setbonus text (best-effort parse; freeform
+  #      text that doesn't read as "<number> <label>" won't be picked up).
+  #   2. "Grand Total <label>" -- the same totals from (1), PLUS current
+  #      stat and weapon-skill bonuses straight from Lich::Gemstone::
+  #      Stats/Skills (the same core data ;skill and ;stats read from
+  #      Infomon): STR's stat bonus into pAS, DEX's stat bonus into bAS,
+  #      every weapon skill's bonus (Edged/Blunt/Two-Handed/Polearm/
+  #      Ranged/Thrown/Brawling) into pAS, Spell Aiming's into bAS, and
+  #      half your Combat Maneuvers ranks into pAS. Shown as its own
+  #      grand-total section rather than replacing (1), so it's still
+  #      clear how much of the total is coming from active buffs versus
+  #      your own character. Only STR/DEX and weapon skills are folded
+  #      in -- the other 8 stats don't have a single reliable AS/DS/CS/TD
+  #      role to fold into (which one applies depends on weapon type/
+  #      stance/spell), so they're left out rather than guessed at.
+
+  # [name, duration, duration_secs] triples for everything that could
+  # currently be contributing a bonus -- every NORMAL_CATEGORIES entry
+  # except Cooldowns (not currently active), deduped and ignore-filtered
+  # the same way category_entries is, but *not* excluding anything pulled
+  # into a bucket category (unlike category_entries, totals need every
+  # active source regardless of which section it displays under).
+  def self.totals_source_entries
+    entries = (NORMAL_CATEGORIES - [:cooldowns]).flat_map { |c| Timers.raw_category_entries(c) }
+    entries = entries.group_by { |name, _duration, _secs| Timers.key(name) }
+                     .map { |_key, group| group.max_by { |_name, _duration, secs| secs } }
+    entries.reject { |name, _duration, _secs| Timers.ignored.include?(Timers.key(name)) }
+  rescue StandardError
+    []
+  end
+
+  # "166 bDS, 171 pDS" -> {"bDS" => 166, "pDS" => 171}, summed across every
+  # source in totals_source_entries. Tolerant of both "+N label"/"N label"
+  # (bonus_summary's own output) and "N% label" (damagefactor/block).
+  BONUS_LINE_RE = /([+-]?\d+)%?\s+([A-Za-z][\w.]*(?:\s[A-Za-z][\w.]*)?)/.freeze
+
+  def self.bonus_totals
+    totals = Hash.new(0)
+    totals_source_entries.each do |name, _duration, _secs|
+      summary = bonus_summary(name)
+      next unless summary
+
+      summary.scan(BONUS_LINE_RE) { |value, label| totals[label] += value.to_i }
+    end
+    totals
+  rescue StandardError
+    {}
+  end
+
+  # Weapon skills that feed Physical AS when you're actually wielding that
+  # weapon type. Spell Aiming feeds Bolt AS instead (bolt/ranged spell
+  # attacks), so it's kept separate below.
+  MELEE_SKILL_METHODS = %i[edged_weapons blunt_weapons two_handed_weapons polearm_weapons ranged_weapons thrown_weapons brawling].freeze
+
+  # {"pAS" => N, "bAS" => N} -- STR's live stat bonus, every weapon
+  # skill's live bonus, Combat Maneuvers' half-ranks contribution, and
+  # your *tm enchant weapon-enchant contribution. Used only to build the
+  # Grand Total section in totals_entries -- never displayed as its own
+  # rows.
+  #
+  # IMPORTANT (confirmed against a live *tm totalscheck vs the game's own
+  # numbers): Infomon's trained values -- Skills.<skill> and
+  # Stats.<stat>.enhanced.bonus -- already reflect enhancive items AND
+  # ascension ranks baked in by the game itself (the "skill"/"info"
+  # commands report your final effective number, not a trained-only
+  # figure). Do NOT add Lich::Gemstone::Enhancive or ::Ascension values
+  # on top of these -- that double-counts. Hand-verified: Skills.to_bonus
+  # on a live blunt_weapons trained value of 205 (which already includes
+  # that character's ascension + enhancive ranks) came out to exactly the
+  # 305 pAS the player confirmed from their own in-game numbers.
+  def self.character_bonus_contributions
+    totals = Hash.new(0)
+
+    if defined?(Lich::Gemstone::Stats)
+      totals["pAS"] += Lich::Gemstone::Stats.strength.enhanced.bonus.to_i
+      totals["bAS"] += Lich::Gemstone::Stats.dexterity.enhanced.bonus.to_i
+    end
+
+    if defined?(Lich::Gemstone::Skills)
+      MELEE_SKILL_METHODS.each do |method|
+        ranks = Lich::Gemstone::Skills.send(method).to_i
+        next if ranks.zero?
+
+        totals["pAS"] += Lich::Gemstone::Skills.to_bonus(ranks).to_i
+      end
+
+      aim_ranks = Lich::Gemstone::Skills.spell_aiming.to_i
+      totals["bAS"] += Lich::Gemstone::Skills.to_bonus(aim_ranks).to_i unless aim_ranks.zero?
+
+      # Combat Maneuvers -- half your total ranks add directly to
+      # Physical AS (not run through the weapon-skill curve; a separate,
+      # well-documented GS4 mechanic). Player-confirmed formula.
+      cman_ranks = Lich::Gemstone::Skills.combat_maneuvers.to_i
+      totals["pAS"] += (cman_ranks / 2.0).round unless cman_ranks.zero?
+    end
+
+    # *tm enchant -- your weapon's own enchant bonus adds its FULL value
+    # to pAS unconditionally (a weapon's enchant level is a standing
+    # property of the weapon, not something tied to a buff). Item
+    # Supercharger is a separate, conditional +half-of-that on top, ONLY
+    # while it's actually active -- that half is handled entirely by the
+    # NAME_BONUS_PROCS "Item Supercharger" entry above and bonus_totals,
+    # which already only count it when that buff is currently showing, so
+    # it is NOT added again here (that would double it while active and
+    # wrongly grant it while inactive).
+    totals["pAS"] += Timers.weapon_enchant if Timers.weapon_enchant.positive?
+
+    # *tm zelnorn -- flat set bonus, equally to both bAS and pAS.
+    if Timers.zelnorn_bonus.positive?
+      totals["bAS"] += Timers.zelnorn_bonus
+      totals["pAS"] += Timers.zelnorn_bonus
+    end
+
+    # *tm gemstone -- every named always-on bonus, parsed the same way
+    # bonus_totals parses bonus_summary text.
+    Timers.gemstones.each_value do |gem|
+      gem["text"].to_s.scan(BONUS_LINE_RE) { |value, label| totals[label] += value.to_i }
+    end
+
+    totals
+  rescue StandardError
+    {}
+  end
+
+  # Casting Strength, per gswiki.play.net/Casting_strength:
+  #   CS = (Level x 3) + round(Primary Circle bonus)
+  #        + ceiling(Secondary Circle A bonus) + ceiling(Secondary Circle B bonus)
+  #        + round(Stat bonus) + round(Spell effects)
+  #
+  # Circle -> casting stat, per that same page:
+  #   Aura:    Wizard Base, Bard Base, Minor/Major Elemental
+  #   Wisdom:  Cleric Base, Empath Base, Ranger Base, Minor/Major Spirit
+  #   Logic:   Minor Mental
+  #   Aura+Wisdom avg: Sorcerer Base
+  # Paladin Base isn't listed on that page; Wisdom is used here as the
+  # best-supported guess (Paladin spells are conventionally Wisdom-keyed
+  # in GS4) -- flag this if a live Grand Total CS row comes out wrong for
+  # a Paladin.
+  #
+  # CS_CIRCLE_STAT keys are Lich::Gemstone::Spells.get_circle_name numbers;
+  # CS_CIRCLE_METHOD maps each to the Spells method that returns its rank.
+  CS_CIRCLE_STAT = {
+    1 => :wisdom, 2 => :wisdom, 3 => :wisdom, 4 => :aura, 5 => :aura,
+    6 => :wisdom, 7 => %i[aura wisdom], 9 => :aura, 10 => :aura,
+    11 => :wisdom, 12 => :logic, 16 => :wisdom
+  }.freeze
+  CS_CIRCLE_METHOD = {
+    1 => :minor_spiritual, 2 => :major_spiritual, 3 => :cleric, 4 => :minor_elemental,
+    5 => :major_elemental, 6 => :ranger, 7 => :sorcerer, 9 => :wizard, 10 => :bard,
+    11 => :empath, 12 => :minor_mental, 16 => :paladin
+  }.freeze
+  # Grand Total row label per circle -- short minor/major abbreviations
+  # for the circles that split that way, otherwise grouped by casting
+  # stat under the same elemCS/spirCS/sorcCS names bonus_totals already
+  # uses (never "mentCS" here -- no base circle uses plain Logic; Minor/
+  # Major Mental always use minM/majM instead). Multiple base circles
+  # sharing a label (Wizard/Bard -> elemCS; Cleric/Ranger/Empath/Paladin
+  # -> spirCS) is the same "most characters only have ranks in their own
+  # profession's circles" reasoning as casting_strength_for's secondary-
+  # circle scoping -- if a character genuinely has ranks in two of them,
+  # their CS totals are summed under that shared label rather than shown
+  # as two separate rows.
+  CS_CIRCLE_LABEL = {
+    1 => "minS", 2 => "majS", 3 => "spirCS", 4 => "minE", 5 => "majE",
+    6 => "spirCS", 7 => "sorcCS", 9 => "elemCS", 10 => "elemCS",
+    11 => "spirCS", 12 => "minM", 16 => "spirCS"
+  }.freeze
+  # The wiki's Stat-bonus table is written in terms of the CS "flavor"
+  # each circle uses (elemental/spiritual/mental/sorcerer), which is
+  # exactly what bonus_totals' own labels (elemCS/spirCS/mentCS/sorcCS --
+  # same BONUS_LINE_RE-parsed totals feeding *tm totals) already track
+  # from active buffs/spells (Elemental Targeting, etc.) -- reused
+  # directly here as the formula's "Spell effects" term instead of
+  # re-deriving it.
+  CS_STAT_EFFECTS_LABEL = { aura: "elemCS", wisdom: "spirCS", logic: "mentCS" }.freeze
+
+  def self.cs_circle_rank(circle)
+    method = CS_CIRCLE_METHOD[circle]
+    return 0 unless method && defined?(Lich::Gemstone::Spells)
+
+    Lich::Gemstone::Spells.send(method).to_i
+  rescue StandardError
+    0
+  end
+
+  # Real level + *tm trandest's phantom-level bonus (+1 per rank, 0-10).
+  # Used for every level-dependent piece of the CS formula (base, and the
+  # primary/secondary tier boundaries), matching the user: a character
+  # with trandest rank 1 is treated as level 101 throughout, not just for
+  # the Level*3 base term.
+  def self.cs_effective_level
+    return 0 unless defined?(Lich::Gemstone::Stats)
+
+    Lich::Gemstone::Stats.level.to_i + trandest_rank.to_i
+  rescue StandardError
+    0
+  end
+
+  def self.cs_primary_bonus(rank, level)
+    return 0.0 if rank <= 0 || level <= 0
+
+    remaining = rank
+    total = 0.0
+    [[level, 1.0], [20, 0.75], [40, 0.5], [40, 0.25], [Float::INFINITY, 0.125]].each do |width, rate|
+      take = [remaining, width].min
+      total += take * rate
+      remaining -= take
+      break if remaining <= 0
+    end
+    total
+  end
+
+  def self.cs_secondary_bonus(rank, level)
+    return 0.0 if rank <= 0 || level <= 0
+
+    two_thirds = (2 * level) / 3
+    remaining = rank
+    total = 0.0
+    [[two_thirds, 0.333], [level - two_thirds, 0.111], [Float::INFINITY, 0.05]].each do |width, rate|
+      take = [remaining, width].min
+      total += take * rate
+      remaining -= take
+      break if remaining <= 0
+    end
+    total
+  end
+
+  def self.cs_stat_bonus(stat)
+    return 0 unless defined?(Lich::Gemstone::Stats)
+
+    if stat.is_a?(Array)
+      (stat.sum { |s| Lich::Gemstone::Stats.send(s).enhanced.bonus.to_i } / stat.length.to_f)
+    else
+      Lich::Gemstone::Stats.send(stat).enhanced.bonus.to_i
+    end
+  rescue StandardError
+    0
+  end
+
+  def self.cs_spell_effects_bonus(stat)
+    totals = bonus_totals
+    if stat.is_a?(Array)
+      totals["sorcCS"].to_i
+    else
+      totals[CS_STAT_EFFECTS_LABEL[stat]].to_i
+    end
+  end
+
+  # Casting Strength with `primary_circle` as the spell circle being
+  # cast -- every OTHER circle the character has any rank in (not just
+  # ones belonging to the same profession) counts as a secondary circle.
+  # This is a deliberate generalization of the wiki formula's literal
+  # "Secondary Circle A/B" (exactly two slots): most characters only ever
+  # have ranks in the small handful of circles their own profession
+  # trains anyway, so summing every other trained circle lands on the
+  # same result as the two-slot version for the common case, without
+  # hardcoding a profession -> circle-list table this page didn't
+  # actually provide. Flag it if a profession with 3+ relevant non-primary
+  # circles (or unusual multi-circle access) comes out too high.
+  def self.casting_strength_for(primary_circle)
+    return nil unless CS_CIRCLE_STAT.key?(primary_circle)
+    return nil unless defined?(Lich::Gemstone::Stats)
+
+    level = cs_effective_level
+    return nil if level <= 0
+
+    stat = CS_CIRCLE_STAT[primary_circle]
+    primary_rank = cs_circle_rank(primary_circle)
+
+    secondary_total = 0
+    CS_CIRCLE_STAT.each_key do |circle|
+      next if circle == primary_circle
+
+      rank = cs_circle_rank(circle)
+      next if rank.zero?
+
+      secondary_total += cs_secondary_bonus(rank, level).ceil
+    end
+
+    base = level * 3
+    primary_bonus = cs_primary_bonus(primary_rank, level).round
+    stat_bonus = cs_stat_bonus(stat).round
+    effects_bonus = cs_spell_effects_bonus(stat).round
+
+    {
+      total: base + primary_bonus + secondary_total + stat_bonus + effects_bonus,
+      base: base,
+      primary_rank: primary_rank,
+      primary_bonus: primary_bonus,
+      secondary_total: secondary_total,
+      stat: stat,
+      stat_bonus: stat_bonus,
+      effects_bonus: effects_bonus
+    }
+  rescue StandardError
+    nil
+  end
+
+  # {"minE" => total, "spirCS" => total, ...} (CS_CIRCLE_LABEL) -- one
+  # entry per label the character has any circle ranks feeding, folded
+  # into Grand Totals by totals_entries the same way
+  # character_bonus_contributions' pAS/bAS numbers are -- automatic, no
+  # separate command needed. These labels intentionally DO overlap with
+  # bonus_totals' own elemCS/spirCS/sorcCS (the raw spell-effects INPUT
+  # this formula already consumes via cs_spell_effects_bonus) -- per the
+  # user, that's the point: e.g. "Grand Total sorcCS" becomes the full
+  # Sorcerer CS number, not a separate row alongside it. totals_entries
+  # is responsible for NOT also adding the raw bonus_totals amount for any
+  # label that appears here, since it's already folded in.
+  def self.casting_strength_contributions
+    totals = Hash.new(0)
+    CS_CIRCLE_STAT.each_key do |circle|
+      next unless cs_circle_rank(circle).positive?
+
+      result = casting_strength_for(circle)
+      next unless result
+
+      totals[CS_CIRCLE_LABEL[circle]] += result[:total]
+    end
+    totals
+  rescue StandardError
+    {}
+  end
+
+  # Full plain-text report of literally everything totals_entries adds
+  # up, one line per contributor, for *tm totalscheck. Not grouped by
+  # label/bucketed like the panel itself -- this is meant for lining up
+  # against the game's own numbers (;bonuses, AS on a swing, etc) to find
+  # exactly which piece a mismatch is coming from.
+  def self.totals_debug_report
+    lines = []
+
+    lines << "== Sources feeding 'From Buffs/Spells' totals =="
+    sources = totals_source_entries
+    if sources.empty?
+      lines << "  (nothing currently active/non-hidden)"
+    else
+      sources.each do |name, _duration, _secs|
+        summary = bonus_summary(name)
+        next unless summary
+
+        lines << "  #{name}: #{summary}"
+      end
+    end
+
+    lines << ""
+    lines << "== Total <label> (buffs/spells only, summed) =="
+    bonus = bonus_totals
+    if bonus.values.all?(&:zero?) || bonus.empty?
+      lines << "  (nothing)"
+    else
+      bonus.sort.each { |label, value| lines << "  #{label}: #{value}" unless value.zero? }
+    end
+
+    lines << ""
+    lines << "== Character contributions (folded into Grand Totals only) =="
+    lines << "   (Skills.<x>/Stats.<x> already include ascension + enhancive --"
+    lines << "    player-confirmed against live numbers, NOT added again here)"
+    if defined?(Lich::Gemstone::Stats)
+      lines << "  STR -> pAS: #{Lich::Gemstone::Stats.strength.enhanced.bonus.to_i} (Stats.strength.enhanced.bonus)"
+      lines << "  DEX -> bAS: #{Lich::Gemstone::Stats.dexterity.enhanced.bonus.to_i} (Stats.dexterity.enhanced.bonus)"
+    end
+
+    if defined?(Lich::Gemstone::Skills)
+      MELEE_SKILL_METHODS.each do |method|
+        ranks = Lich::Gemstone::Skills.send(method).to_i
+        next if ranks.zero?
+
+        lines << "  #{method} -> pAS: #{ranks} ranks -> #{Lich::Gemstone::Skills.to_bonus(ranks).to_i} bonus"
+      end
+
+      aim_ranks = Lich::Gemstone::Skills.spell_aiming.to_i
+      lines << "  spell_aiming -> bAS: #{aim_ranks} ranks -> #{Lich::Gemstone::Skills.to_bonus(aim_ranks).to_i} bonus" unless aim_ranks.zero?
+
+      cman_ranks = Lich::Gemstone::Skills.combat_maneuvers.to_i
+      lines << "  combat_maneuvers -> pAS: #{cman_ranks} ranks / 2 = #{(cman_ranks / 2.0).round}" unless cman_ranks.zero?
+    end
+
+    supercharger_active = totals_source_entries.any? { |name, _d, _s| Timers.key(name) == "item supercharger" }
+    lines << "  *tm enchant -> pAS: #{Timers.weapon_enchant} (full weapon enchant, always counted)"
+    if Timers.weapon_enchant.positive?
+      lines << "  Item Supercharger -> pAS: #{supercharger_active ? Timers.weapon_enchant / 2 : 0} (half of enchant, rounded down, only while that buff is active -- currently #{supercharger_active ? 'ACTIVE' : 'not active'}; counted via 'From Buffs/Spells' above, not here)"
+    end
+    lines << "  *tm zelnorn -> bAS and pAS: #{Timers.zelnorn_bonus} each" if Timers.zelnorn_bonus.positive?
+    Timers.gemstones.each_value { |gem| lines << "  #{gem['name']}: #{gem['text']}" }
+
+    lines << ""
+    lines << "== Casting Strength (gswiki.play.net/Casting_strength, folded into Grand Totals) =="
+    cs = casting_strength_contributions
+    if cs.empty?
+      lines << "  (no known spell circle ranks)"
+    else
+      CS_CIRCLE_STAT.each_key do |circle|
+        next unless cs_circle_rank(circle).positive?
+
+        result = casting_strength_for(circle)
+        next unless result
+
+        stat_label = result[:stat].is_a?(Array) ? result[:stat].map(&:to_s).join("+") : result[:stat].to_s
+        lines << "  #{Lich::Gemstone::Spells.get_circle_name(circle)} (rank #{result[:primary_rank]}) -> " \
+                 "Grand Total #{CS_CIRCLE_LABEL[circle]}: #{result[:total]} " \
+                 "[base #{result[:base]} + primary #{result[:primary_bonus]} + secondary #{result[:secondary_total]} " \
+                 "+ #{stat_label} #{result[:stat_bonus]} + effects #{result[:effects_bonus]}]"
+      end
+    end
+
+    lines << ""
+    lines << "== Grand Total <label> (buffs/spells + character + casting strength, summed) =="
+    entries = totals_entries
+    if entries[:grand].empty?
+      lines << "  (nothing)"
+    else
+      entries[:grand].each { |name, value| lines << "  #{name}: #{value}" }
+    end
+
+    lines
+  rescue StandardError => e
+    ["totals_debug_report error: #{e.message}"]
+  end
+
+  # { buffs: [[name, value_string], ...], grand: [...] } for the whole
+  # *tm totals section, ignored rows already excluded -- build_dialog just
+  # renders each list under its own header.
+  def self.totals_entries
+    bonus = bonus_totals
+
+    buffs = bonus.sort.filter_map do |label, value|
+      next if value.zero?
+
+      name = "Total #{label}"
+      next if Timers.ignored.include?(Timers.key(name))
+
+      [name, value.to_s]
+    end
+
+    cs_contrib = casting_strength_contributions
+
+    grand_totals = Hash.new(0)
+    # Skip labels casting_strength_contributions also produces -- that raw
+    # buff-only amount (e.g. Elemental Targeting's elemCS) is already
+    # folded into each circle's CS total via cs_spell_effects_bonus, so
+    # adding it again here would double it up under the same Grand Total
+    # row. Labels no circle claims (there is no base "Mental" circle, so
+    # "mentCS" never appears in cs_contrib) still pass through normally.
+    bonus.each { |label, value| grand_totals[label] += value unless cs_contrib.key?(label) }
+    character_bonus_contributions.each { |label, value| grand_totals[label] += value }
+    cs_contrib.each { |label, value| grand_totals[label] += value }
+
+    grand = grand_totals.sort.filter_map do |label, value|
+      next if value.zero?
+
+      name = "Grand Total #{label}"
+      next if Timers.ignored.include?(Timers.key(name))
+
+      [name, value.to_s]
+    end
+
+    { buffs: buffs, grand: grand }
+  rescue StandardError
+    { buffs: [], grand: [] }
+  end
+
+  # Whether spell currently has a net-positive bonus of each kind -- "net
+  # positive" so a spell with a negative side-effect bonus in an
+  # offense-shaped slot (trading away AS for DS, say) doesn't count as
+  # granting offense just because that bonus entry exists. Returns
+  # :offense, :defense, :both, or nil.
+  def self.combat_classification(spell)
+    # Patron's Blessing (1611) stores its offensive contribution as a
+    # Combat Maneuvers bonus rather than a physical-AS bonus field.
+    return :offense if spell.num.to_i == 1611 && spell.combatmaneuvers.to_i.positive?
+
+    bonus = spell._bonus
+    offense = OFFENSE_BONUS_TYPES.any? do |bonus_type|
+      next false unless bonus.key?(bonus_type)
+
+      spell.send(bonus_type.tr('-', '_')).to_i > 0
+    end
+    defense = DEFENSE_BONUS_TYPES.any? do |bonus_type|
+      next false unless bonus.key?(bonus_type)
+
+      spell.send(bonus_type.tr('-', '_')).to_i > 0
+    end
+    return :both if offense && defense
+    return :offense if offense
+    return :defense if defense
+
+    nil
+  rescue StandardError
+    nil
+  end
+
+  # Which BUCKET_CATEGORIES entry (if any) a name should be pulled into,
+  # given the current *tm cat toggles -- nil means "stays in its normal
+  # category," the common case (most buffs/debuffs/cooldowns aren't spells
+  # at all, and most spells aren't a society sign or don't grant a combat
+  # bonus either way).
+  def self.classify_entry(name)
+    # Rage Armor is a synthetic row (see raw_category_entries), not a
+    # real spell/buff dialog entry -- it always stays in Buffs regardless
+    # of the Offense/Defense/Both toggles, same as it isn't pulled into
+    # Society either.
+    return nil if name == "Rage Armor"
+
+    spell = Spell[name]
+    return nil unless spell
+
+    circle = Timers.circle_num(spell.num)
+    return :society if SOCIETY_ICONS.key?(circle)
+
+    combat = Timers.combat_classification(spell)
+    return :offense if combat == :offense && Timers.cat_offense
+    return :defense if combat == :defense && Timers.cat_defense
+    return :both if combat == :both && Timers.cat_both
+
+    nil
+  rescue StandardError
+    nil
+  end
+
+  # *tm <#> <command chain> -- registers a ">"-separated command chain
+  # against a spell number. When that spell is in Missing Spells, its name
+  # becomes clickable (instead of plain text) and runs this chain, one
+  # command per ">"-delimited step. Intended for "recast + prep" macros
+  # like combining a store-all chain with getting/rubbing/stowing a prep
+  # item -- see the header docstring for the exact example this was built
+  # for.
+  def self.set_macro!(num, command_chain)
+    settings = load_window_settings
+    self.macros[num] = command_chain
+    settings["timers"]["macros"] = macros
+    save_window_settings(settings)
+  end
+
+  # Returns false if num had no macro registered.
+  def self.remove_macro!(num)
+    return false unless macros.key?(num)
+
+    settings = load_window_settings
+    macros.delete(num)
+    settings["timers"]["macros"] = macros
+    save_window_settings(settings)
+    true
+  end
+
+  # Runs the registered macro for num, one ">"-delimited step at a time,
+  # with a short pause between steps so they don't all hit the game in the
+  # same network burst. Returns false if nothing is registered for num.
+  def self.run_macro(num)
+    chain = macros[num]
+    return false unless chain
+
+    chain.split(/\s*>\s*/).each do |step|
+      step = step.strip
+      next if step.empty?
+
+      put step
+      sleep 0.3
+    end
+    true
+  end
+
+  # Spell circle number for a spell number, e.g. 1109 -> 11 (Empath) -- the
+  # leading digits before the last two, same scheme Lich::Gemstone::Spells.
+  # get_circle_name expects and the same one the game's own "spell all"
+  # report groups by.
+  def self.circle_num(num)
+    num / 100
+  end
+
+  # Circle display name for an entry name, or nil if it isn't a real spell
+  # (most buffs/debuffs aren't) -- callers group those under their own
+  # "Other" bucket rather than skipping them.
+  def self.circle_name(name_or_num)
+    spell = Spell[name_or_num]
+    return nil unless spell
+
+    Lich::Gemstone::Spells.get_circle_name(circle_num(spell.num))
+  rescue StandardError
+    nil
+  end
+
+  # Regroups a flat [[name, duration], ...] list (already in the caller's
+  # chosen sort order) into [[circle_label, [[name, duration], ...]], ...],
+  # circle order ascending (lowest circle number first, "Other" last for
+  # anything Spell[] can't resolve), preserving each entry's relative order
+  # within its own circle.
+  def self.group_by_circle(entries)
+    buckets = Hash.new { |h, k| h[k] = [] }
+    entries.each do |name, duration, secs|
+      spell = Spell[name]
+      key = spell ? circle_num(spell.num) : :other
+      buckets[key] << [name, duration, secs]
+    end
+
+    numbered = buckets.keys.reject { |k| k == :other }.sort
+    ordered_keys = numbered + (buckets.key?(:other) ? [:other] : [])
+    ordered_keys.map do |key|
+      label = key == :other ? "Other" : Lich::Gemstone::Spells.get_circle_name(key)
+      [label, buckets[key]]
+    end
+  rescue StandardError
+    [["Other", entries]]
+  end
+
+  # Returns false (and does nothing) if name was already hidden, true if it
+  # was actually newly added -- so callers can tell "just hid this" apart
+  # from "was already hidden" instead of always reporting success.
+  def self.add_ignored!(name)
+    key = Timers.key(name)
+    return false if ignored.include?(key)
+
+    settings = load_window_settings
+    self.ignored |= [key]
+    settings["timers"]["ignored"] = ignored
+    save_window_settings(settings)
+    true
+  end
+
+  # Returns false (and does nothing) if name wasn't hidden to begin with.
+  def self.remove_ignored!(name)
+    key = Timers.key(name)
+    return false unless ignored.include?(key)
+
+    settings = load_window_settings
+    self.ignored -= [key]
+    settings["timers"]["ignored"] = ignored
+    save_window_settings(settings)
+    true
+  end
+
+  def self.unignore_all!
+    settings = load_window_settings
+    self.ignored = []
+    settings["timers"]["ignored"] = []
+    save_window_settings(settings)
+  end
+
+  # Returns false (and does nothing) if spell was already tracked, true if
+  # it was actually newly added -- same reasoning as add_ignored!.
+  def self.track!(spell)
+    return false if tracked.include?(spell.num)
+
+    settings = load_window_settings
+    self.tracked |= [spell.num]
+    settings["timers"]["tracked"] = tracked
+    save_window_settings(settings)
+    true
+  end
+
+  # Returns false (and does nothing) if num wasn't tracked to begin with.
+  def self.untrack!(num)
+    return false unless tracked.include?(num)
+
+    settings = load_window_settings
+    self.tracked -= [num]
+    settings["timers"]["tracked"] = tracked
+    save_window_settings(settings)
+    true
+  end
+
+  def self.untrack_all!
+    settings = load_window_settings
+    self.tracked = []
+    settings["timers"]["tracked"] = []
+    save_window_settings(settings)
+  end
+
+  # Same source as category_entries, but WITHOUT the ignored-list filter --
+  # "ignored" means "hide from the live categories," not "exclude from
+  # ever being trackable," so track-all operations need the raw active
+  # list, not the display-filtered one. Names only.
+  # Names only, one of the NORMAL_CATEGORIES, unfiltered by ignored/bucket
+  # classification -- the shared raw source both active_names and
+  # category_entries build on. See raw_category_entries for the
+  # duration-carrying version.
+  def self.raw_category_names(category)
+    if category == :spells
+      claimed = Timers.other_category_names
+      Spell.active.map(&:name).reject { |name| claimed.include?(Timers.key(name)) }
+    else
+      registry = case category
+                 when :buffs then Effects::Buffs
+                 when :debuffs then Effects::Debuffs
+                 when :cooldowns then Effects::Cooldowns
+                 end
+      return [] unless registry
+
+      registry.to_h.keys.select { |name| name.is_a?(String) }
+    end
+  rescue StandardError
+    []
+  end
+
+  # For a NORMAL_CATEGORIES member: everything raw_category_names reports,
+  # minus anything classify_entry has pulled into a bucket category. For a
+  # BUCKET_CATEGORIES member: everything across all 4 normal categories
+  # that classify_entry assigns to it. Unfiltered by ignored -- see
+  # category_entries for the display version, which adds that filter (this
+  # one is for track-all operations, which should reach ignored-but-active
+  # things same as always).
+  def self.active_names(category)
+    if NORMAL_CATEGORIES.include?(category)
+      Timers.raw_category_names(category).reject { |name| Timers.classify_entry(name) }
+    elsif BUCKET_CATEGORIES.include?(category)
+      NORMAL_CATEGORIES.flat_map { |c| Timers.raw_category_names(c) }.select { |name| Timers.classify_entry(name) == category }
+    else
+      []
+    end
+  rescue StandardError
+    []
+  end
+
+  # *tm track all -- everything currently active across all 4 categories
+  # (the same set "spell active" reports as Spells/Cooldowns/Buffs/
+  # Debuffs), not just Active Spells. Same Spell[] resolution as
+  # *tm trackall <category>/clicking a header, just for every category at
+  # once. Returns how many were actually added.
+  def self.track_all!
+    added = 0
+    CATEGORY_ORDER.each do |category|
+      active_names(category).each do |name|
+        spell = Spell[name]
+        next unless spell
+
+        added += 1 if track!(spell)
+      end
+    end
+    added
+  end
+
+  # Every string-keyed name currently in Effects::Buffs/Debuffs/Cooldowns,
+  # lowercased -- what category_entries(:spells) excludes from Spell.active
+  # so something like Celerity (a spell mechanically, but a Buff as far as
+  # the game's own dialogs are concerned) doesn't show up in both Active
+  # Spells and Buffs at once.
+  def self.other_category_names
+    names = []
+    [Effects::Buffs, Effects::Debuffs, Effects::Cooldowns].each do |registry|
+      next unless registry
+
+      registry.to_h.each_key do |key|
+        if key.is_a?(String)
+          names << Timers.key(key)
+        elsif key.is_a?(Integer) || key.to_s =~ /^\d+$/
+          spell = Spell[key.to_i]
+          names << Timers.key(spell.name) if spell
+        end
+      end
+    end
+    names
+  rescue StandardError
+    []
+  end
+
+  # [name, duration] pairs for everything currently active in the given
+  # category, minus anything on the ignored list. Order follows
+  # Timers.sort_mode (*tm sort az/za/dhigh/dlow) -- these can hold a couple
+  # dozen entries at once (see the screenshot this panel was built from),
+  # so a stable, scannable order matters more than "order applied."
+  #
+  # :spells uses Spell.active (lib/common/spell.rb -- same thing
+  # Lich::Gemstone::Spells.active calls), not Effects::Spells. The Active
+  # Spells *dialog* feed (Effects::Spells) can carry some active spells as
+  # integer-keyed entries only, depending on the player's spell-name
+  # display preference -- those got silently dropped by the
+  # name.is_a?(String) filter every other category still needs, so
+  # "Active Spells" (and *tm track all/trackall spells, which reads this
+  # same method) under-counted against what "spell active" or
+  # Spell.active actually report. Spell.active doesn't have that gap.
+  # [name, duration, duration_secs] triples for a NORMAL_CATEGORIES member,
+  # unfiltered by ignored/bucket classification -- what category_entries
+  # and active_names(bucket) both build on, so duration is only ever
+  # computed once per name from its one real source (Spell.active for
+  # :spells, the relevant Effects::* registry otherwise), regardless of
+  # which category ends up displaying it.
+  def self.raw_category_entries(category)
+    now = Time.now.to_f
+    entries = []
+
+    if category == :spells
+      # Spell.active includes things the game itself categorizes as a Buff
+      # (Celerity/506 being the one that surfaced this -- it's in the
+      # native Buffs dialog, never Active Spells), so anything currently
+      # claimed by Buffs/Debuffs/Cooldowns is excluded here rather than
+      # letting it double up in both sections. Those 3 registries stay the
+      # authority on their own category; Spell.active is only needed to
+      # fill the Active Spells gap Effects::Spells itself has.
+      claimed = Timers.other_category_names
+      Spell.active.each do |spell|
+        next if claimed.include?(Timers.key(spell.name))
+
+        remaining = spell.secsleft.to_f
+        next if remaining <= 0
+
+        entries << [spell.name, Timers.format_duration(remaining), remaining]
+      end
+      # PATCH 1.6.3: integer-only Active Spells dialog rows (9062 etc.)
+      if defined?(Effects::Spells)
+        seen = entries.map { |n, _, _| Timers.key(n) }
+        Timers.dialog_effect_rows(Effects::Spells).each do |name, expires_at, remaining|
+          next if claimed.include?(Timers.key(name))
+          next if seen.include?(Timers.key(name))
+
+          duration_secs = expires_at.to_f == 0 ? Float::INFINITY : remaining
+          duration = expires_at.to_f == 0 ? "" : Timers.format_duration(remaining)
+          entries << [name, duration, duration_secs]
+          seen << Timers.key(name)
+        end
+      end
+    else
+      registry = case category
+                 when :buffs then Effects::Buffs
+                 when :debuffs then Effects::Debuffs
+                 when :cooldowns then Effects::Cooldowns
+                 end
+      return [] unless registry
+
+      # PATCH 1.6.2: include integer-keyed dialog rows (Spell[id].name).
+      Timers.dialog_effect_rows(registry).each do |name, expires_at, remaining|
+        duration_secs = expires_at.to_f == 0 ? Float::INFINITY : remaining
+        duration = expires_at.to_f == 0 ? "" : Timers.format_duration(remaining)
+        entries << [name, duration, duration_secs]
+      end
+
+      # Rage Armor isn't a spell and never gets its own Effects::Buffs
+      # entry -- rage_observe (see above) watches the "rage ignites"/
+      # damage-surge lines itself and keeps a running Physical AS total.
+      # Surface that here as a synthetic Buffs row (real duration: time
+      # until the combined bonus fully decays) whenever there's currently
+      # a nonzero bonus.
+      if category == :buffs && Timers.rage_bonus.positive?
+        entries << ["Rage Armor", Timers.format_duration(Timers.rage_seconds_left), Timers.rage_seconds_left]
+      end
+    end
+
+    entries
+  rescue StandardError
+    []
+  end
+
+  # [name, duration] pairs actually shown for category, filtered by ignored
+  # and ordered by Timers.sort_mode. NORMAL_CATEGORIES members exclude
+  # anything classify_entry has pulled into a bucket category;
+  # BUCKET_CATEGORIES members are everything across all 4 normal categories
+  # that classify_entry assigns to them (see raw_category_entries/
+  # classify_entry).
+  def self.category_entries(category)
+    entries = if category == :cooldowns
+                # Cooldowns always render as Cooldowns, with the cooldown
+                # icon -- never pulled into Offense/Defense/Both/Society.
+                # Those buckets are about what's actively granting you a
+                # bonus right now, and a cooldown (can't recast yet) isn't
+                # an active spell or buff.
+                Timers.raw_category_entries(:cooldowns)
+              elsif NORMAL_CATEGORIES.include?(category)
+                Timers.raw_category_entries(category).reject { |name, _duration, _secs| Timers.classify_entry(name) }
+              elsif BUCKET_CATEGORIES.include?(category)
+                (NORMAL_CATEGORIES - [:cooldowns]).flat_map { |c| Timers.raw_category_entries(c) }
+                                                  .select { |name, _duration, _secs| Timers.classify_entry(name) == category }
+              else
+                []
+              end
+
+    # Collapse duplicate rows for the same name (Wall of Force has shown up
+    # claimed by both Spell.active and Effects::Buffs at once, each with its
+    # own countdown, when the two sources' name strings don't line up for
+    # the other_category_names exclusion above) down to one row, keeping
+    # whichever copy has the longer remaining duration.
+    entries = entries.group_by { |name, _duration, _secs| Timers.key(name) }
+                     .map { |_key, group| group.max_by { |_name, _duration, secs| secs } }
+
+    entries = entries.reject { |name, _duration, _secs| Timers.ignored.include?(Timers.key(name)) }
+
+    sorted = case Timers.sort_mode
+             when "name_desc"     then entries.sort_by { |name, _duration, _secs| name }.reverse
+             # Bucketed to the nearest 10s (name as tiebreak within a
+             # bucket) instead of raw seconds -- sorting by exact remaining
+             # time reorders the whole list nearly every poll as durations
+             # tick down, which reads as constant jitter rather than a
+             # stable "by duration" view. Two entries under 10s apart don't
+             # swap places; only a real gap moves something.
+             when "duration_asc"  then entries.sort_by { |name, _duration, secs| [Timers.duration_bucket(secs), name] }
+             when "duration_desc" then entries.sort_by { |name, _duration, secs| [-Timers.duration_bucket(secs), name] }
+             else                      entries.sort_by { |name, _duration, _secs| name }
+             end
+
+    sorted
+  rescue StandardError
+    []
+  end
+
+  # PATCH 1.6.2 (loraque): dialog rows as [name, expires_at, remaining].
+  # Integer keys (common for Meditative Resistance 9060-9074) become
+  # Spell[id].name so they show in Buffs/etc. instead of being dropped.
+  def self.dialog_effect_rows(registry)
+    now = Time.now.to_f
+    h = registry.to_h
+    string_names = h.keys.select { |k| k.is_a?(String) }.map { |k| k.downcase }
+    rows = []
+    h.each do |key, expires_at|
+      remaining = expires_at.to_f - now
+      next if remaining <= 0 && expires_at.to_f != 0
+
+      remaining = Timers.capped_remaining(remaining)
+
+      if key.is_a?(String)
+        rows << [key, expires_at, remaining]
+      elsif key.is_a?(Integer) || key.to_s =~ /^\d+$/
+        spell = Spell[key.to_i]
+        next unless spell
+        next if string_names.include?(spell.name.downcase)
+
+        rows << [spell.name, expires_at, remaining]
+      end
+    end
+    rows
+  rescue StandardError
+    []
+  end
+
+  # PATCH 1.6.3: live if Spell.active?, dialog has this num/name, or (for
+  # Meditative Resistance 9060-9074) any live dialog string/id in that family.
+  def self.live_effect?(spell)
+    return true if spell.active?
+    return true if Timers.dialog_has_spell?(spell)
+    return true if spell.name =~ /^Meditative Resistance/i && Timers.meditative_resistance_live?
+
+    false
+  rescue StandardError
+    false
+  end
+
+  def self.dialog_expiry_live?(exp)
+    exp.to_f == 0 || exp.to_f > Time.now.to_f
+  end
+
+  def self.each_effect_dialog
+    [Effects::Spells, Effects::Buffs, Effects::Debuffs, Effects::Cooldowns].each do |registry|
+      next unless registry
+
+      yield registry
+    end
+  end
+
+  def self.dialog_has_spell?(spell)
+    want = spell.name.to_s.downcase
+    type = spell.name[/\(([^)]+)\)/, 1]&.downcase
+    base = Timers.key(spell.name)
+
+    Timers.each_effect_dialog do |registry|
+      registry.to_h.each do |key, exp|
+        next unless Timers.dialog_expiry_live?(exp)
+        return true if key == spell.num || key.to_s == spell.num.to_s
+        next unless key.is_a?(String)
+
+        ks = key.downcase
+        return true if ks == want
+        return true if ks.start_with?(want)
+        next unless Timers.key(key) == base
+
+        key_type = key[/\(([^)]+)\)/, 1]&.downcase
+        return true if type.nil? || key_type.nil?
+        return true if key_type.start_with?(type) || type.start_with?(key_type)
+      end
+    end
+    false
+  rescue StandardError
+    false
+  end
+
+  def self.meditative_resistance_live?
+    Spell.active.any? { |s| s.name =~ /^Meditative Resistance/i } ||
+      begin
+        found = false
+        Timers.each_effect_dialog do |registry|
+          registry.to_h.each do |key, exp|
+            next unless Timers.dialog_expiry_live?(exp)
+            if key.is_a?(Integer) || key.to_s =~ /^\d+$/
+              found = true if key.to_i.between?(9060, 9074)
+            elsif key.is_a?(String) && key =~ /meditative resistance/i
+              found = true
+            end
+          end
+        end
+        found
+      end
+  rescue StandardError
+    false
+  end
+
+  def self.dump_effect_dialogs
+    lines = ["--- timers dialog dump ---"]
+    %w[Active Spells Buffs Debuffs Cooldowns].each do |title|
+      h = (XMLData.dialogs || {})[title] || {}
+      lines << "[#{title}] #{h.size} keys"
+      h.each do |k, v|
+        left = v.to_f.zero? ? "indef" : format("%.0fs", v.to_f - Time.now.to_f)
+        lines << "  #{k.class} #{k.inspect} (#{left})"
+      end
+    end
+    lines << "Spell.active: #{Spell.active.map { |s| "#{s.num} #{s.name}" }.join(', ')}"
+    lines << "tracked: #{tracked.inspect}"
+    lines << "missing: #{missing_entries.inspect}"
+    Timers.send_to_story(lines)
+  end
+
+  # [num, name] pairs for every tracked spell that ISN'T currently active,
+  # minus anything on the ignored list. Uses Spell[] (lib/common/spell.rb),
+  # Lich's own spell tracking, rather than Effects::Spells -- so this stays
+  # accurate even if the Active Spells dialog hasn't been (re)opened.
+  def self.missing_entries
+    tracked.map do |num|
+      spell = Spell[num]
+      next nil unless spell
+      next nil if spell.active?
+      next nil if Timers.live_effect?(spell) # PATCH 1.6.2
+      next nil if Timers.ignored.include?(Timers.key(spell.name))
+
+      [spell.num, spell.name]
+    end.compact.sort_by { |_num, name| name }
+  rescue StandardError
+    []
+  end
+
+  def self.snapshot
+    entries = Timers::CATEGORY_ORDER.flat_map { |category| Timers.category_entries(category) }
+    entries += Timers.missing_entries
+    lines = entries.map { |a, b| "#{a}|#{b}" }
+    # Rusalka's target count can change (mid-window increments, then the
+    # final latch) without any Effects::Buffs entry changing, so it needs
+    # its own line here to make sure a bonus-sub-line update still forces
+    # a redraw rather than waiting on the 5s fallback.
+    lines << "rusalka|#{Timers.rusalka_target_count}"
+    lines
+  rescue StandardError
+    []
+  end
+
+  def self.build_dialog
+    out = String.new("<dialogData id='Timers' clear='t'>")
+    top = 0
+
+    render_missing = lambda do
+      missing = Timers.missing_entries
+      next if missing.empty?
+
+      out << "<label id='tm_missing_header' value='&#x2757; Missing Spells' justify='left' left='0' top='#{top}' height='#{Timers::ROW_HEIGHT}' />"
+      top += Timers::ROW_HEIGHT
+      missing.each do |num, name|
+        out << "<label id='tm_missing_icon_#{num}' value='#{Timers::MISSING_ICON}' justify='left' left='0' top='#{top}' width='#{Timers::ICON_WIDTH}' height='#{Timers::ROW_HEIGHT}' />"
+        display = Timers.sanitize_xml(Timers.display_text(name))
+        if Timers.macros.key?(num)
+          # A macro is registered for this spell -- name becomes clickable
+          # and runs it (*tm run <#>) instead of sitting as plain text.
+          out << "<link id='tm_missing_name_#{num}' value='#{display}' cmd='*tm run #{num}' justify='left' left='#{Timers::NAME_LEFT}' top='#{top}' width='#{Timers::NAME_WIDTH}' height='#{Timers::ROW_HEIGHT}' />"
+        else
+          out << "<label id='tm_missing_name_#{num}' value='#{display}' justify='left' left='#{Timers::NAME_LEFT}' top='#{top}' width='#{Timers::NAME_WIDTH}' height='#{Timers::ROW_HEIGHT}' />"
+        end
+        out << "<link id='tm_missing_x_#{num}' value='#{Timers::REMOVE_ICON}' cmd='*tm untrack #{num}' justify='left' left='#{Timers.remove_left}' top='#{top}' width='#{Timers::REMOVE_WIDTH}' height='#{Timers::ROW_HEIGHT}' />" unless Timers.hide_arrows
+        top += Timers::ROW_HEIGHT
+      end
+    end
+
+    render_missing.call if Timers.missing_position == "top"
+
+    render_row = lambda do |category, name, duration, secs, row_id|
+      track_cmd = "*tm track #{Timers.sanitize_xml(name)}"
+      ignore_cmd = "*tm ignore #{Timers.sanitize_xml(Timers.key(name))}"
+      # :society has no single fixed icon (CATEGORY_ICONS omits it on
+      # purpose) -- each row resolves its own, zombie/troll/vampire
+      # depending on which of the 3 societies that spell belongs to.
+      row_icon = if category == :society
+                   spell = Spell[name]
+                   (spell && Timers::SOCIETY_ICONS[Timers.circle_num(spell.num)]) || Timers::SOCIETY_HEADER_ICON
+                 else
+                   Timers::CATEGORY_ICONS[category]
+                 end
+      out << "<label id='tm_icon_#{row_id}' value='#{row_icon}' justify='left' left='0' top='#{top}' width='#{Timers::ICON_WIDTH}' height='#{Timers::ROW_HEIGHT}' />"
+      out << "<link id='tm_name_#{row_id}' value='#{Timers.sanitize_xml(Timers.display_text(name))}' cmd='#{track_cmd}' justify='left' left='#{Timers::NAME_LEFT}' top='#{top}' width='#{Timers::NAME_WIDTH}' height='#{Timers::ROW_HEIGHT}' />"
+      out << "<label id='tm_dur_#{row_id}' value='#{Timers.sanitize_xml(duration)}' justify='left' left='#{Timers::DURATION_LEFT}' top='#{top}' width='#{Timers.duration_width}' height='#{Timers::ROW_HEIGHT}' />"
+      out << "<link id='tm_x_#{row_id}' value='#{Timers::REMOVE_ICON}' cmd='#{ignore_cmd}' justify='left' left='#{Timers.remove_left}' top='#{top}' width='#{Timers::REMOVE_WIDTH}' height='#{Timers::ROW_HEIGHT}' />" unless Timers.hide_arrows
+      top += Timers::ROW_HEIGHT
+
+      if Timers.show_bars
+        # *tm bars -- a row of colored square glyphs under the name/
+        # duration. Three tiers, each rescaled to its OWN window rather
+        # than one continuous scale, so the bar visibly refills to full
+        # at each color change instead of just continuing to shrink:
+        #   green:  > 10 min left -- filled against the fixed 4h10m max
+        #           (BARS_MAX_SECONDS), same as everything above 10 min
+        #   yellow: <= 10 min left -- refills to full 10/10 right at the
+        #           10:00 mark, each cell worth ~1 min, ticking down
+        #   red:    <= 1:40 left -- refills to full 10/10 right at the
+        #           1:40 mark, each cell worth ~10 sec, ticking down to 0
+        # Indefinite-duration entries always show full green. Rendered as
+        # a plain label (not the native progressBar widget -- that showed
+        # only a bare number with no fill/color at all in this custom
+        # dialog, even with customText set, and without a way to test
+        # live it wasn't worth more guessing) so the color comes from the
+        # glyphs themselves rather than any dialog-side styling,
+        # guaranteed to render the same way every other label here does.
+        filled_icon, tier_max = if secs.infinite? || secs > Timers::BARS_YELLOW_THRESHOLD_SECONDS
+                                  [Timers::BARS_GREEN_ICON, Timers::BARS_MAX_SECONDS]
+                                elsif secs > Timers::BARS_RED_THRESHOLD_SECONDS
+                                  [Timers::BARS_YELLOW_ICON, Timers::BARS_YELLOW_THRESHOLD_SECONDS]
+                                else
+                                  [Timers::BARS_RED_ICON, Timers::BARS_RED_THRESHOLD_SECONDS]
+                                end
+        filled = secs.infinite? ? Timers::BARS_CELL_COUNT : ((secs.to_f / tier_max) * Timers::BARS_CELL_COUNT).clamp(0, Timers::BARS_CELL_COUNT).round
+        bar = (filled_icon * filled) + (Timers::BARS_EMPTY_ICON * (Timers::BARS_CELL_COUNT - filled))
+        out << "<label id='tm_bar_#{row_id}' value='#{bar}' justify='left' left='#{Timers::NAME_LEFT}' top='#{top}' width='#{Timers::DURATION_LEFT + Timers.duration_width - Timers::NAME_LEFT}' height='#{Timers::ROW_HEIGHT}' />"
+        top += Timers::ROW_HEIGHT
+      end
+
+      if Timers.show_bonuses && (summary = Timers.bonus_summary(name))
+        out << "<label id='tm_bonus_#{row_id}' value='#{Timers.sanitize_xml(summary)}' justify='left' left='#{Timers::NAME_LEFT}' top='#{top}' width='#{Timers::DURATION_LEFT + Timers.duration_width - Timers::NAME_LEFT}' height='#{Timers::ROW_HEIGHT}' font='small' />"
+        top += Timers::ROW_HEIGHT
+      end
+    end
+
+    Timers::CATEGORY_ORDER.each do |category|
+      entries = Timers.category_entries(category)
+      next if entries.empty?
+
+      if Timers.category_headers
+        header_cmd = "*tm trackall #{category}"
+        out << "<link id='tm_header_#{category}' value='#{Timers::CATEGORY_LABELS[category]}' cmd='#{header_cmd}' justify='left' left='0' top='#{top}' height='#{Timers::ROW_HEIGHT}' />"
+        top += Timers::ROW_HEIGHT
+      end
+
+      if Timers.panel_headers
+        idx = 0
+        Timers.group_by_circle(entries).each do |circle_label, circle_entries|
+          out << "<label id='tm_circle_#{category}_#{idx}' value='#{Timers.sanitize_xml(circle_label)}' justify='left' left='#{Timers::NAME_LEFT}' top='#{top}' height='#{Timers::ROW_HEIGHT}' font='small' />"
+          top += Timers::ROW_HEIGHT
+          circle_entries.each do |name, duration, secs|
+            render_row.call(category, name, duration, secs, "#{category}_#{idx}")
+            idx += 1
+          end
+        end
+      else
+        entries.each_with_index do |(name, duration, secs), idx|
+          render_row.call(category, name, duration, secs, "#{category}_#{idx}")
+        end
+      end
+    end
+
+    render_missing.call if Timers.missing_position == "bottom"
+
+    # *tm totals -- always the very last thing rendered, regardless of
+    # missing_position, same red-triangle/ignore mechanism as every other
+    # row (see render_row) but without a track link, since a total isn't
+    # a single trackable spell.
+    if Timers.show_totals
+      totals = Timers.totals_entries
+      render_totals_group = lambda do |header_text, rows, prefix|
+        next if rows.empty?
+
+        out << "<label id='tm_#{prefix}_header' value='#{header_text}' justify='left' left='0' top='#{top}' height='#{Timers::ROW_HEIGHT}' />"
+        top += Timers::ROW_HEIGHT
+        rows.each_with_index do |(name, value), idx|
+          ignore_cmd = "*tm ignore #{Timers.sanitize_xml(Timers.key(name))}"
+          out << "<label id='tm_#{prefix}_icon_#{idx}' value='#{Timers::TOTALS_ICON}' justify='left' left='0' top='#{top}' width='#{Timers::ICON_WIDTH}' height='#{Timers::ROW_HEIGHT}' />"
+          out << "<label id='tm_#{prefix}_name_#{idx}' value='#{Timers.sanitize_xml(name)}' justify='left' left='#{Timers::NAME_LEFT}' top='#{top}' width='#{Timers::NAME_WIDTH}' height='#{Timers::ROW_HEIGHT}' />"
+          out << "<label id='tm_#{prefix}_val_#{idx}' value='#{Timers.sanitize_xml(value)}' justify='left' left='#{Timers::DURATION_LEFT}' top='#{top}' width='#{Timers.duration_width}' height='#{Timers::ROW_HEIGHT}' />"
+          out << "<link id='tm_#{prefix}_x_#{idx}' value='#{Timers::REMOVE_ICON}' cmd='#{ignore_cmd}' justify='left' left='#{Timers.remove_left}' top='#{top}' width='#{Timers::REMOVE_WIDTH}' height='#{Timers::ROW_HEIGHT}' />" unless Timers.hide_arrows
+          top += Timers::ROW_HEIGHT
+        end
+      end
+
+      unless totals[:buffs].empty? && totals[:grand].empty?
+        out << "<label id='tm_totals_section_header' value='#{Timers::TOTALS_ICON} Totals' justify='left' left='0' top='#{top}' height='#{Timers::ROW_HEIGHT}' />"
+        top += Timers::ROW_HEIGHT
+        render_totals_group.call("From Buffs/Spells", totals[:buffs], "totals_buffs")
+        render_totals_group.call("Grand Totals (incl. STR/skills/enhancive/ascension/enchant)", totals[:grand], "totals_grand")
+      end
+    end
+
+    if top.zero?
+      out << "<label id='tm_none' value='Nothing active or missing' justify='left' left='0' top='0' />"
+    end
+
+    out << "</dialogData>"
+    out
+  end
+end
+
+@tm_settings = Timers.load_window_settings
+Timers.tracked = @tm_settings["timers"]["tracked"]
+Timers.ignored = @tm_settings["timers"]["ignored"]
+Timers.missing_position = @tm_settings["timers"]["missing_position"]
+Timers.sort_mode = @tm_settings["timers"]["sort_mode"]
+Timers.name_display = @tm_settings["timers"]["name_display"]
+Timers.panel_headers = @tm_settings["timers"]["panel_headers"]
+Timers.macros = @tm_settings["timers"]["macros"]
+Timers.category_headers = @tm_settings["timers"]["category_headers"]
+Timers.cat_offense = @tm_settings["timers"]["cat_offense"]
+Timers.cat_defense = @tm_settings["timers"]["cat_defense"]
+Timers.cat_both = @tm_settings["timers"]["cat_both"]
+Timers.show_bonuses = @tm_settings["timers"]["show_bonuses"]
+Timers.manual_bonuses = @tm_settings["timers"]["manual_bonuses"]
+Timers.weapon_enchant = @tm_settings["timers"]["weapon_enchant"]
+Timers.show_totals = @tm_settings["timers"]["show_totals"]
+Timers.show_bars = @tm_settings["timers"]["show_bars"]
+Timers.zelnorn_bonus = @tm_settings["timers"]["zelnorn_bonus"]
+Timers.gemstones = @tm_settings["timers"]["gemstones"]
+Timers.duration_width = @tm_settings["timers"]["duration_width"]
+Timers.hide_arrows = @tm_settings["timers"]["hide_arrows"]
+Timers.trandest_rank = @tm_settings["timers"]["trandest_rank"]
+
+tm_downstream_hook_id = "#{Script.current.name}_downstream"
+DownstreamHook.remove(tm_downstream_hook_id) rescue nil
+DownstreamHook.add(tm_downstream_hook_id, proc do |server_string|
+  Timers.rusalka_observe(server_string)
+  Timers.rage_observe(server_string)
+  server_string
+end)
+
+tm_upstream_hook_id = "#{Script.current.name}_upstream"
+UpstreamHook.remove(tm_upstream_hook_id) rescue nil
+UpstreamHook.add(tm_upstream_hook_id, proc do |command|
+  if command.strip =~ /\*tm\s+track\s+all\b/i
+    added = Timers.track_all!
+    _respond(Timers.build_dialog)
+    respond "Timers: added #{added} new spell(s) to the watch list"
+    nil
+  elsif command.strip =~ /\*tm\s+track\s+(.+?)\s*\z/i
+    requested = Regexp.last_match(1)
+    spell = Spell[requested]
+    if spell
+      if Timers.track!(spell)
+        _respond(Timers.build_dialog)
+        respond "Timers now watching: #{spell.name} (#{spell.num})"
+      else
+        respond "Timers: already watching #{spell.name} (#{spell.num})"
+      end
+    else
+      respond "Timers: could not find a spell matching '#{requested}'"
+    end
+    nil
+  elsif command.strip =~ /\*tm\s+untrack\s+all\b/i
+    Timers.untrack_all!
+    _respond(Timers.build_dialog)
+    respond "Timers: no longer watching anything"
+    nil
+  elsif command.strip =~ /\*tm\s+untrack\s+(.+?)\s*\z/i
+    requested = Regexp.last_match(1)
+    spell = Spell[requested]
+    num = spell ? spell.num : requested.to_i
+    if Timers.untrack!(num)
+      _respond(Timers.build_dialog)
+      respond "Timers: no longer watching ##{num}"
+    else
+      respond "Timers: wasn't watching ##{num}"
+    end
+    nil
+  elsif command.strip =~ /\*tm\s+diag\s*\z/i
+    Timers.dump_effect_dialogs
+    nil
+  elsif command.strip =~ /\*tm\s+tracked\s*\z/i
+    if Timers.tracked.empty?
+      respond "Timers: not watching any spells"
+    else
+      respond "Timers watch list:"
+      by_circle = Timers.tracked.sort.group_by { |num| Timers.circle_num(num) }
+      by_circle.keys.sort.each do |circle|
+        respond "  #{Lich::Gemstone::Spells.get_circle_name(circle)}:"
+        by_circle[circle].each do |num|
+          spell = Spell[num]
+          respond "    #{num} #{spell ? spell.name : '(unknown)'}"
+        end
+      end
+    end
+    nil
+  elsif command.strip =~ /\*tm\s+trackall\s+(spells|buffs|debuffs|cooldowns)\b/i
+    category = Regexp.last_match(1).downcase.to_sym
+    added = 0
+    Timers.active_names(category).each do |name|
+      spell = Spell[name]
+      next unless spell
+
+      added += 1 if Timers.track!(spell)
+    end
+    _respond(Timers.build_dialog)
+    respond "Timers: added #{added} new spell(s) from #{category} to the watch list"
+    nil
+  elsif command.strip =~ /\*tm\s+ignore\s+(.+?)\s*\z/i
+    requested = Regexp.last_match(1)
+    # Resolve a spell number (or fuzzy name) to its real name first --
+    # ignoring the literal string "1605" does nothing, since category
+    # entries are matched by name text, never by number.
+    spell = Spell[requested]
+    name = spell ? spell.name : requested
+    if Timers.add_ignored!(name)
+      _respond(Timers.build_dialog)
+      respond "Timers: hiding '#{name}'"
+    else
+      respond "Timers: already hiding '#{name}'"
+    end
+    nil
+  elsif command.strip =~ /\*tm\s+unignore\s+all\b/i
+    Timers.unignore_all!
+    _respond(Timers.build_dialog)
+    respond "Timers: no longer hiding anything"
+    nil
+  elsif command.strip =~ /\*tm\s+unignore\s+(.+?)\s*\z/i
+    requested = Regexp.last_match(1)
+    spell = Spell[requested]
+    name = spell ? spell.name : requested
+    if Timers.remove_ignored!(name)
+      _respond(Timers.build_dialog)
+      respond "Timers: no longer hiding '#{name}'"
+    else
+      respond "Timers: wasn't hiding '#{name}'"
+    end
+    nil
+  elsif command.strip =~ /\*tm\s+ignored\s*\z/i
+    if Timers.ignored.empty?
+      respond "Timers: nothing hidden"
+    else
+      respond "Timers hidden names:"
+      resolved = []
+      unresolved = []
+      Timers.ignored.sort.each do |key|
+        spell = Spell[key]
+        spell ? resolved << spell : unresolved << key
+      end
+      by_circle = resolved.group_by { |spell| Timers.circle_num(spell.num) }
+      by_circle.keys.sort.each do |circle|
+        respond "  #{Lich::Gemstone::Spells.get_circle_name(circle)}:"
+        by_circle[circle].sort_by(&:num).each { |spell| respond "    #{spell.num} #{spell.name}" }
+      end
+      unless unresolved.empty?
+        respond "  Other:"
+        unresolved.each { |key| respond "    #{key}" }
+      end
+    end
+    nil
+  elsif command.strip =~ /\*tm\s+missing\s+(top|bottom)\b/i
+    position = Regexp.last_match(1).downcase
+    Timers.set_missing_position!(position)
+    _respond(Timers.build_dialog)
+    respond "Timers: Missing Spells now shown at the #{position}"
+    nil
+  elsif command.strip =~ /\*tm\s+sort\s+(az|za|dhigh|dlow)\b/i
+    mode = { "az" => "name_asc", "za" => "name_desc", "dhigh" => "duration_desc", "dlow" => "duration_asc" }[Regexp.last_match(1).downcase]
+    Timers.set_sort_mode!(mode)
+    _respond(Timers.build_dialog)
+    respond "Timers: sort order is now #{mode}"
+    nil
+  elsif command.strip =~ /\*tm\s+display\s+(name|number|both)\b/i
+    mode = Regexp.last_match(1).downcase
+    Timers.set_name_display!(mode)
+    _respond(Timers.build_dialog)
+    respond "Timers: name display is now #{mode}"
+    nil
+  elsif command.strip =~ /\*tm\s+pheaders\b/i
+    enabled = Timers.toggle_panel_headers!
+    _respond(Timers.build_dialog)
+    respond "Timers: spell circle headers in panel: #{enabled ? 'ON' : 'OFF'}"
+    nil
+  elsif command.strip =~ /\*tm\s+headers\b/i
+    enabled = Timers.toggle_category_headers!
+    _respond(Timers.build_dialog)
+    respond "Timers: category headers in panel: #{enabled ? 'ON' : 'OFF'}"
+    nil
+  elsif command.strip =~ /\*tm\s+bonuses\b/i
+    enabled = Timers.toggle_bonuses!
+    _respond(Timers.build_dialog)
+    respond "Timers: bonus sub-line under each entry: #{enabled ? 'ON' : 'OFF'}"
+    nil
+  elsif command.strip =~ /\*tm\s+totals\b/i
+    enabled = Timers.toggle_totals!
+    _respond(Timers.build_dialog)
+    respond "Timers: totals section at the bottom of the panel: #{enabled ? 'ON' : 'OFF'}"
+    nil
+  elsif command.strip =~ /\*tm\s+bars\b/i
+    enabled = Timers.toggle_bars!
+    _respond(Timers.build_dialog)
+    respond "Timers: progress bars in place of name/duration: #{enabled ? 'ON' : 'OFF'}"
+    nil
+  elsif command.strip =~ /\*tm\s+totalscheck\b/i
+    Timers.send_to_story(["Timers totals check -- everything currently being added up:"] + Timers.totals_debug_report)
+    nil
+  elsif command.strip =~ /\*tm\s+ragecheck\b/i
+    respond "Timers ragecheck:"
+    respond "  Timers.rage_buffs: #{Timers.rage_buffs.inspect}"
+    respond "  Timers.rage_bonus: #{Timers.rage_bonus.inspect}"
+    respond "  Timers.rage_seconds_left: #{Timers.rage_seconds_left.inspect}"
+    respond "  Timers.bonus_summary('Rage Armor'): #{Timers.bonus_summary('Rage Armor').inspect}"
+    respond "  Timers.show_bonuses: #{Timers.show_bonuses.inspect}"
+    respond "  Timers.manual_bonuses['rage armor']: #{Timers.manual_bonuses['rage armor'].inspect}"
+    nil
+  elsif command.strip =~ /\*tm\s+set\s*bonus\s+(.+?)\s*\z/i
+    rest = Regexp.last_match(1)
+    name, text =
+      if rest =~ /\A(.+?)\s*\|\s*(.+?)\s*\z/
+        [Regexp.last_match(1), Regexp.last_match(2)]
+      else
+        Timers.split_name_and_text(rest)
+      end
+
+    if name && text && !text.to_s.empty?
+      Timers.set_manual_bonus!(name, text)
+      _respond(Timers.build_dialog)
+      respond "Timers: bonus for '#{name}' set to: #{text} (stored under key '#{Timers.key(name)}')"
+    else
+      respond "Timers: could not tell where the name ends and the bonus text begins."
+      respond "Either use a separator (*tm setbonus Soul Crusher|AS +20), or make sure"
+      respond "the name is currently showing in the panel/tracked, then omit it:"
+      respond "  *tm setbonus Soul Crusher AS +20"
+    end
+    nil
+  elsif command.strip =~ /\*tm\s+clear\s*bonus\s+(.+?)\s*\z/i
+    name = Regexp.last_match(1)
+    if Timers.clear_manual_bonus!(name)
+      _respond(Timers.build_dialog)
+      respond "Timers: cleared the pinned bonus for '#{name}'"
+    else
+      respond "Timers: no pinned bonus was set for '#{name}'"
+    end
+    nil
+  elsif command.strip =~ /\*tm\s+enchant\s+(\d+)\s*\z/i
+    value = Timers.set_weapon_enchant!(Regexp.last_match(1))
+    _respond(Timers.build_dialog)
+    respond "Timers: weapon total enchant set to #{value} (Item Supercharger now shows Phys AS +#{value / 2})"
+    nil
+  elsif command.strip =~ /\*tm\s+zelnorn\s+(\d+)\s*\z/i
+    value = Timers.set_zelnorn_bonus!(Regexp.last_match(1))
+    _respond(Timers.build_dialog)
+    respond "Timers: Zelnorn set bonus set to +#{value} bAS and +#{value} pAS in Grand Totals"
+    nil
+  elsif command.strip =~ /\*tm\s+gemstones?\s*\z/i
+    if Timers.gemstones.empty?
+      respond "Timers: no gemstones set"
+    else
+      respond "Timers gemstones:"
+      Timers.gemstones.each_value { |gem| respond "  #{gem['name']}: #{gem['text']}" }
+    end
+    nil
+  elsif command.strip =~ /\*tm\s+cleargemstone\s+(.+?)\s*\z/i
+    name = Regexp.last_match(1)
+    if Timers.clear_gemstone!(name)
+      _respond(Timers.build_dialog)
+      respond "Timers: cleared gemstone '#{name}'"
+    else
+      respond "Timers: no gemstone named '#{name}' was set"
+    end
+    nil
+  elsif command.strip =~ /\*tm\s+gemstone\s+(.+?)\s+([+-]?\d+.*)\z/i
+    name, text = Regexp.last_match(1), Regexp.last_match(2)
+    Timers.set_gemstone!(name, text)
+    _respond(Timers.build_dialog)
+    respond "Timers: gemstone '#{name}' set to: #{text} (added to Grand Totals)"
+    nil
+  elsif command.strip =~ /\*tm\s+gemstone\b/i
+    respond "Timers: usage -- *tm gemstone <name> <N label[, N label...]>"
+    respond "  e.g. *tm gemstone Journey Tactician 10 pAS"
+    nil
+  elsif command.strip =~ /\*tm\s+(?:cat|category)\s+(o|offense|d|defense|b|both)\b/i
+    key = Regexp.last_match(1).downcase
+    case key
+    when "o", "offense"
+      enabled = Timers.toggle_cat_offense!
+      label = "Offense"
+    when "d", "defense"
+      enabled = Timers.toggle_cat_defense!
+      label = "Defense"
+    else
+      enabled = Timers.toggle_cat_both!
+      label = "Both"
+    end
+    _respond(Timers.build_dialog)
+    respond "Timers: #{label} category: #{enabled ? 'ON' : 'OFF'}"
+    nil
+  elsif command.strip =~ /\*tm\s+run\s+(\d+)\b/i
+    num = Regexp.last_match(1).to_i
+    if Timers.run_macro(num)
+      respond "Timers: running macro for ##{num}"
+    else
+      respond "Timers: no macro registered for ##{num}"
+    end
+    nil
+  elsif command.strip =~ /\*tm\s+clearmacro\s+(\d+)\b/i
+    num = Regexp.last_match(1).to_i
+    if Timers.remove_macro!(num)
+      _respond(Timers.build_dialog)
+      respond "Timers: removed macro for ##{num}"
+    else
+      respond "Timers: no macro registered for ##{num}"
+    end
+    nil
+  elsif command.strip =~ /\*tm\s+macros\s*\z/i
+    if Timers.macros.empty?
+      respond "Timers: no macros registered"
+    else
+      respond "Timers macros:"
+      Timers.macros.keys.sort.each do |num|
+        spell = Spell[num]
+        respond "  #{num} #{spell ? spell.name : '(unknown)'}: #{Timers.macros[num]}"
+      end
+    end
+    nil
+  elsif command.strip =~ /\*tm\s+width\s+(\d+)\s*\z/i
+    width = Regexp.last_match(1).to_i
+    if Timers.set_duration_width!(width)
+      _respond(Timers.build_dialog)
+      respond "Timers: duration column width set to #{width} (mirrors *exp width in exp_sagapanel.lic -- enter the same number there for a matching look)"
+    else
+      respond "Timers: width must be a positive number"
+    end
+    nil
+  elsif command.strip =~ /\*tm\s+hidearrows\b/i
+    hidden = Timers.toggle_hide_arrows!
+    _respond(Timers.build_dialog)
+    respond "Timers: hide arrows #{hidden ? 'ON' : 'OFF'}"
+    nil
+  elsif command.strip =~ /\*tm\s+trandest\s+(\d+)\s*\z/i
+    rank = Regexp.last_match(1).to_i
+    if Timers.set_trandest_rank!(rank)
+      _respond(Timers.build_dialog)
+      respond "Timers: Transcend Destiny rank set to #{rank} (phantom level #{Lich::Gemstone::Stats.level.to_i + rank} for Casting Strength)"
+    else
+      respond "Timers: Transcend Destiny rank must be 0-#{Timers::TRANDEST_MAX_RANK}"
+    end
+    nil
+  elsif command.strip =~ /\*tm\s+(\d+)\s+(.+)\z/i
+    num = Regexp.last_match(1).to_i
+    chain = Regexp.last_match(2).strip
+    Timers.set_macro!(num, chain)
+    _respond(Timers.build_dialog)
+    spell = Spell[num]
+    respond "Timers: macro set for ##{num}#{spell ? " (#{spell.name})" : ''}: #{chain}"
+    nil
+  else
+    command
+  end
+end)
+
+_respond("<closeDialog id='Timers'/><openDialog type='dynamic' id='Timers' title='Timers' target='Timers' scroll='manual' location='main' resident='true'><dialogData id='Timers'></dialogData></openDialog>")
+_respond(Timers.build_dialog)
+
+before_dying do
+  UpstreamHook.remove(tm_upstream_hook_id) rescue nil
+  DownstreamHook.remove(tm_downstream_hook_id) rescue nil
+  _respond("<closeDialog id='Timers'/>")
+end
+
+echo "Timers is active."
+
+@tm_last_snapshot = Timers.snapshot
+@tm_last_refresh_at = Time.now
+
+loop do
+  snapshot = Timers.snapshot
+  if snapshot != @tm_last_snapshot || (Time.now - @tm_last_refresh_at) > 5.0
+    @tm_last_snapshot = snapshot
+    @tm_last_refresh_at = Time.now
+    _respond(Timers.build_dialog)
+  end
+  sleep 0.5
+end

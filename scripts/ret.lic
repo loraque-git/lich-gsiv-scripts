@@ -1,0 +1,124 @@
+=begin
+
+  Combat maneuver: Retreat (cman retreat).
+
+  Usage:
+    ;ret                     - retreat from combat
+
+       creator: loraque (loraque@gmail.com)
+        author: loraque (loraque@gmail.com)
+          game: Gemstone
+          tags: maneuver, combat, retreat
+      required: Lich >= 5.12.0
+       version: 0.8.0
+
+  changelog:
+    0.8.0 (2026-09-11)
+      katana: retry grip one until the real 1H line; waitrt after the
+        swing so grip two cannot outrun it; skip restore if ret/wwb is
+        still running; wait for a sibling wwb/ret/www before gripping
+    0.7.0 (2026-09-09)
+      lock: kill stale same-name copy after 5s instead of overlapping
+      creator: loraque (loraque@gmail.com)
+    0.6.1 (2026-09-09)
+      grip one whenever a katana/bastard is in the right hand; 2H grip does
+        not fill the left-hand XML slot. Restore grip two only if we switched.
+    0.6.0 (2026-09-09)
+      two-handed katana/bastard: grip one before the swing, grip two after
+    0.5.0 (2026-09-09)
+      waitcastrt?
+    0.3.0 (2026-09-09)
+      named BEGIN/END blocks: config, lock, waitrt, action
+    0.2.0 (2026-09-09)
+      EO header and family tags
+      Script.current.vars[0] for the full argument string
+    0.1.0
+      initial clone
+
+=end
+
+# BEGIN config
+COMBAT_COMMAND = "cman retreat"
+# END config
+
+# BEGIN lock
+LOCK_TIMEOUT = 5.0
+
+elapsed = 0.0
+while (stale = Script.list.find { |s| s.name == Script.current.name && s != Script.current })
+  pause 0.1
+  elapsed += 0.1
+  if elapsed >= LOCK_TIMEOUT
+    stale.kill
+    break
+  end
+end
+# END lock
+
+# BEGIN waitrt
+waitrt?
+waitcastrt?
+# END waitrt
+
+# BEGIN action
+right = GameObj.right_hand
+hand_empty = lambda { |h| h.nil? || h.id.to_s.empty? || h.name.to_s.empty? || h.name =~ /^empty$/i }
+katana_sibling = lambda {
+  Script.list.any? { |s| s != Script.current && s.name =~ /^(wwb|ret)$/ }
+}
+
+if hand_empty.call(right)
+  echo "No weapon in the right hand."
+  exit
+end
+
+if right.name.to_s =~ /katana|bastard/i
+  elapsed = 0.0
+  while Script.list.any? { |s| s != Script.current && s.name =~ /^(wwb|ret|www)$/ }
+    pause 0.1
+    elapsed += 0.1
+    break if elapsed >= 5.0
+  end
+
+  grip_ok = false
+  switched_to_one = false
+  12.times do
+    waitrt?
+    waitcastrt?
+    if dead? || checkstunned || checkwebbed
+      echo "Cannot change grip right now."
+      exit
+    end
+    grip_line = fput("grip one").to_s
+    if grip_line =~ /already gripping .+ with one hand/i
+      grip_ok = true
+      break
+    elsif grip_line =~ /You grip .+ with one hand/i
+      grip_ok = true
+      switched_to_one = true
+      break
+    elsif grip_line =~ /\.\.\.wait/i
+      pause 0.2
+    else
+      pause 0.15
+    end
+  end
+
+  unless grip_ok
+    echo "Could not switch to a one-handed grip."
+    exit
+  end
+
+  if switched_to_one
+    before_dying {
+      unless katana_sibling.call
+        waitrt?
+        fput "grip two"
+      end
+    }
+  end
+end
+
+fput COMBAT_COMMAND
+waitrt?
+# END action

@@ -1,44 +1,65 @@
 # lich-gsiv-scripts
 
-Personal GemStone IV Lich scripts signed `loraque`. Combat clones, `monks_keeper`, and `gemstone_sagapanel`.
+GemStone IV Lich scripts and tools by **loraque** (`loraque@gmail.com`).
 
-This folder is the **git backup**. The copies Lich actually runs stay in `/home/loraque/Lich5/scripts/`. GitHub only updates when you commit and push from here.
+Public repo for combat clones, Saga panels, community patches, and a Saga log summarizer. Drop `.lic` files into your Lich `scripts/` folder (or `scripts/custom/` for overrides).
 
-## Why this is a separate repo
+**Repo:** https://github.com/loraque-git/lich-gsiv-scripts
 
-Omarchy/Grok desktop glue and Lich game scripts are different projects. Two GitHub repos means a mistake in one does not tangle the other.
+## What’s here
 
-Not backed up here (on purpose):
+### Original scripts (`scripts/`)
 
-- The Lich engine (`/home/loraque/Lich5/lib`, `lich.rbw`)
-- Community scripts (`go2`, `eloot`, `infomon`, …)
-- Duplicate backups (`*Copy*`, `*(1)*`)
-- Character data, maps, databases
+| Script | What it does |
+|---|---|
+| Combat clones (`rre`, `ssk`, `jab`, `kk`, …) | Aimed attack / UCS / maneuver wrappers with shared stance-dance blocks |
+| `monks_keeper.lic` | Sympathy RT-gap Blink helper for monks |
+| `gemstone_sagapanel.lic` | Saga panel for gemstone tracking |
+| `alsohere.lic` / `alsohere_sagapanel.lic` | Who’s here helpers + Saga panel |
+| `ret.lic` / `ttrs.lic` | Additional combat clones in the same family |
 
-## Typical loop
+### Community patches (stock upstream stays untouched)
 
-After we edit a live script under `Lich5/scripts/`:
+| File | What it does |
+|---|---|
+| `eloot-patched.lic` | eloot 2.12.1 fork: selectable loot stance (off…defensive), default path for Forward |
+| `eloot-loot-stance.patch` | Unified diff to re-apply after an upstream `eloot.lic` upgrade |
+| `eloot-loot-stance.README.md` | Install / re-apply / offer-upstream notes |
+| `service_sales-patched.lic` | Local patch on peggyanne’s `service_sales` |
+| `timers_sagapanel-patched.lic` | Local patch on RuseofFools’ `timers_sagapanel` |
 
-```bash
-cp /home/loraque/Lich5/scripts/rre.lic ~/Projects/lich-gsiv-scripts/scripts/
-cd ~/Projects/lich-gsiv-scripts
-git add scripts/rre.lic
-git commit -m "rre: describe the change"
-git push
-```
+Run patched scripts by their filename (e.g. `;eloot-patched`). Stock `;eloot` / `;repo` updates do not overwrite these.
 
-Or copy every signed script at once:
+### Saga log tools (`tools/saga-log-summary/`)
 
-```bash
-# from this repo, after pulling live files in
-git add -A
-git status
-git commit -m "Sync Lich scripts"
-git push
-```
+Python tools that turn Saga daily logs into JSON/HTML summaries (skins/furrier silver, Blink metrics, deaths, EBP, enhancive loadouts). See that folder’s scripts and run `serve.sh` for a local viewer.
 
-Restore onto a machine that already has Lich:
+## Quick install
 
 ```bash
-cp ~/Projects/lich-gsiv-scripts/scripts/*.lic /home/loraque/Lich5/scripts/
+git clone https://github.com/loraque-git/lich-gsiv-scripts.git
+cp lich-gsiv-scripts/scripts/*.lic /path/to/Lich5/scripts/
+# optional: only the eloot patch pack
+cp lich-gsiv-scripts/scripts/eloot-patched.lic \
+   lich-gsiv-scripts/scripts/eloot-loot-stance.patch \
+   lich-gsiv-scripts/scripts/eloot-loot-stance.README.md \
+   /path/to/Lich5/scripts/
 ```
+
+For the eloot loot-stance patch specifically, read `scripts/eloot-loot-stance.README.md`.
+
+## Authorship
+
+- Scripts signed `loraque` are originals from this account.
+- `*-patched` files keep the upstream `author:` / `Author:` lines and list `loraque` under contributors where applicable.
+- Do not confuse this repo with [elanthia-online/scripts](https://github.com/elanthia-online/scripts) (the community script tree).
+
+## Not included
+
+- The Lich engine itself
+- Stock community scripts (`go2`, stock `eloot`, `infomon`, …)
+- Character data, maps, databases, duplicate backups
+
+## License / use
+
+Free to use, copy, and adapt for GemStone / Lich. If you publish a derivative of a patched community script, keep the original author credit.

@@ -1,0 +1,29 @@
+=begin
+
+  Starts alsohere_sagapanel. Keep this name so ;alsohere and autostart
+  still work.
+
+  Usage:
+    ;alsohere              - Start the Also Here Saga panel
+    ;alsohere_sagapanel    - Same, run the panel directly
+
+       creator: loraque (loraque@gmail.com)
+        author: loraque (loraque@gmail.com)
+          game: Gemstone
+          tags: saga, frontend, panel, room, pcs
+      required: Lich >= 5.12.0
+       version: 0.2.0
+
+  changelog:
+    0.2.0 (2026-09-11)
+      launcher for alsohere_sagapanel (replaces story-window Thread/get)
+    0.1.0
+      story-window entry occupancy tracker
+
+=end
+
+if Script.running?("alsohere_sagapanel")
+  echo "alsohere: panel already running (;alsohere_sagapanel)"
+else
+  Script.start("alsohere_sagapanel")
+end

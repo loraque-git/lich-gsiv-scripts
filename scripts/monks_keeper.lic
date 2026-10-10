@@ -1,85 +1,339 @@
 =begin
 
-  Keeps Blink (1215) and Focus Barrier (1216) up. Blink is recast first
-  because it drops on a successful avoidance.
+  Keeps Blink (1215) and Focus Barrier (1216) up. Blink is the priority:
+  it drops on a successful avoidance, and hits while it is down are costly.
 
-  Recasts wait for roundtime and use Spell#cast (incant + type-ahead retry)
-  so the command is not buried behind combat input. There is no Lich call
-  that inserts in front of the game's type-ahead queue.
+  Blink drop is watched on the game stream (splinter / stop messaging), not
+  only Infomon, so a recast is queued the moment it falls. While Blink is
+  down the loop polls tightly and casts as soon as stun/RT/cast-RT allow.
+  Focus Barrier is secondary and still rate-limited.
 
-  After a cast, waits until Infomon shows the spell active instead of a
-  fixed pause. Prep refusals (can't think clearly, etc.) back off instead
-  of hammering incant.
+  Under Sympathy (1120), combat scripts dump RT when they try to attack.
+  The keeper detects that state and casts Blink in RT=0 gaps instead of
+  sitting on waitrt? behind those pulses.
+
+  Lich cannot jump ahead of commands already in the game's type-ahead
+  queue. This script clears its own buffer, retries aggressively, and
+  does not wait on dialog population when Blink is known down.
 
   Usage:
     ;monks_keeper            - start
     ;monks_keeper kill       - stop (or ;kill monks_keeper)
 
+       creator: loraque (loraque@gmail.com)
         author: loraque (loraque@gmail.com)
           game: Gemstone
           tags: monk, magic, utility
       required: Lich >= 5.12.0
-       version: 0.3.0
+       version: 0.6.3
 
   changelog:
+    0.6.3 (2026-09-26)
+      urgent Blink: poll-style RT wait (abort on stun/dead); 2.5s timeout;
+        broader mana/wait/fumble matchers; incant-only (release if already
+        prepared); no Spell#cast fallback on the urgent path
+    0.6.2 (2026-09-26)
+      fix Blink up/down regexes: /ix ignored spaces so the DownstreamHook
+        never matched real splinter/cast lines — Blink drops were missed
+      require "your skin" on splinter; blink_down? also trusts !spell_up?
+    0.6.1 (2026-09-26)
+      detect Sympathy (1120); while under it, cast Blink in RT=0 gaps
+        instead of waitrt? behind combat scripts' sympathy roundtimes
+    0.6.0 (2026-09-26)
+      DownstreamHook marks Blink down on splinter/stop; urgent tight poll
+      cast Blink as soon as stun/web/RT clear (no long skip while stunned)
+      clear script buffer before urgent incant; 1216 stays secondary
+    0.5.0 (2026-09-10)
+      skip recast while Active Spells/Buffs dialogs are empty (login)
+      1216 min 20 minutes between recasts
+      match dialog names /focus barrier|barrier of force/ and /blink/
+    0.4.0 (2026-09-09)
+      treat 1215/1216 as up if Spell.active? OR Active Spells/Buffs dialog
     0.3.0 (2026-09-09)
-      wait until Spell#active? after a successful cast
-      back off on "can't think clearly enough" and similar prep refusals
+      wait until spell shows up after recast; back off on prep refusals
     0.2.0 (2026-09-09)
-      waitcastrt? + waitrt? instead of nonexistent wait_castrt (script was
-        crashing when Blink dropped)
-      Spell#cast instead of nonexistent putbeforerequest
-      Spell.affordable? / Char.mana (mental acuity spends stamina)
-      skip recast while dead, stunned, or webbed
+      waitcastrt? + waitrt?; Spell#cast; affordable?; skip dead/stun/web
     0.1.0
       initial keep-alive loop for 1215/1216
 
 =end
 
-POLL = 0.1
-LOW_ENERGY_PAUSE = 5
+POLL_IDLE = 0.15
+POLL_URGENT = 0.05
+LOW_ENERGY_PAUSE = 2
 ACTIVE_WAIT = 3.0
-PREP_REFUSED = /
-  can't think clearly enough to prepare a spell|
-  concentrating too intently|
-  unable to do that right now|
-  don't seem to be able to move|
-  All you manage to do is cough up some blood
-/ix
+URGENT_INCANT_TIMEOUT = 2.5
+BARRIER_RECAST_GAP = 20 * 60
 
-SPELLS = [
-  Spell[1215], # Blink -- drops on a successful avoidance
-  Spell[1216], # Focus Barrier
-].freeze
+# NOTE: do not use /x here — extended mode drops spaces and breaks matching.
+PREP_REFUSED = /can't think clearly enough to prepare a spell|concentrating too intently|unable to do that right now|don't seem to be able to move|All you manage to do is cough up some blood|too injured to make that dextrous|You are still stunned|You can't do that while|don't have enough mana|don't have the mana|don't have any mana|But you don't have any mana|You lose your concentration|You fumble your spell|You fail to|Nothing happens|sympathy toward .+ overwhelms you/i
+WAIT_LINE_RE = /\.\.\.wait \d+|\bWait \d+ sec|Roundtime:/i
+ALREADY_PREPARED_RE = /You already have a spell readied/i
+SPELL_READY_RE = /Your spellsong is ready|Your spell is ready/i
 
-loop do
-  if dead? || checkstunned || checkwebbed
-    pause POLL
-    next
+BLINK_UP_RE = /A momentary eruption of starlit darkness engulfs you|double images of the world sway dizzyingly around you before regaining solidity/i
+BLINK_DOWN_RE = /wells up to the surface of your skin and splinters away with a sound like shattering crystal|The flickering shadows around you dissipate|Your Blink spell\b.*dissipat/i
+SYMPATHY_ON_RE = /You are overwhelmed with sympathy for|Your sympathy toward .+ overwhelms you as you endure an onslaught of emotions/i
+SYMPATHY_OFF_RE = /You begin to feel less sympathic|You begin to feel less sympathetic/i
+
+INCANT_RESULT_RE = Regexp.union(
+  BLINK_UP_RE,
+  SPELL_READY_RE,
+  PREP_REFUSED,
+  WAIT_LINE_RE,
+  ALREADY_PREPARED_RE
+)
+
+SPELL_BLINK = Spell[1215]
+SPELL_BARRIER = Spell[1216]
+
+$mk_last_1216_cast = nil
+$mk_blink_known = nil # true / false / nil (unknown)
+$mk_blink_urgent = false
+$mk_sympathy = false
+
+def expiry_live?(exp)
+  exp.to_f == 0 || exp.to_f > Time.now.to_f
+end
+
+def dialog_hashes
+  hashes = []
+  if defined?(XMLData) && XMLData.respond_to?(:dialogs) && XMLData.dialogs.is_a?(Hash)
+    hashes << XMLData.dialogs["Active Spells"]
+    hashes << XMLData.dialogs["Buffs"]
+  end
+  if defined?(Effects::Spells)
+    hashes << Effects::Spells.to_h
+    hashes << Effects::Buffs.to_h
+  end
+  hashes.compact.select { |h| h.is_a?(Hash) }
+rescue StandardError
+  []
+end
+
+def dialogs_populated?
+  dialog_hashes.any? { |h| !h.empty? }
+end
+
+def name_matches?(key, spell)
+  ks = key.to_s.downcase
+  want = spell.name.to_s.downcase
+  return true if ks == want || ks.start_with?(want)
+
+  case spell.num
+  when 1215 then ks =~ /blink/
+  when 1216 then ks =~ /focus barrier|barrier of force/
+  else false
+  end
+end
+
+def dialog_has?(spell)
+  want_num = spell.num
+  dialog_hashes.each do |h|
+    return true if h.key?(want_num) && expiry_live?(h[want_num])
+    return true if h.key?(want_num.to_s) && expiry_live?(h[want_num.to_s])
+
+    h.each do |key, exp|
+      next unless expiry_live?(exp)
+      return true if (key.is_a?(Integer) || key.to_s =~ /^\d+$/) && key.to_i == want_num
+      next unless key.is_a?(String)
+      return true if name_matches?(key, spell)
+    end
+  end
+  false
+rescue StandardError
+  false
+end
+
+def spell_up?(spell)
+  spell.active? || dialog_has?(spell)
+end
+
+def barrier_recast_too_soon?
+  return false if $mk_last_1216_cast.nil?
+
+  (Time.now - $mk_last_1216_cast) < BARRIER_RECAST_GAP
+end
+
+def mark_blink_up!
+  $mk_blink_known = true
+  $mk_blink_urgent = false
+end
+
+def mark_blink_down!
+  $mk_blink_known = false
+  $mk_blink_urgent = true
+end
+
+def blink_down?
+  # Infomon/dialog says down — always treat as down (and clear sticky "known up").
+  unless spell_up?(SPELL_BLINK)
+    $mk_blink_known = false
+    $mk_blink_urgent = true
+    return true
+  end
+  # Stream saw a first-person drop even if Infomon still lags as "up".
+  return true if $mk_blink_urgent || $mk_blink_known == false
+
+  false
+end
+
+def cast_blocked_now?
+  dead? || checkstunned || checkwebbed
+end
+
+def rt_clear?
+  checkrt.to_i <= 0 && checkcastrt.to_i <= 0
+rescue StandardError
+  begin
+    checkrt <= 0 && checkcastrt <= 0
+  rescue StandardError
+    true
+  end
+end
+
+# Poll until RT/cast-RT clear. Re-checks stun/dead so we do not sleep through
+# a state change the way a bare waitrt? would.
+def wait_for_cast_window!(max_wait = 8)
+  deadline = Time.now + max_wait
+  until rt_clear? || Time.now >= deadline || cast_blocked_now?
+    pause POLL_URGENT
+  end
+  rt_clear? && !cast_blocked_now?
+end
+
+def watch_blink_up!(max_wait = ACTIVE_WAIT)
+  deadline = Time.now + max_wait
+  pause POLL_URGENT until $mk_blink_known == true || spell_up?(SPELL_BLINK) || Time.now >= deadline || cast_blocked_now?
+  if $mk_blink_known == true || spell_up?(SPELL_BLINK)
+    mark_blink_up!
+    return true
+  end
+  false
+end
+
+# Urgent Blink: single-line incant only. DownstreamHook confirms up/down.
+# No Spell#cast fallback (prep+cast doubles latency).
+def cast_blink_urgent!
+  return false if cast_blocked_now?
+  return false unless SPELL_BLINK.affordable?
+  return true if spell_up?(SPELL_BLINK) && $mk_blink_known != false
+
+  clear
+  return false unless wait_for_cast_window!
+  return false if cast_blocked_now?
+  return true if spell_up?(SPELL_BLINK) && $mk_blink_known != false
+
+  result = dothistimeout("incant #{SPELL_BLINK.num}", URGENT_INCANT_TIMEOUT, INCANT_RESULT_RE)
+
+  if result.to_s =~ ALREADY_PREPARED_RE
+    clear
+    dothistimeout("release", 2, /rush away from you|don't have a prepared spell/i)
+    return false
   end
 
-  need = SPELLS.find { |spell| !spell.active? }
-  unless need
-    pause POLL
-    next
+  if result.to_s =~ BLINK_UP_RE || result.to_s =~ SPELL_READY_RE
+    return true if watch_blink_up!
+    # Ready line without cast completion yet — one more incant attempt next loop.
+    return false
   end
 
-  unless need.affordable?
-    echo "Warning: not enough energy to refresh #{need.name} (#{need.num})."
-    pause LOW_ENERGY_PAUSE
-    next
+  if result.to_s =~ PREP_REFUSED || result.to_s =~ WAIT_LINE_RE || result == false || result.nil?
+    pause(result.to_s =~ WAIT_LINE_RE ? POLL_URGENT : LOW_ENERGY_PAUSE)
+    return false
   end
 
-  waitrt?
-  waitcastrt?
+  # Unrecognized reply: do not fall back to Spell#cast; retry next urgent tick.
+  pause POLL_URGENT
+  false
+end
 
-  result = need.cast
+def cast_barrier!
+  return false if cast_blocked_now?
+  return false if barrier_recast_too_soon?
+  return false unless dialogs_populated?
+  return true if spell_up?(SPELL_BARRIER)
+  return false unless SPELL_BARRIER.affordable?
+
+  return false unless wait_for_cast_window!
+  return false if cast_blocked_now?
+  return true if spell_up?(SPELL_BARRIER)
+
+  # Barrier is not latency-critical; Spell#cast is fine here.
+  result = SPELL_BARRIER.cast
   if result == false || (result.is_a?(String) && result =~ PREP_REFUSED)
     pause LOW_ENERGY_PAUSE
+    return false
+  end
+
+  $mk_last_1216_cast = Time.now
+  deadline = Time.now + ACTIVE_WAIT
+  pause POLL_IDLE until spell_up?(SPELL_BARRIER) || Time.now >= deadline
+  true
+end
+
+hook_id = "#{Script.current.name}_blink_watch"
+DownstreamHook.remove(hook_id) rescue nil
+DownstreamHook.add(hook_id, proc do |server_string|
+  begin
+    plain = server_string.to_s.gsub(/<[^>]+>/, " ")
+    if plain =~ BLINK_DOWN_RE
+      mark_blink_down!
+    elsif plain =~ BLINK_UP_RE
+      mark_blink_up!
+    end
+    if plain =~ SYMPATHY_ON_RE
+      $mk_sympathy = true
+    elsif plain =~ SYMPATHY_OFF_RE
+      $mk_sympathy = false
+    end
+  rescue StandardError
+    nil
+  end
+  server_string
+end)
+
+before_dying do
+  DownstreamHook.remove(hook_id) rescue nil
+end
+
+# Seed known state from Infomon/dialog if available
+if spell_up?(SPELL_BLINK)
+  mark_blink_up!
+elsif dialogs_populated?
+  mark_blink_down!
+end
+
+echo "monks_keeper: Blink-first keeper active (urgent incant; poll RT; Sympathy gaps)."
+
+loop do
+  if dead?
+    pause POLL_IDLE
     next
   end
 
-  deadline = Time.now + ACTIVE_WAIT
-  pause POLL until need.active? || Time.now >= deadline
-  pause LOW_ENERGY_PAUSE unless need.active?
+  # Stun/web: do not cast, but poll tightly so we move the instant it clears.
+  if checkstunned || checkwebbed
+    pause POLL_URGENT
+    next
+  end
+
+  if blink_down?
+    # Sympathy: only fire in RT=0 gaps (combat scripts keep adding RT).
+    # Otherwise cast_blink_urgent! polls until RT clears (abort on stun/dead).
+    if $mk_sympathy
+      cast_blink_urgent! if rt_clear?
+    else
+      cast_blink_urgent!
+    end
+    pause POLL_URGENT
+    next
+  end
+
+  # Blink is up — maintain Focus Barrier without starving Blink checks.
+  unless spell_up?(SPELL_BARRIER) || barrier_recast_too_soon?
+    cast_barrier! if dialogs_populated? && (!$mk_sympathy || rt_clear?)
+  end
+
+  pause($mk_sympathy || $mk_blink_urgent ? POLL_URGENT : POLL_IDLE)
 end

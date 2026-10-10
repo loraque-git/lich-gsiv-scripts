@@ -27,13 +27,11 @@
     *gs pause                - Toggle the tracker hunt timer pause
     *gs status               - Send GEM STATUS and refresh Available/Fixate
                                 lights (also runs on *gs refresh)
-    *gs ignore <field>       - Hide a row (also: click its red triangle)
+    *gs ignore <field>       - Hide a row
     *gs unignore <field>     - Unhide a row
     *gs unignore all         - Unhide everything
     *gs ignored              - List hidden rows
-    *gs width <N>            - Value column width (gap before the triangle).
-                                Default 75, same idea as *exp width / *tm width
-    *gs hidearrows           - Toggle red hide-triangles
+    *gs width <N>            - Value column width. Default 75
     *gs toggle <section>     - Collapse/expand a section (same as clicking
                                 its header). Sections: hunt, char, critters,
                                 roster
@@ -45,8 +43,9 @@
   Credits: gemstone-tracker by Dreaven
   Creator: loraque (loraque@gmail.com)
   Author: loraque (loraque@gmail.com)
-  Version: 0.3.2
+  Version: 0.3.3
   Recently changed:
+    0.3.3 - No red hide-triangles; Available/Fixate/Tracker are labels
     0.3.2 - Available TRUE/FALSE; Fixate ON/OFF; parse "GEM FIXATE is active until..."
     0.3.1 - Header credits Dreaven / gemstone-tracker; tracker required
     0.3.0 - Hunt Restart control; Available/Fixate mock lights from GEM STATUS
@@ -489,15 +488,12 @@ module GemstonePanel
     }[key] || key.to_s
   end
 
-  def self.emit_row(out, id, label, value, cmd, top, triangle_cmd)
+  def self.emit_row(out, id, label, value, cmd, top)
     out << "<label id='gs_lbl_#{id}' value='#{sanitize_xml("#{label}:")}' justify='left' left='#{LABEL_LEFT}' top='#{top}' width='#{LABEL_WIDTH}' height='#{ROW_HEIGHT}' />"
     if cmd
       out << "<link id='gs_val_#{id}' value='#{sanitize_xml(value)}' cmd='#{sanitize_xml(cmd)}' justify='left' left='#{VALUE_LEFT}' top='#{top}' width='#{value_width}' height='#{ROW_HEIGHT}' />"
     else
       out << "<label id='gs_val_#{id}' value='#{sanitize_xml(value)}' justify='left' left='#{VALUE_LEFT}' top='#{top}' width='#{value_width}' height='#{ROW_HEIGHT}' />"
-    end
-    unless hide_arrows
-      out << "<link id='gs_x_#{id}' value='#{REMOVE_ICON}' cmd='#{sanitize_xml(triangle_cmd)}' justify='left' left='#{remove_left}' top='#{top}' width='#{REMOVE_WIDTH}' height='#{ROW_HEIGHT}' />"
     end
   end
 
@@ -518,11 +514,8 @@ module GemstonePanel
         HUNT_KEYS.each do |key|
           next if ignored.include?(key.to_s)
 
-          cmd = case key
-                when :restart then "*gs restart"
-                when :available, :fixate, :tracker then "*gs status"
-                end
-          emit_row(out, key, row_label(key), row_value(key), cmd, top, "*gs ignore #{key}")
+          cmd = (key == :restart ? "*gs restart" : nil)
+          emit_row(out, key, row_label(key), row_value(key), cmd, top)
           top += ROW_HEIGHT
         end
         top += ROW_HEIGHT unless ignored.include?("spacer_hunt")
@@ -538,7 +531,7 @@ module GemstonePanel
           next if viewing_main? && %i[total_kills month_gems week_found last_when last_on last_kills last_rarity last_props].include?(key)
 
           cmd = (key == :character ? "*gs char main" : nil)
-          emit_row(out, key, row_label(key), row_value(key), cmd, top, "*gs ignore #{key}")
+          emit_row(out, key, row_label(key), row_value(key), cmd, top)
           top += ROW_HEIGHT
         end
         top += ROW_HEIGHT unless ignored.include?("spacer_char")
@@ -557,11 +550,11 @@ module GemstonePanel
             total += count.to_i
             next if ignored.include?(slug)
 
-            emit_row(out, slug, critter, count.to_s, nil, top, "*gs ignore #{slug}")
+            emit_row(out, slug, critter, count.to_s, nil, top)
             top += ROW_HEIGHT
           end
           unless ignored.include?("critter_total")
-            emit_row(out, "critter_total", "Total", total.to_s, nil, top, "*gs ignore critter_total")
+            emit_row(out, "critter_total", "Total", total.to_s, nil, top)
             top += ROW_HEIGHT
           end
           top += ROW_HEIGHT unless ignored.include?("spacer_critters")
@@ -581,7 +574,7 @@ module GemstonePanel
 
             week = found_this_week?(name) ? "week" : "-"
             value = "#{total_kills_for(name)} kills, #{month_gems_for(name)}/mo, #{week}"
-            emit_row(out, slug, name, value, "*gs char #{name}", top, "*gs ignore #{slug}")
+            emit_row(out, slug, name, value, "*gs char #{name}", top)
             top += ROW_HEIGHT
           end
         end
@@ -627,11 +620,10 @@ module GemstonePanel
       "  *gs restart         reset hunt timer (or click Restart hunt)",
       "  *gs pause           toggle hunt timer pause",
       "  *gs status          GEM STATUS -> Available/Fixate lights",
-      "  *gs ignore <field>  hide a row (or click the red triangle)",
+      "  *gs ignore <field>  hide a row",
       "  *gs unignore <field>|all",
       "  *gs ignored         list hidden rows",
       "  *gs width <N>       value column width",
-      "  *gs hidearrows      toggle red triangles",
       "  *gs toggle <section>  collapse/expand (hunt, char, critters, roster)",
       "  *gs collapse all / *gs expand all"
     ]

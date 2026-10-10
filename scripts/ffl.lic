@@ -11,9 +11,13 @@
           game: Gemstone
           tags: maneuver, combat, weapon
       required: Lich >= 5.12.0
-       version: 0.7.0
+       version: 0.8.0
 
   changelog:
+    0.8.0 (2026-09-11)
+      katana: retry grip one until the real 1H line; waitrt after the
+        swing so grip two cannot outrun it; skip restore if ffl/wwb is
+        still running; wait for a sibling wwb/ffl/www before gripping
     0.7.0 (2026-09-09)
       lock: kill stale same-name copy after 5s instead of overlapping
       action: re-check target is still living before the swing
@@ -155,6 +159,9 @@ end
 
 right = GameObj.right_hand
 hand_empty = lambda { |h| h.nil? || h.id.to_s.empty? || h.name.to_s.empty? || h.name =~ /^empty$/i }
+katana_sibling = lambda {
+  Script.list.any? { |s| s != Script.current && s.name =~ /^(wwb|ffl)$/ }
+}
 
 if hand_empty.call(right)
   echo "No weapon in the right hand."
@@ -162,19 +169,59 @@ if hand_empty.call(right)
 end
 
 if right.name.to_s =~ /katana|bastard/i
-  grip_line = fput("grip one")
-  if grip_line.to_s =~ /already gripping .+ with one hand/i
-    # already 1H; leave it
-  elsif grip_line.to_s =~ /with one hand/i
-    before_dying {
-      waitrt?
-      fput "grip two"
-    }
-  else
+  elapsed = 0.0
+  while Script.list.any? { |s| s != Script.current && s.name =~ /^(wwb|ffl|www)$/ }
+    pause 0.1
+    elapsed += 0.1
+    break if elapsed >= 5.0
+  end
+
+  grip_ok = false
+  switched_to_one = false
+  12.times do
+    waitrt?
+    waitcastrt?
+    if dead? || checkstunned || checkwebbed
+      echo "Cannot change grip right now."
+      exit
+    end
+    grip_line = fput("grip one").to_s
+    if grip_line =~ /already gripping .+ with one hand/i
+      grip_ok = true
+      break
+    elsif grip_line =~ /You grip .+ with one hand/i
+      grip_ok = true
+      switched_to_one = true
+      break
+    elsif grip_line =~ /\.\.\.wait/i
+      pause 0.2
+    else
+      pause 0.15
+    end
+  end
+
+  unless grip_ok
     echo "Could not switch to a one-handed grip."
     exit
   end
+
+  if switched_to_one
+    before_dying {
+      unless katana_sibling.call
+        waitrt?
+        fput "grip two"
+      end
+    }
+  end
+end
+
+if target_obj.nil? || !target_obj.id ||
+    target_obj.status =~ /dead|gone/ ||
+    target_obj.name =~ /^animated /
+  echo "Target is no longer valid."
+  exit
 end
 
 fput "#{COMBAT_COMMAND} ##{target_obj.id}"
+waitrt?
 # END action

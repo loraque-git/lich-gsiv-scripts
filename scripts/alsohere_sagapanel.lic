@@ -1,0 +1,311 @@
+=begin
+  alsohere_sagapanel.lic
+
+  Saga-only panel: one scrolling line per room you enter, names only
+  (plus "hiding" if the room desc has obvious signs of someone hiding).
+  Newest room is at the top so a short panel shows current + previous.
+
+  Hidden PCs are not in GameObj.pcs. Detected like playerwindow.lic:
+  room desc/objs matching "obvious signs of someone hiding".
+
+  Combat-with-witnesses: UpstreamHook on common combat verbs, echo once
+  per room if an entry witness is still present.
+
+  Usage:
+    ;alsohere_sagapanel      - Start the panel
+    ;alsohere                - Same (launcher)
+
+  Commands:
+    *ah help                 - This command list in Story
+    *ah refresh              - Re-snapshot this room
+    *ah clear                - Clear older lines (keep current)
+
+  Tags: saga, frontend, panel, room, pcs
+  Creator: loraque (loraque@gmail.com)
+  Author: loraque (loraque@gmail.com)
+  Version: 0.2.3
+  Recently changed:
+    0.2.3 - Hiding: latch on the phrase, never clear from a later desc line;
+            apply even if objs XML arrives after room-id change. Current
+            line is a Saga <link> (link color / usually bright); older
+            lines stay <label> (panel default / duller).
+    0.2.2 - Current line bright green; older lines dull grey
+    0.2.1 - Line is names only (no room title)
+    0.2.0 - One scrolling line per room (current at top); dropped sections
+    0.1.0 - Initial docked panel from ;alsohere
+=end
+
+no_kill_all
+
+module AlsoHerePanel
+  extend self
+  include Lich::Common if defined?(Lich::Common)
+
+  ROW_HEIGHT = 18
+  LINE_WIDTH = 520
+  HISTORY_MAX = 40
+  DIALOG_ID = "AlsoHerePanel"
+  HIDDEN_RX = /\bobvious signs of someone hiding\b/i
+  COMBAT_RX = /
+    \A(?:<c>)?\s*
+    (?:attack|aim|jab|punch|kick|grapple|cman|weapon|feat|shield|wtrick|
+       mstrike|ambush|kill|feint|lunge|thrust|bash)
+    \b
+  /ix
+  ROOM_META_RX = /
+    <(?:component|compDef)\s+id=['"]room\s+(?:objs|desc|name)['"]>
+    |<style\s+id=["']room(?:Desc|Name)["']
+    |\bYou also see\b
+    |\bAlso here:
+  /ix
+
+  class << self
+    attr_accessor :history, :room_id, :warned_room_id, :dirty, :pending_hidden
+  end
+
+  def self.sanitize_xml(value)
+    value.to_s.gsub("&", "&amp;").gsub("<", "&lt;").gsub(">", "&gt;").gsub("'", "&apos;").gsub('"', "&quot;")
+  end
+
+  def self.current_room_id
+    Room.current.id
+  rescue StandardError
+    XMLData.room_id
+  end
+
+  def self.current_room_title
+    title = XMLData.room_title.to_s.gsub(/[\[\]]/, "").strip
+    return title unless title.empty?
+
+    Room.current.name.to_s
+  rescue StandardError
+    title
+  end
+
+  def self.visible_pc_names
+    names = []
+    GameObj.pcs.each do |pc|
+      name = pc.name.to_s.strip
+      next if name.empty?
+      next if name.casecmp?(Char.name.to_s)
+
+      names << name
+    end
+    names.uniq.sort
+  rescue StandardError
+    []
+  end
+
+  def self.plain_text(line)
+    line.to_s.gsub(/<[^>]+>/, " ")
+  end
+
+  def self.current_entry
+    history[0]
+  end
+
+  def self.hiding_in_xml?
+    blob = "#{XMLData.room_description} #{XMLData.room_title}"
+    return true if blob =~ HIDDEN_RX
+
+    objs = []
+    objs.concat(GameObj.loot.to_a) if defined?(GameObj.loot)
+    objs.concat(GameObj.room_desc.to_a) if defined?(GameObj.room_desc)
+    objs.any? { |o| o.respond_to?(:name) && o.name.to_s =~ HIDDEN_RX }
+  rescue StandardError
+    false
+  end
+
+  def self.observe_downstream(server_string)
+    return unless plain_text(server_string) =~ HIDDEN_RX
+
+    self.pending_hidden = true
+    apply_hidden!
+  end
+
+  def self.apply_hidden!
+    return unless pending_hidden
+
+    entry = current_entry
+    return unless entry
+    return unless entry[:id] == current_room_id || entry[:id] == room_id
+    return if entry[:hidden]
+
+    entry[:hidden] = true
+    self.dirty = true
+  end
+
+  def self.line_text(entry)
+    names = Array(entry[:names])
+    who = names.empty? ? "none" : names.join(", ")
+    who = "#{who} | hiding" if entry[:hidden]
+    who
+  end
+
+  def self.capture_entry!(force: false)
+    rid = current_room_id
+    entry = current_entry
+    if entry && entry[:id] == rid
+      names = visible_pc_names
+      title = current_room_title
+      changed = false
+      if force || (entry[:names].empty? && !names.empty?)
+        entry[:names] = names
+        changed = true
+      end
+      if !title.to_s.empty? && (force || entry[:title].to_s.empty?)
+        entry[:title] = title
+        changed = true
+      end
+      if (pending_hidden || hiding_in_xml?) && !entry[:hidden]
+        entry[:hidden] = true
+        changed = true
+      end
+      self.dirty = true if changed
+      return
+    end
+
+    self.room_id = rid
+    self.warned_room_id = nil
+    hidden = pending_hidden || hiding_in_xml?
+    history.unshift(
+      id: rid,
+      title: current_room_title,
+      names: visible_pc_names,
+      hidden: hidden
+    )
+    history.pop while history.size > HISTORY_MAX
+    self.dirty = true
+  end
+
+  def self.clear_older!
+    keep = current_entry
+    self.history = keep ? [keep] : []
+    self.dirty = true
+  end
+
+  def self.still_here
+    now = visible_pc_names
+    Array(current_entry && current_entry[:names]) & now
+  end
+
+  def self.maybe_warn_combat!(command)
+    return unless command.to_s.match?(COMBAT_RX)
+    return if current_room_id != room_id
+
+    left = still_here
+    hidden = current_entry && current_entry[:hidden]
+    return if left.empty? && !hidden
+    return if warned_room_id == room_id
+    return if left.empty?
+
+    self.warned_room_id = room_id
+    extra = hidden ? "; obvious hiding" : ""
+    echo "Also Here: combat with entry witnesses still present (#{left.join(', ')}#{extra})"
+  end
+
+  def self.build_dialog
+    out = String.new("<dialogData id='#{DIALOG_ID}' clear='t'>")
+    history.each_with_index do |entry, i|
+      top = i * ROW_HEIGHT
+      text = sanitize_xml(line_text(entry))
+      # Saga applies panel color settings to <link>, not <label>
+      # (same reason exp_sagapanel Field Exp is a link). Current = link
+      # (bright / Link color). Older = label (duller default).
+      if i.zero?
+        out << "<link id='ah_line_#{i}' value='#{text}' cmd='*ah refresh' justify='left' left='2' top='#{top}' width='#{LINE_WIDTH}' height='#{ROW_HEIGHT}' />"
+      else
+        out << "<label id='ah_line_#{i}' value='#{text}' justify='left' left='2' top='#{top}' width='#{LINE_WIDTH}' height='#{ROW_HEIGHT}' />"
+      end
+    end
+    if history.empty?
+      out << "<label id='ah_line_0' value='Also Here: --' justify='left' left='2' top='0' width='#{LINE_WIDTH}' height='#{ROW_HEIGHT}' />"
+    end
+    out << "</dialogData>"
+    out
+  end
+
+  def self.snapshot
+    history.map { |e| [e[:id], e[:title], e[:names], e[:hidden]] }
+  end
+
+  def self.open_dialog_xml
+    "<closeDialog id='#{DIALOG_ID}'/><openDialog type='dynamic' id='#{DIALOG_ID}' title='Also Here' target='#{DIALOG_ID}' scroll='manual' location='main' resident='true'><dialogData id='#{DIALOG_ID}'></dialogData></openDialog>"
+  end
+
+  def self.help_text
+    [
+      "Also Here panel commands:",
+      "  *ah refresh   re-snapshot this room",
+      "  *ah clear     drop older rooms, keep the current line"
+    ]
+  end
+end
+
+AlsoHerePanel.history = []
+AlsoHerePanel.dirty = false
+AlsoHerePanel.pending_hidden = false
+
+ah_downstream_hook_id = "#{Script.current.name}_downstream"
+DownstreamHook.remove(ah_downstream_hook_id) rescue nil
+DownstreamHook.add(ah_downstream_hook_id, proc do |server_string|
+  AlsoHerePanel.observe_downstream(server_string)
+  server_string
+end)
+
+ah_upstream_hook_id = "#{Script.current.name}_upstream"
+UpstreamHook.remove(ah_upstream_hook_id) rescue nil
+UpstreamHook.add(ah_upstream_hook_id, proc do |command|
+  case command.strip
+  when /\*ah\s+help\s*\z/i, /\*ah\s*\z/i
+    AlsoHerePanel.help_text.each { |line| respond line }
+    nil
+  when /\*ah\s+refresh\s*\z/i
+    AlsoHerePanel.capture_entry!(force: true)
+    _respond(AlsoHerePanel.build_dialog)
+    nil
+  when /\*ah\s+clear\s*\z/i
+    AlsoHerePanel.clear_older!
+    _respond(AlsoHerePanel.build_dialog)
+    nil
+  else
+    AlsoHerePanel.maybe_warn_combat!(command)
+    command
+  end
+end)
+
+_respond(AlsoHerePanel.open_dialog_xml)
+AlsoHerePanel.capture_entry!(force: true)
+pause 0.25
+AlsoHerePanel.capture_entry!
+_respond(AlsoHerePanel.build_dialog)
+
+before_dying do
+  UpstreamHook.remove(ah_upstream_hook_id) rescue nil
+  DownstreamHook.remove(ah_downstream_hook_id) rescue nil
+  _respond("<closeDialog id='#{AlsoHerePanel::DIALOG_ID}'/>")
+end
+
+echo "Also Here panel is active. One line per room. *ah help for commands."
+
+@ah_last_room = AlsoHerePanel.current_room_id
+@ah_last_snapshot = AlsoHerePanel.snapshot
+
+loop do
+  rid = AlsoHerePanel.current_room_id
+  if rid != @ah_last_room
+    AlsoHerePanel.pending_hidden = false
+    AlsoHerePanel.room_id = rid
+    pause 0.3
+    AlsoHerePanel.capture_entry!(force: true)
+    AlsoHerePanel.apply_hidden!
+    @ah_last_room = rid
+    _respond(AlsoHerePanel.build_dialog)
+    @ah_last_snapshot = AlsoHerePanel.snapshot
+  elsif AlsoHerePanel.dirty || AlsoHerePanel.snapshot != @ah_last_snapshot
+    AlsoHerePanel.dirty = false
+    _respond(AlsoHerePanel.build_dialog)
+    @ah_last_snapshot = AlsoHerePanel.snapshot
+  end
+  pause 0.25
+end
