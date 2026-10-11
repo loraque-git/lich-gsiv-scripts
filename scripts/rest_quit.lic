@@ -1,22 +1,25 @@
 =begin
 
-  Watches Saga rest mode. When field experience is fully absorbed (mind
-  "clear as a bell" / Field Exp 0) and Saga's rest EXPERIENCE cycle has
-  fired at least three times while still clear as a bell, sends QUIT to
-  log out.
+  Watches for finished XP absorption while resting, then logs out.
 
-  Saga rest markers (client):
-    [Entering Saga rest mode - enter any command to stop resting.]
-    [Leaving Saga rest mode.]
+  After Field Exp is 0 and mind is "clear as a bell", each Saga EXPERIENCE
+  pulse (~1/min during rest) counts as one clear cycle. After N cycles
+  (default 3) in a row, sends EXIT to log out.
 
-  During rest, Saga periodically dumps EXPERIENCE (~1/min). Each dump that
-  shows Field Exp 0 and "Your mind is as clear as a bell." counts as one
-  clear cycle.
+  Log review 2026-10-11 (Vorghul-Prime 10.10.2026 - 5.txt):
+    - rest_quit started 11:26 PM; Saga rest entered 12:42 AM
+    - dozens of Field Exp 0 + clear-as-a-bell pulses until 2:00 AM
+    - NO rest_quit clear-cycle echoes; NO auto logout
+    - session ended by manual look / exit
+  Cause: v0.1 gated on "[Entering Saga rest mode…]" via get(), but those
+  Saga UI lines never reached the script, so resting stayed false and every
+  pulse was ignored. v0.2 counts EXPERIENCE pulses directly (cadence-based)
+  and still honors enter/leave when they do appear.
 
   Usage:
     ;rest_quit              - start watching
-    ;rest_quit status       - show resting / clear-cycle counter
-    ;rest_quit cycles N     - require N clear cycles before quit (default 3)
+    ;rest_quit status       - show settings / mind / field
+    ;rest_quit cycles N     - require N clear cycles before exit (default 3)
     ;rest_quit kill         - stop (or ;kill rest_quit)
 
        creator: loraque (loraque@gmail.com)
@@ -24,34 +27,68 @@
           game: Gemstone
           tags: rest, experience, logout, saga, utility
       required: Lich >= 5.12.0
-       version: 0.1.0
+       version: 0.2.0
 
   changelog:
+    0.2.0 (2026-10-11)
+      fix: do not require Saga rest-enter lines on get() (they may be
+        client-only); count clear-as-a-bell EXPERIENCE pulses by cadence
+      logout via exit (matches Saga), with quit fallback
+      louder per-pulse echoes for log verification
     0.1.0 (2026-10-10)
       initial: Saga rest watch; quit after N clear-as-a-bell rest cycles
-        with no field XP left to absorb (default N=3)
 
 =end
 
-REST_ENTER_RE = /\[Entering Saga rest mode/i
-REST_LEAVE_RE = /\[Leaving Saga rest mode/i
+# Optional — may never arrive on Lich's get() stream (Saga UI chrome).
+REST_ENTER_RE = /Entering Saga rest mode/i
+REST_LEAVE_RE = /Leaving Saga rest mode/i
 FIELD_EXP_RE  = /Field Exp:\s*([\d,]+)\s*\/\s*([\d,]+)/
 MIND_BELL_RE  = /Your mind is as clear as a bell\./i
 MIND_STATE_RE = /Your mind (?:is as clear as a bell\.|is fresh and clear\.|is clear\.|is muddled\.|is becoming numbed\.|is numbed\.|can't take much more of this!|is completely saturated)/i
 
 DEFAULT_CYCLES = 3
+# Saga rest EXPERIENCE dumps are ~60s apart; allow some jitter.
+MAX_PULSE_GAP = 90
 
 def rq_echo(msg)
   echo "rest_quit: #{msg}"
+end
+
+def rq_logout!
+  rq_echo "logging out (exit)"
+  # Saga session log used `exit`; ewatchdog uses quit — try both.
+  begin
+    do_client('exit')
+  rescue StandardError
+    nil
+  end
+  sleep 0.5
+  begin
+    fput 'exit'
+  rescue StandardError
+    nil
+  end
+  sleep 0.5
+  begin
+    do_client('quit')
+  rescue StandardError
+    nil
+  end
+  begin
+    fput 'quit'
+  rescue StandardError
+    nil
+  end
 end
 
 # --- CLI ---------------------------------------------------------------
 
 if Script.current.vars[1].to_s =~ /^help$/i
   respond "Usage:"
-  respond "  ;rest_quit              start watching Saga rest mode"
-  respond "  ;rest_quit status       show resting / clear-cycle counter"
-  respond "  ;rest_quit cycles N     require N clear cycles before QUIT (default #{DEFAULT_CYCLES})"
+  respond "  ;rest_quit              start watching"
+  respond "  ;rest_quit status       show settings / mind / field"
+  respond "  ;rest_quit cycles N     require N clear cycles before EXIT (default #{DEFAULT_CYCLES})"
   respond "  ;rest_quit kill         stop"
   exit
 end
@@ -68,7 +105,7 @@ if Script.current.vars[1].to_s =~ /^cycles$/i
     exit
   end
   CharSettings['required_clear_cycles'] = n
-  respond "rest_quit: will QUIT after #{n} clear-as-a-bell rest cycle(s)"
+  respond "rest_quit: will EXIT after #{n} clear-as-a-bell cycle(s)"
   exit
 end
 
@@ -82,71 +119,74 @@ if Script.current.vars[1].to_s =~ /^status$/i
   exit
 end
 
-resting       = false
-clear_cycles  = 0
-pending_field = nil
+resting_hint   = false # true if we ever saw a Saga rest-enter line
+clear_cycles   = 0
+pending_field  = nil
+last_pulse_at  = nil
 
-rq_echo "watching (QUIT after #{required} clear-as-a-bell rest cycle(s))"
+rq_echo "watching v0.2 (EXIT after #{required} clear-as-a-bell pulse(s); Saga enter lines optional)"
 
 before_dying { rq_echo "stopped" }
 
 loop do
   line = get
+  now = Time.now
 
   if line =~ REST_ENTER_RE
-    resting = true
+    resting_hint = true
     clear_cycles = 0
     pending_field = nil
-    rq_echo "Saga rest mode — counter reset; need #{required} clear cycle(s)"
+    last_pulse_at = nil
+    rq_echo "Saga rest enter seen — counter reset; need #{required}"
     next
   end
 
   if line =~ REST_LEAVE_RE
-    if resting
-      rq_echo "left Saga rest mode — counter reset (was #{clear_cycles}/#{required})"
-    end
-    resting = false
+    rq_echo "Saga rest leave seen — counter reset (was #{clear_cycles}/#{required})"
+    resting_hint = false
     clear_cycles = 0
     pending_field = nil
+    last_pulse_at = nil
     next
   end
-
-  next unless resting
 
   if line =~ FIELD_EXP_RE
     pending_field = $1.delete(',').to_i
     next
   end
 
-  if !pending_field.nil? && line =~ MIND_STATE_RE
-    field = pending_field
-    pending_field = nil
-    bell = !!(line =~ MIND_BELL_RE)
+  next if pending_field.nil?
+  next unless line =~ MIND_STATE_RE
 
-    if field == 0 && bell
-      clear_cycles += 1
-      rq_echo "clear cycle #{clear_cycles}/#{required} (Field Exp 0, clear as a bell)"
-      if clear_cycles >= required
-        rq_echo "no field XP left and #{required} clear cycle(s) done — QUIT"
-        # do_client bypasses upstream hooks (same approach as ewatchdog)
-        do_client('quit')
-        exit
-      end
-    else
-      mind = (line[MIND_STATE_RE] || XMLData.mind_text).to_s
-      if clear_cycles > 0
-        rq_echo "still absorbing (Field Exp #{field}, #{mind}) — counter reset"
-      else
-        rq_echo "absorbing (Field Exp #{field}, #{mind})"
-      end
-      clear_cycles = 0
+  field = pending_field
+  pending_field = nil
+  bell = !!(line =~ MIND_BELL_RE)
+  mind_txt = line.to_s.strip
+
+  # Stale chain (manual exp earlier, then later hunting, etc.)
+  if last_pulse_at && (now - last_pulse_at) > MAX_PULSE_GAP
+    if clear_cycles > 0
+      rq_echo "pulse gap #{(now - last_pulse_at).to_i}s > #{MAX_PULSE_GAP}s — counter reset"
     end
-    next
+    clear_cycles = 0
   end
+  last_pulse_at = now
 
-  # Experience dump ended without a mind line; drop pending so a stray later
-  # mind line cannot be paired with a stale Field Exp value.
-  if !pending_field.nil? && line =~ /^>/
-    pending_field = nil
+  if field == 0 && bell
+    clear_cycles += 1
+    hint = resting_hint ? "rest-enter seen" : "cadence mode"
+    rq_echo "clear cycle #{clear_cycles}/#{required} (Field Exp 0, clear as a bell, #{hint})"
+    if clear_cycles >= required
+      rq_echo "no field XP left and #{required} clear cycle(s) done — EXIT"
+      rq_logout!
+      exit
+    end
+  else
+    if clear_cycles > 0
+      rq_echo "still absorbing (Field Exp #{field}, #{mind_txt}) — counter reset"
+    else
+      rq_echo "absorbing (Field Exp #{field}, #{mind_txt})"
+    end
+    clear_cycles = 0
   end
 end
