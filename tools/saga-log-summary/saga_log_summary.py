@@ -1527,39 +1527,74 @@ def render_index(docs: list[dict]) -> str:
       renderTable();
       renderCreatures();
       renderSkins();
-      syncTopScroll();
+      syncHBars();
     }}
 
-    const scrollTop = document.getElementById("scroll-top");
     const scrollMain = document.getElementById("scroll-main");
-    const scrollTopInner = document.getElementById("scroll-top-inner");
-    let syncingScroll = false;
+    const hbars = [
+      {{ bar: document.getElementById("hbar-top"), thumb: document.getElementById("hbar-top-thumb") }},
+      {{ bar: document.getElementById("hbar-bottom"), thumb: document.getElementById("hbar-bottom-thumb") }},
+    ];
 
-    function syncTopScroll() {{
-      // Match the full table width so the top bar always has a real scrollbar thumb.
-      const w = Math.max(scrollMain.scrollWidth, scrollMain.clientWidth + 1);
-      scrollTopInner.style.width = w + "px";
-      if (!syncingScroll) scrollTop.scrollLeft = scrollMain.scrollLeft;
+    function syncHBars() {{
+      const max = Math.max(0, scrollMain.scrollWidth - scrollMain.clientWidth);
+      const track = hbars[0].bar.clientWidth || 1;
+      const ratio = scrollMain.clientWidth / Math.max(scrollMain.scrollWidth, 1);
+      const thumbW = Math.max(48, Math.min(track, Math.round(track * ratio)));
+      const maxLeft = Math.max(0, track - thumbW);
+      const left = max > 0 ? Math.round((scrollMain.scrollLeft / max) * maxLeft) : 0;
+      for (const {{ bar, thumb }} of hbars) {{
+        if (max <= 0) {{
+          bar.classList.add("disabled");
+          continue;
+        }}
+        bar.classList.remove("disabled");
+        thumb.style.width = thumbW + "px";
+        thumb.style.transform = "translateX(" + left + "px)";
+      }}
     }}
-    scrollTop.addEventListener("scroll", () => {{
-      if (syncingScroll) return;
-      syncingScroll = true;
-      scrollMain.scrollLeft = scrollTop.scrollLeft;
-      syncingScroll = false;
-    }});
-    scrollMain.addEventListener("scroll", () => {{
-      if (syncingScroll) return;
-      syncingScroll = true;
-      scrollTop.scrollLeft = scrollMain.scrollLeft;
-      syncingScroll = false;
-    }});
-    window.addEventListener("resize", syncTopScroll);
-    // Re-measure after fonts/layout settle (first paint can under-report scrollWidth).
-    requestAnimationFrame(() => {{
-      syncTopScroll();
-      setTimeout(syncTopScroll, 100);
-      setTimeout(syncTopScroll, 500);
-    }});
+
+    scrollMain.addEventListener("scroll", syncHBars);
+    window.addEventListener("resize", syncHBars);
+
+    function bindHBar({{ bar, thumb }}) {{
+      let drag = null;
+      thumb.addEventListener("mousedown", (e) => {{
+        if (e.button !== 0) return;
+        e.preventDefault();
+        e.stopPropagation();
+        const max = Math.max(0, scrollMain.scrollWidth - scrollMain.clientWidth);
+        const track = bar.clientWidth;
+        const thumbW = thumb.offsetWidth;
+        const maxLeft = Math.max(0, track - thumbW);
+        drag = {{
+          startX: e.clientX,
+          startLeft: scrollMain.scrollLeft,
+          max,
+          maxLeft,
+        }};
+      }});
+      bar.addEventListener("mousedown", (e) => {{
+        if (e.button !== 0 || e.target === thumb) return;
+        e.preventDefault();
+        const max = Math.max(0, scrollMain.scrollWidth - scrollMain.clientWidth);
+        if (max <= 0) return;
+        const rect = bar.getBoundingClientRect();
+        const thumbW = thumb.offsetWidth;
+        const maxLeft = Math.max(0, bar.clientWidth - thumbW);
+        const x = e.clientX - rect.left - thumbW / 2;
+        const left = Math.max(0, Math.min(maxLeft, x));
+        scrollMain.scrollLeft = maxLeft > 0 ? (left / maxLeft) * max : 0;
+      }});
+      window.addEventListener("mousemove", (e) => {{
+        if (!drag) return;
+        const dx = e.clientX - drag.startX;
+        const delta = drag.maxLeft > 0 ? (dx / drag.maxLeft) * drag.max : 0;
+        scrollMain.scrollLeft = drag.startLeft + delta;
+      }});
+      window.addEventListener("mouseup", () => {{ drag = null; }});
+    }}
+    hbars.forEach(bindHBar);
 
     // Middle-button drag pans horizontally; Shift+wheel also pans.
     let pan = null;
@@ -1589,6 +1624,11 @@ def render_index(docs: list[dict]) -> str:
     }}, {{ passive: false }});
 
     render();
+    requestAnimationFrame(() => {{
+      syncHBars();
+      setTimeout(syncHBars, 100);
+      setTimeout(syncHBars, 500);
+    }});
   </script>
 </body>
 </html>
