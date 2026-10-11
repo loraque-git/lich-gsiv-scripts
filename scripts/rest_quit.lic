@@ -1,0 +1,173 @@
+=begin
+
+  Watches Saga rest mode. When field experience is fully absorbed (mind
+  "clear as a bell" / Field Exp 0) and Saga's rest EXPERIENCE cycle has
+  fired at least three times while still clear as a bell, sends QUIT to
+  log out.
+
+  Saga rest markers (client):
+    [Entering Saga rest mode - enter any command to stop resting.]
+    [Leaving Saga rest mode.]
+
+  During rest, Saga periodically dumps EXPERIENCE (~1/min). Each dump that
+  shows Field Exp 0 and "Your mind is as clear as a bell." counts as one
+  clear cycle.
+
+  Usage:
+    ;rest_quit              - start watching
+    ;rest_quit status       - show resting / clear-cycle counter
+    ;rest_quit cycles N     - require N clear cycles before quit (default 3)
+    ;rest_quit kill         - stop (or ;kill rest_quit)
+
+       creator: loraque (loraque@gmail.com)
+        author: loraque (loraque@gmail.com)
+          game: Gemstone
+          tags: rest, experience, logout, saga, utility
+      required: Lich >= 5.12.0
+       version: 0.1.0
+
+  changelog:
+    0.1.0 (2026-10-10)
+      initial: Saga rest watch; quit after N clear-as-a-bell rest cycles
+        with no field XP left to absorb (default N=3)
+
+=end
+
+REST_ENTER_RE = /\[Entering Saga rest mode/i
+REST_LEAVE_RE = /\[Leaving Saga rest mode/i
+FIELD_EXP_RE  = /Field Exp:\s*([\d,]+)\s*\/\s*([\d,]+)/
+MIND_BELL_RE  = /Your mind is as clear as a bell\./i
+MIND_STATE_RE = /Your mind (?:is as clear as a bell\.|is fresh and clear\.|is clear\.|is muddled\.|is becoming numbed\.|is numbed\.|can't take much more of this!|is completely saturated)/i
+
+DEFAULT_CYCLES = 3
+
+def rq_echo(msg)
+  echo "rest_quit: #{msg}"
+end
+
+def rq_clear_mind?
+  text = XMLData.mind_text.to_s
+  return true if text =~ /clear as a bell/i
+  false
+end
+
+def rq_field_empty?(field_from_line = nil)
+  line_val = field_from_line.nil? ? nil : field_from_line.to_i
+  xml_val  = XMLData.field_exp.to_i
+  return line_val == 0 if !line_val.nil? && line_val == 0
+  return true if xml_val == 0 && (line_val.nil? || line_val == 0)
+  return true if !line_val.nil? && line_val == 0
+  false
+end
+
+# --- CLI ---------------------------------------------------------------
+
+if Script.current.vars[1].to_s =~ /^help$/i
+  respond "Usage:"
+  respond "  ;rest_quit              start watching Saga rest mode"
+  respond "  ;rest_quit status       show resting / clear-cycle counter"
+  respond "  ;rest_quit cycles N     require N clear cycles before QUIT (default #{DEFAULT_CYCLES})"
+  respond "  ;rest_quit kill         stop"
+  exit
+end
+
+if Script.current.vars[1].to_s =~ /^kill$/i
+  Script.kill('rest_quit') if Script.running?('rest_quit')
+  exit
+end
+
+if Script.current.vars[1].to_s =~ /^cycles$/i
+  n = Script.current.vars[2].to_i
+  if n < 1
+    respond "rest_quit: cycles must be >= 1 (got #{Script.current.vars[2].inspect})"
+    exit
+  end
+  CharSettings['required_clear_cycles'] = n
+  respond "rest_quit: will QUIT after #{n} clear-as-a-bell rest cycle(s)"
+  exit unless Script.current.vars[0].to_s.empty?
+end
+
+required = CharSettings['required_clear_cycles']
+required = DEFAULT_CYCLES if required.nil? || required.to_i < 1
+required = required.to_i
+
+if Script.current.vars[1].to_s =~ /^status$/i
+  # status is only useful while the watcher is the running instance; print settings
+  respond "rest_quit: required clear cycles = #{required}"
+  respond "rest_quit: mind=#{XMLData.mind_text.inspect} field=#{XMLData.field_exp}/#{XMLData.max_field_exp}"
+  exit
+end
+
+# Only one watcher
+if Script.running?('rest_quit') && Script.current.name == 'rest_quit'
+  # unique by name — Lich won't double-start the same script name normally
+end
+
+resting       = false
+clear_cycles  = 0
+pending_field = nil
+
+rq_echo "watching (QUIT after #{required} clear-as-a-bell rest cycle(s))"
+
+before_dying { rq_echo "stopped" }
+
+loop do
+  line = get
+
+  if line =~ REST_ENTER_RE
+    resting = true
+    clear_cycles = 0
+    pending_field = nil
+    rq_echo "Saga rest mode — counter reset; need #{required} clear cycle(s)"
+    next
+  end
+
+  if line =~ REST_LEAVE_RE
+    if resting
+      rq_echo "left Saga rest mode — counter reset (was #{clear_cycles}/#{required})"
+    end
+    resting = false
+    clear_cycles = 0
+    pending_field = nil
+    next
+  end
+
+  next unless resting
+
+  if line =~ FIELD_EXP_RE
+    pending_field = $1.delete(',').to_i
+    next
+  end
+
+  if pending_field && line =~ MIND_STATE_RE
+    field = pending_field
+    pending_field = nil
+    bell = !!(line =~ MIND_BELL_RE) || rq_clear_mind?
+    empty = (field == 0) && (XMLData.field_exp.to_i == 0 || field == 0)
+
+    if empty && bell && field == 0
+      clear_cycles += 1
+      rq_echo "clear cycle #{clear_cycles}/#{required} (Field Exp 0, clear as a bell)"
+      if clear_cycles >= required
+        rq_echo "no field XP left and #{required} clear cycle(s) done — QUIT"
+        # do_client bypasses upstream hooks (same approach as ewatchdog)
+        do_client('quit')
+        exit
+      end
+    else
+      if clear_cycles > 0
+        rq_echo "still absorbing (Field Exp #{field}, mind=#{XMLData.mind_text}) — counter reset"
+      else
+        rq_echo "absorbing (Field Exp #{field}, mind=#{XMLData.mind_text})"
+      end
+      clear_cycles = 0
+    end
+    next
+  end
+
+  # Experience dump ended without a mind line; drop pending so a stray later
+  # mind line cannot be paired with a stale Field Exp value.
+  if pending_field && line =~ /^>/
+    pending_field = nil
+  end
+end
