@@ -66,7 +66,7 @@ def stop_audio
 end
 
 =begin
-	   Nautical-Charts Version: 1.2.4 (July 9, 2026)
+	   Nautical-Charts Version: 1.2.4 (October 10, 2026)
 	
 	   Usage: 
 	
@@ -99,11 +99,10 @@ end
                       May 9, 2026 - Added Combat Detection and Alert Animation w/ Sound.
                      May 10, 2026 - Updated The OceanDB and Some Of The Map Files To Fix Broken Pathways.
                      May 11, 2026 - Improved Icon Tracking, Location Detection and Scale Response W/Persistant Setting. Also Fixed the Center Button.
-                     July 9, 2026 - Fixed GTK client crashes when clicking on the map window. Applied same fix family as map.lic v2.1.3/v2.1.4:
-                                    added gtk_safe helper to guarantee Boolean return values from all signal handlers, and added
-                                    $_nc_prevent_gc/$_nc_dynamic_menu_gc/$_nc_dialog_gc anchor arrays to prevent Ruby GC from
-                                    collecting Proc objects referenced only by C-side GLib::Closure objects. All signal_connect
-                                    handlers wrapped and anchored accordingly.
+                 October 10, 2026 - Renamed methods shared with sail2 to charts_* (charts_flag_settings,
+                                    charts_ensure_ocean_watch, charts_sync_echo, charts_download_folder). Both scripts
+                                    run together and share one Ruby namespace, so whichever loaded last replaced the
+                                    other's version.
 =end
 
 i_stand_alone
@@ -237,16 +236,16 @@ end
 
 # ---------- HELPER METHODS ----------
 
-def sync_echo(msg); respond "[MapSync: #{msg}]" rescue puts msg; end
+def charts_sync_echo(msg); respond "[MapSync: #{msg}]" rescue puts msg; end
 
-def download_folder(user, repo, api_path, local_dir)
+def charts_download_folder(user, repo, api_path, local_dir)
   FileUtils.mkdir_p(local_dir) unless Dir.exist?(local_dir)
   api_url = "https://api.github.com/repos/#{user}/#{repo}/contents/#{api_path}"
   begin
     response = URI.open(api_url, "User-Agent" => "Lich-Map-Syncer").read
     data = JSON.parse(response)
     unless data.is_a?(Array)
-      sync_echo("Error: #{api_path} in #{repo} is not a folder.")
+      charts_sync_echo("Error: #{api_path} in #{repo} is not a folder.")
       return 0
     end
     count = 0
@@ -257,7 +256,7 @@ def download_folder(user, repo, api_path, local_dir)
       download_url = file['download_url']
       local_path   = File.join(local_dir, file_name)
       if !File.exist?(local_path) || File.size(local_path) != remote_size
-        sync_echo("Downloading: #{file_name} from #{repo}...")
+        charts_sync_echo("Downloading: #{file_name} from #{repo}...")
         URI.open(download_url) do |remote|
           File.open(local_path, "wb") { |local| local.write(remote.read) }
         end
@@ -266,24 +265,24 @@ def download_folder(user, repo, api_path, local_dir)
     end
     count
   rescue => e
-    sync_echo("Error syncing #{repo}/#{api_path}: #{e.message}")
+    charts_sync_echo("Error syncing #{repo}/#{api_path}: #{e.message}")
     0
   end
 end
 
 def nautical_sync_all
-  sync_echo("Connecting to OSA Repository...")
-  png_updates = download_folder(MAP_GIT_USER, MAP_GIT_REPO, MAP_GIT_PATH, LOCAL_MAP_DIR)
-  bg_updates  = download_folder(BG_GIT_USER, BG_GIT_REPO, BG_GIT_PATH, LOCAL_BG_DIR)
-  json_updates = download_folder(JSON_GIT_USER, JSON_GIT_REPO, JSON_GIT_PATH, LOCAL_JSON_DIR)
-  icons_updates = download_folder(ICONS_GIT_USER, ICONS_GIT_REPO, ICONS_GIT_PATH, LOCAL_ICONS_DIR)
-  ports_updates = download_folder(PORTS_GIT_USER, PORTS_GIT_REPO, PORTS_GIT_PATH, LOCAL_PORTS_DIR)
-  sounds_updates = download_folder(SOUNDS_GIT_USER, SOUNDS_GIT_REPO, SOUNDS_GIT_PATH, LOCAL_SOUNDS_DIR)
+  charts_sync_echo("Connecting to OSA Repository...")
+  png_updates = charts_download_folder(MAP_GIT_USER, MAP_GIT_REPO, MAP_GIT_PATH, LOCAL_MAP_DIR)
+  bg_updates  = charts_download_folder(BG_GIT_USER, BG_GIT_REPO, BG_GIT_PATH, LOCAL_BG_DIR)
+  json_updates = charts_download_folder(JSON_GIT_USER, JSON_GIT_REPO, JSON_GIT_PATH, LOCAL_JSON_DIR)
+  icons_updates = charts_download_folder(ICONS_GIT_USER, ICONS_GIT_REPO, ICONS_GIT_PATH, LOCAL_ICONS_DIR)
+  ports_updates = charts_download_folder(PORTS_GIT_USER, PORTS_GIT_REPO, PORTS_GIT_PATH, LOCAL_PORTS_DIR)
+  sounds_updates = charts_download_folder(SOUNDS_GIT_USER, SOUNDS_GIT_REPO, SOUNDS_GIT_PATH, LOCAL_SOUNDS_DIR)
   total = png_updates + json_updates + icons_updates + bg_updates + sounds_updates + ports_updates
   if total > 0
-    sync_echo("Success! Updated #{total} files from all repositories.")
+    charts_sync_echo("Success! Updated #{total} files from all repositories.")
   else
-    sync_echo("All files are up to date.")
+    charts_sync_echo("All files are up to date.")
   end
 end
 
@@ -316,26 +315,6 @@ end
 
 def mm_echo(msg); respond "[nautical-charts: #{msg}]" rescue puts msg; end
 def debug_echo(msg); mm_echo("DEBUG: #{msg}") if $debug_mode; end
-
-# ---------------------------------------------------------------------------
-# GTK signal handler safety helpers (mirrors map.lic v2.1.3 fix)
-# gobject-introspection 4.3.x strictly validates signal handler return values.
-# Handlers returning Thread, nil, Array etc. crash the invoker. gtk_safe
-# wraps any block to guarantee a Boolean return value.
-#
-# GC anchor arrays prevent Ruby GC from collecting Proc objects that are only
-# referenced by C-side GLib::Closure objects (invisible to Ruby's GC).
-# ---------------------------------------------------------------------------
-$_nc_prevent_gc      = []   # permanent handler anchors
-$_nc_dynamic_menu_gc = []   # cleared when context menu is rebuilt
-$_nc_dialog_gc       = []   # per-dialog, released on destroy
-
-def gtk_safe(stop_propagation: false, &block)
-  proc do |*args|
-    block.call(*args)
-    stop_propagation
-  end
-end
 
 def find_room(data, rid_int)
 	rid = rid_int.to_s
@@ -392,7 +371,7 @@ def update_theme
 	end
 end
 
-def flag_settings
+def charts_flag_settings
 	flagset = Lich::Util.quiet_command("flag", /You may also access these settings through/, end_pattern = /war in towns with active justice./, include_end = true ,timeout = 3, silent = true)
 		if flagset.to_s =~ /ShowRoomID         OFF/
 			Lich::Util.quiet_command("flag showroomid on", /You will now display the room ID./, end_pattern = /You will now display the room ID./, include_end = true ,timeout = 3, silent = true)
@@ -403,7 +382,7 @@ def flag_settings
 		end
 end
 
-def ensure_ocean_watch
+def charts_ensure_ocean_watch
   rid = nil
 
   begin
@@ -604,7 +583,7 @@ def trigger_combat_flash
 
 		# Cairo draw handler - draws a red border around the full widget area
 		# and a second box around the ship's current map position
-		h_draw = proc do |widget, cr|
+		$combat_draw.signal_connect('draw') do |widget, cr|
 			w = widget.allocated_width
 			h = widget.allocated_height
 			border = 6
@@ -639,14 +618,13 @@ def trigger_combat_flash
 
 			false
 		end
-		$_nc_prevent_gc << h_draw
-		$combat_draw.signal_connect('draw', &h_draw)
 
 		# Click anywhere on the overlay to dismiss
 		$combat_draw.add_events([:button_press_mask])
-		h_cbp = gtk_safe(stop_propagation: true) { dismiss_combat_alert }
-		$_nc_prevent_gc << h_cbp
-		$combat_draw.signal_connect('button-press-event', &h_cbp)
+		$combat_draw.signal_connect('button-press-event') do
+			dismiss_combat_alert
+			true
+		end
 
 		$combat_overlay_ref = $minimap_win.child  # main_vbox
 		# Find the overlay widget and add the draw area to it
@@ -733,14 +711,12 @@ def show_context_menu(event)
       item = Gtk::RadioMenuItem.new(t_group, "#{mode.to_s.capitalize} Mode")
       t_group = item
       item.active = ($theme_mode == mode)
-      h = gtk_safe do
+      item.signal_connect("activate") do 
         if item.active?
           $theme_mode = mode
           save_settings; update_theme; update_images
         end
       end
-      $_nc_dynamic_menu_gc << h
-      item.signal_connect("activate", &h)
       theme_menu.append(item)
     end
     menu.append(theme_item)
@@ -760,7 +736,7 @@ def show_context_menu(event)
       item = Gtk::RadioMenuItem.new(i_group, label)
       i_group = item
       item.active = ($ship_icon_file == filename)
-      h = gtk_safe do
+      item.signal_connect("activate") do
         if item.active?
           $ship_icon_file = filename
           save_settings
@@ -772,8 +748,6 @@ def show_context_menu(event)
           end
         end
       end
-      $_nc_dynamic_menu_gc << h
-      item.signal_connect("activate", &h)
       icon_menu.append(item)
     end
     menu.append(icon_item)
@@ -797,7 +771,7 @@ def show_context_menu(event)
 				# Set it as 'active' if it's the current map
 				item.active = ($current_map_file == file)
 				
-				h = gtk_safe do
+				item.signal_connect("activate") do
 					if item.active? # Only trigger when turned ON
 						$follow_ship = false
 						GLib::Source.remove($follow_timer_id) if $follow_timer_id rescue nil
@@ -808,8 +782,6 @@ def show_context_menu(event)
 						load_map_assets(file, true)
 					end
 				end
-				$_nc_dynamic_menu_gc << h
-				item.signal_connect("activate", &h)
 				map_menu.append(item)
 			end
 		end
@@ -823,7 +795,7 @@ def show_context_menu(event)
       item = Gtk::RadioMenuItem.new(s_group, "#{(s*100).to_i}%")
       s_group = item
       item.active = ($scale == s)
-      h = gtk_safe do
+      item.signal_connect("activate") do 
         if item.active?
           $scale = s
           $sea_scale_user = s unless $scale == PORT_SCALE
@@ -831,8 +803,6 @@ def show_context_menu(event)
           update_images
         end
       end
-      $_nc_dynamic_menu_gc << h
-      item.signal_connect("activate", &h)
       scale_menu.append(item)
     end
     scale_item.submenu = scale_menu
@@ -843,27 +813,23 @@ def show_context_menu(event)
     # 5. Show Background
     bg_toggle = Gtk::CheckMenuItem.new(label: "Show Background")
     bg_toggle.active = $show_background
-    h_bg = gtk_safe { |w| $show_background = w.active?; save_settings; update_images }
-    $_nc_dynamic_menu_gc << h_bg
-    bg_toggle.signal_connect("toggled", &h_bg)
+    bg_toggle.signal_connect("toggled") { |w| $show_background = w.active?; save_settings; update_images }
     menu.append(bg_toggle)
 
     # 6. Keep window on top
     top_item = Gtk::CheckMenuItem.new(label: "Keep window on top")
     top_item.active = !!$keep_on_top
-    h_top = gtk_safe { |w|
+    top_item.signal_connect("toggled") { |w|
       $keep_on_top = w.active?
-      save_settings
+      save_settings 
       Gtk.queue { $minimap_win.set_keep_above($keep_on_top) if $minimap_win }
     }
-    $_nc_dynamic_menu_gc << h_top
-    top_item.signal_connect("toggled", &h_top)
     menu.append(top_item)
 
     # 7. Enable Sounds Toggle
     sound_toggle = Gtk::CheckMenuItem.new(label: "Enable Sounds")
     sound_toggle.active = $enable_sounds
-    h_snd = gtk_safe do |w|
+    sound_toggle.signal_connect("toggled") do |w|
       $enable_sounds = w.active?
       save_settings
       if $enable_sounds
@@ -873,8 +839,6 @@ def show_context_menu(event)
         stop_audio
       end
     end
-    $_nc_dynamic_menu_gc << h_snd
-    sound_toggle.signal_connect("toggled", &h_snd)
     menu.append(sound_toggle)
 
     # Required to actually display the menu
@@ -912,9 +876,7 @@ def show_mac_settings_window
   close_btn.set_margin_bottom(8)
   close_btn.set_margin_start(12)
   close_btn.set_margin_end(12)
-  h_close = gtk_safe { win.destroy }
-  $_nc_dialog_gc << h_close
-  close_btn.signal_connect("clicked", &h_close)
+  close_btn.signal_connect("clicked") { win.destroy }
   outer.pack_start(close_btn, expand: false, fill: false, padding: 0)
 
   # --- Helper ---
@@ -942,14 +904,12 @@ def show_mac_settings_window
     btn = Gtk::RadioButton.new(t_group, "#{mode.to_s.capitalize} Mode")
     t_group = btn
     btn.active = ($theme_mode == mode)
-    h = gtk_safe do
+    btn.signal_connect("toggled") do
       if btn.active?
         $theme_mode = mode
         save_settings; update_theme; update_images
       end
     end
-    $_nc_dialog_gc << h
-    btn.signal_connect("toggled", &h)
     settings_box.pack_start(btn, expand: false, fill: false, padding: 0)
   end
 
@@ -961,7 +921,7 @@ def show_mac_settings_window
     btn = Gtk::RadioButton.new(s_group, "#{(s*100).to_i}%")
     s_group = btn
     btn.active = ($scale == s)
-    h = gtk_safe do
+    btn.signal_connect("toggled") do
       if btn.active?
         $scale = s
         $sea_scale_user = s unless $scale == PORT_SCALE
@@ -969,8 +929,6 @@ def show_mac_settings_window
         update_images
       end
     end
-    $_nc_dialog_gc << h
-    btn.signal_connect("toggled", &h)
     settings_box.pack_start(btn, expand: false, fill: false, padding: 0)
   end
 
@@ -978,25 +936,21 @@ def show_mac_settings_window
 
   bg_btn = Gtk::CheckButton.new("Show Background")
   bg_btn.active = $show_background
-  h_bg2 = gtk_safe { $show_background = bg_btn.active?; save_settings; update_images }
-  $_nc_dialog_gc << h_bg2
-  bg_btn.signal_connect("toggled", &h_bg2)
+  bg_btn.signal_connect("toggled") { $show_background = bg_btn.active?; save_settings; update_images }
   settings_box.pack_start(bg_btn, expand: false, fill: false, padding: 0)
 
   top_btn = Gtk::CheckButton.new("Keep Window on Top")
   top_btn.active = !!$keep_on_top
-  h_top2 = gtk_safe do
+  top_btn.signal_connect("toggled") do
     $keep_on_top = top_btn.active?
     save_settings
     $minimap_win.set_keep_above($keep_on_top) if $minimap_win
   end
-  $_nc_dialog_gc << h_top2
-  top_btn.signal_connect("toggled", &h_top2)
   settings_box.pack_start(top_btn, expand: false, fill: false, padding: 0)
 
   snd_btn = Gtk::CheckButton.new("Enable Sounds")
   snd_btn.active = $enable_sounds
-  h_snd2 = gtk_safe do
+  snd_btn.signal_connect("toggled") do
     $enable_sounds = snd_btn.active?
     save_settings
     if $enable_sounds
@@ -1006,8 +960,6 @@ def show_mac_settings_window
       stop_audio
     end
   end
-  $_nc_dialog_gc << h_snd2
-  snd_btn.signal_connect("toggled", &h_snd2)
   settings_box.pack_start(snd_btn, expand: false, fill: false, padding: 0)
 
   notebook.append_page(settings_box, Gtk::Label.new("Settings"))
@@ -1033,7 +985,7 @@ def show_mac_settings_window
     btn = Gtk::RadioButton.new(i_group, label)
     i_group = btn
     btn.active = ($ship_icon_file == filename)
-    h = gtk_safe do
+    btn.signal_connect("toggled") do
       if btn.active?
         $ship_icon_file = filename
         save_settings
@@ -1045,8 +997,6 @@ def show_mac_settings_window
         end
       end
     end
-    $_nc_dialog_gc << h
-    btn.signal_connect("toggled", &h)
     icon_box.pack_start(btn, expand: false, fill: false, padding: 0)
   end
 
@@ -1066,7 +1016,7 @@ def show_mac_settings_window
       btn = Gtk::RadioButton.new(m_group, file)
       m_group = btn
       btn.active = ($current_map_file == file)
-      h = gtk_safe do
+      btn.signal_connect("toggled") do
         if btn.active?
           $follow_ship = false
           GLib::Source.remove($follow_timer_id) if $follow_timer_id rescue nil
@@ -1077,8 +1027,6 @@ def show_mac_settings_window
           load_map_assets(file, true)
         end
       end
-      $_nc_dialog_gc << h
-      btn.signal_connect("toggled", &h)
       map_box.pack_start(btn, expand: false, fill: false, padding: 0)
     end
   else
@@ -1088,9 +1036,7 @@ def show_mac_settings_window
   map_scroll.add(map_box)
   notebook.append_page(map_scroll, Gtk::Label.new("Select Map"))
 
-  h_win_destroy = gtk_safe { $mac_settings_win = nil }
-  $_nc_dialog_gc << h_win_destroy
-  win.signal_connect("destroy", &h_win_destroy)
+  win.signal_connect("destroy") { $mac_settings_win = nil }
   win.show_all
 end
 
@@ -1203,7 +1149,7 @@ end
 
 $debug_mode = script.vars.include?('--debug')
 
-flag_settings
+charts_flag_settings
 
 begin
   $data = JSON.parse(File.read(JSON_PATH))
@@ -1235,7 +1181,7 @@ end
 		# configure-event callbacks.
 		$configure_event_busy = false
 		$configure_timer_id = nil
-		h_configure = gtk_safe do
+		$minimap_win.signal_connect('configure-event') do
 			unless $configure_event_busy || $minimap_win.nil? || $minimap_win.destroyed?
 				# Cancel previous pending save
 				GLib::Source.remove($configure_timer_id) if $configure_timer_id
@@ -1258,9 +1204,8 @@ end
 					false
 				end
 			end
+			false
 		end
-		$_nc_prevent_gc << h_configure
-		$minimap_win.signal_connect('configure-event', &h_configure)
 
 		# 3. GUI Construction
 		main_vbox = Gtk::Box.new(:vertical, 0)
@@ -1290,7 +1235,7 @@ end
 
 		# 5. Input Events
 		$layout.add_events([:button_press_mask])
-		bp_handler = gtk_safe(stop_propagation: false) do |_w, event|
+		$layout.signal_connect('button-press-event') do |_w, event|
 			if event.button == 1 && event.state.shift_mask?
 				if $current_map_file
 					clicked_rid = find_room_at_coords($current_map_file, event.x, event.y)
@@ -1299,9 +1244,11 @@ end
 						start_script 'sail2', [ clicked_rid.to_s ]
 					end
 				end
-				# Returning true handled inline by gtk_safe via stop_propagation below
+				true
 			elsif event.button == 3
 				if RUBY_PLATFORM =~ /darwin/
+					# Defer menu popup on Mac so the button-press event fully resolves
+					# before the menu appears -- prevents Quartz grab assertion crash
 					GLib::Idle.add do
 						show_context_menu(event)
 						false
@@ -1309,15 +1256,15 @@ end
 				else
 					show_context_menu(event)
 				end
+				true
 			elsif event.button == 1
 				if $current_map_file
 					clicked_rid = find_room_at_coords($current_map_file, event.x, event.y)
 					mm_echo "Room ID: #{clicked_rid}" if clicked_rid
 				end
+				false
 			end
 		end
-		$_nc_prevent_gc << bp_handler
-		$layout.signal_connect('button-press-event', &bp_handler)
 
 		$scroller.add($layout)
 
@@ -1328,28 +1275,22 @@ end
 		center_btn.set_valign(:end)
 		center_btn.set_margin_right(10)
 		center_btn.set_margin_bottom(10)
-		h_center = gtk_safe do
+		center_btn.signal_connect("clicked") {
 			if $current_room_id
 				$follow_ship = true
 				load_room!($current_room_id, force: true)
 			end
-		end
-		$_nc_prevent_gc << h_center
-		center_btn.signal_connect("clicked", &h_center)
+		}
 		overlay.add_overlay(center_btn)
 
 		update_theme
 		
 		# 7. Destruction Hook
-		h_destroy = gtk_safe do
+		$minimap_win.signal_connect('destroy') do 
 			$minimap_alive = false
-			$_nc_prevent_gc.clear
-			$_nc_dynamic_menu_gc.clear
-			$_nc_dialog_gc.clear
-			$minimap_win = nil
+			# Immediately set to nil so before_dying and the main loop don't touch it
+			$minimap_win = nil 
 		end
-		$_nc_prevent_gc << h_destroy
-		$minimap_win.signal_connect('destroy', &h_destroy)
 		$minimap_win.show_all
 		false
 	end
@@ -1360,7 +1301,7 @@ end
 	sleep 0.1 until $minimap_win
 	# Give the window a moment to fully render show_all before we try to draw into it
 	sleep 0.3
-	ensure_ocean_watch
+	charts_ensure_ocean_watch
 	# Force a redraw after startup
 	sleep 0.2
 	update_images if $current_room_id
