@@ -1131,37 +1131,66 @@ def render_index(docs: list[dict]) -> str:
   }}
   .toggles button:hover {{ border-color: var(--accent); color: var(--accent); }}
   .toggles button.active {{ background: var(--accent); color: var(--bg); border-color: var(--accent); }}
-  .chart-wrap {{ position: relative; }}
-  /* Keep horizontal scrollbars always visible (Linux/Chromium overlay bars fade away). */
-  .scroll-top, .scroll {{
-    scrollbar-width: auto;
-    scrollbar-color: var(--accent) var(--line);
+  .chart-wrap {{
+    position: relative;
+    width: 100%;
+    max-width: 100%;
   }}
-  .scroll-top::-webkit-scrollbar,
-  .scroll::-webkit-scrollbar {{
-    height: 14px;
+  /* Custom always-on horizontal bars — native overlay scrollbars fade on this desktop. */
+  .hbar {{
+    height: 18px;
+    background: var(--line);
+    border: 1px solid #4a4338;
+    border-radius: 9px;
+    position: relative;
+    cursor: pointer;
+    flex-shrink: 0;
+    margin: 0 0 6px;
+    overflow: hidden;
   }}
-  .scroll-top::-webkit-scrollbar-track,
-  .scroll::-webkit-scrollbar-track {{
+  .hbar.bottom {{
+    margin: 6px 0 0;
+    position: sticky;
+    bottom: 0;
+    z-index: 2;
+  }}
+  .hbar.top {{
+    position: sticky;
+    top: 0;
+    z-index: 2;
     background: var(--line);
   }}
-  .scroll-top::-webkit-scrollbar-thumb,
-  .scroll::-webkit-scrollbar-thumb {{
+  .hbar-thumb {{
+    position: absolute;
+    top: 2px;
+    left: 0;
+    height: calc(100% - 4px);
+    min-width: 48px;
     background: var(--accent);
     border-radius: 7px;
-    border: 2px solid var(--line);
-    min-width: 48px;
+    cursor: grab;
+    box-sizing: border-box;
   }}
-  .scroll-top {{
-    overflow-x: scroll; overflow-y: hidden; height: 16px;
-    position: sticky; top: 0; z-index: 2; background: var(--bg);
-    margin-bottom: 2px;
+  .hbar-thumb:active {{ cursor: grabbing; }}
+  .hbar.disabled {{
+    opacity: 0.35;
+    pointer-events: none;
   }}
-  .scroll-top-inner {{ height: 1px; width: 1px; }}
-  /* Cap height so the bottom horizontal scrollbar stays on screen. */
+  .hbar.disabled .hbar-thumb {{ display: none; }}
+  /* Hide native bars; scrolling still works via drag / shift-wheel / custom thumbs. */
   .scroll {{
-    overflow-x: scroll; overflow-y: auto; cursor: default;
-    max-height: calc(100vh - 14rem);
+    width: 100%;
+    max-width: 100%;
+    overflow-x: auto;
+    overflow-y: auto;
+    cursor: default;
+    max-height: calc(100vh - 16rem);
+    scrollbar-width: none; /* Firefox */
+  }}
+  .scroll::-webkit-scrollbar {{
+    width: 0;
+    height: 0;
+    display: none;
   }}
   .scroll.panning {{ cursor: grabbing; user-select: none; }}
   table {{ border-collapse: collapse; width: max-content; min-width: 100%; background: var(--card); }}
@@ -1178,17 +1207,18 @@ def render_index(docs: list[dict]) -> str:
 </head>
 <body>
   <h1>Saga log summaries</h1>
-  <p class="sub">Derived from <code>~/.config/saga/logs</code>. EBP% clean ≈ unmodified avoidance; lower <b>Hits blink-down %</b> means fewer hits during 1215 downtime. Click a column header to sort. Top and bottom scrollbars stay visible; middle-drag or Shift+wheel also pans sideways.</p>
+  <p class="sub">Derived from <code>~/.config/saga/logs</code>. EBP% clean ≈ unmodified avoidance; lower <b>Hits blink-down %</b> means fewer hits during 1215 downtime. Click a column header to sort. Gold bars at top and bottom pan the table; middle-drag or Shift+wheel also work.</p>
   <div class="toggles" id="periods"></div>
   <div class="toggles" id="toggles"></div>
   <div class="chart-wrap">
-  <div class="scroll-top" id="scroll-top" aria-hidden="true"><div class="scroll-top-inner" id="scroll-top-inner"></div></div>
+  <div class="hbar top" id="hbar-top" title="Scroll table sideways"><div class="hbar-thumb" id="hbar-top-thumb"></div></div>
   <div class="scroll" id="scroll-main">
   <table id="days">
     <thead></thead>
     <tbody></tbody>
   </table>
   </div>
+  <div class="hbar bottom" id="hbar-bottom" title="Scroll table sideways"><div class="hbar-thumb" id="hbar-bottom-thumb"></div></div>
   </div>
   <p class="note">
     EBP% clean = evade/block/parry while not stunned/prone/webbed/unconscious/rooted (best compare to in-game dodge).
