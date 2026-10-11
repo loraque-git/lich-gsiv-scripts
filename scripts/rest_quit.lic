@@ -84,7 +84,7 @@ if Script.current.vars[1].to_s =~ /^cycles$/i
   end
   CharSettings['required_clear_cycles'] = n
   respond "rest_quit: will QUIT after #{n} clear-as-a-bell rest cycle(s)"
-  exit unless Script.current.vars[0].to_s.empty?
+  exit
 end
 
 required = CharSettings['required_clear_cycles']
@@ -92,15 +92,9 @@ required = DEFAULT_CYCLES if required.nil? || required.to_i < 1
 required = required.to_i
 
 if Script.current.vars[1].to_s =~ /^status$/i
-  # status is only useful while the watcher is the running instance; print settings
   respond "rest_quit: required clear cycles = #{required}"
   respond "rest_quit: mind=#{XMLData.mind_text.inspect} field=#{XMLData.field_exp}/#{XMLData.max_field_exp}"
   exit
-end
-
-# Only one watcher
-if Script.running?('rest_quit') && Script.current.name == 'rest_quit'
-  # unique by name — Lich won't double-start the same script name normally
 end
 
 resting       = false
@@ -139,13 +133,12 @@ loop do
     next
   end
 
-  if pending_field && line =~ MIND_STATE_RE
+  if !pending_field.nil? && line =~ MIND_STATE_RE
     field = pending_field
     pending_field = nil
-    bell = !!(line =~ MIND_BELL_RE) || rq_clear_mind?
-    empty = (field == 0) && (XMLData.field_exp.to_i == 0 || field == 0)
+    bell = !!(line =~ MIND_BELL_RE)
 
-    if empty && bell && field == 0
+    if field == 0 && bell
       clear_cycles += 1
       rq_echo "clear cycle #{clear_cycles}/#{required} (Field Exp 0, clear as a bell)"
       if clear_cycles >= required
@@ -155,10 +148,11 @@ loop do
         exit
       end
     else
+      mind = (line[MIND_STATE_RE] || XMLData.mind_text).to_s
       if clear_cycles > 0
-        rq_echo "still absorbing (Field Exp #{field}, mind=#{XMLData.mind_text}) — counter reset"
+        rq_echo "still absorbing (Field Exp #{field}, #{mind}) — counter reset"
       else
-        rq_echo "absorbing (Field Exp #{field}, mind=#{XMLData.mind_text})"
+        rq_echo "absorbing (Field Exp #{field}, #{mind})"
       end
       clear_cycles = 0
     end
@@ -167,7 +161,7 @@ loop do
 
   # Experience dump ended without a mind line; drop pending so a stray later
   # mind line cannot be paired with a stale Field Exp value.
-  if pending_field && line =~ /^>/
+  if !pending_field.nil? && line =~ /^>/
     pending_field = nil
   end
 end
