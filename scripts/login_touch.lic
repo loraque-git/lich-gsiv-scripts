@@ -1,0 +1,52 @@
+=begin
+
+  Brief stay-then-quit helper for headless daily login touches.
+  Started via: lich --login CHAR --headless auto --start-scripts=login_touch
+
+  Waits until the character is fully in the game, stays STAY_SECONDS, then QUIT.
+
+  Usage:
+    ;login_touch           - stay then quit (default 20s)
+    ;login_touch 30        - stay 30 seconds then quit
+    ;login_touch help
+
+       creator: loraque (loraque@gmail.com)
+        author: loraque (loraque@gmail.com)
+          game: Gemstone
+          tags: login, utility, logout
+      required: Lich >= 5.12.0
+       version: 0.1.0
+
+  changelog:
+    0.1.0 (2026-10-10)
+      initial: wait for in-game, sleep, quit
+
+=end
+
+DEFAULT_STAY = 20
+
+if Script.current.vars[1].to_s =~ /^help$/i
+  respond "Usage: ;login_touch [seconds]  (default #{DEFAULT_STAY})"
+  exit
+end
+
+stay = Script.current.vars[1].to_i
+stay = DEFAULT_STAY if stay < 1
+
+echo "login_touch: waiting for in-game prompt…"
+
+# Room / prompt signals that we are past character select and into the world.
+wait_until(120) do
+  begin
+    room = XMLData.room_title.to_s
+    !room.empty? && room !~ /Character\s*Manager|Character\s*Select|Selecting/i
+  rescue
+    false
+  end
+end
+
+echo "login_touch: in game (#{XMLData.room_title}) — staying #{stay}s"
+sleep stay
+echo "login_touch: quitting"
+do_client('quit')
+exit
