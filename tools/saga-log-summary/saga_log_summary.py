@@ -1557,17 +1557,15 @@ def render_index(docs: list[dict]) -> str:
     scrollMain.addEventListener("scroll", syncHBars);
     window.addEventListener("resize", syncHBars);
 
+    let hDrag = null;
     function bindHBar({{ bar, thumb }}) {{
-      let drag = null;
       thumb.addEventListener("mousedown", (e) => {{
         if (e.button !== 0) return;
         e.preventDefault();
         e.stopPropagation();
         const max = Math.max(0, scrollMain.scrollWidth - scrollMain.clientWidth);
-        const track = bar.clientWidth;
-        const thumbW = thumb.offsetWidth;
-        const maxLeft = Math.max(0, track - thumbW);
-        drag = {{
+        const maxLeft = Math.max(0, bar.clientWidth - thumb.offsetWidth);
+        hDrag = {{
           startX: e.clientX,
           startLeft: scrollMain.scrollLeft,
           max,
@@ -1586,15 +1584,15 @@ def render_index(docs: list[dict]) -> str:
         const left = Math.max(0, Math.min(maxLeft, x));
         scrollMain.scrollLeft = maxLeft > 0 ? (left / maxLeft) * max : 0;
       }});
-      window.addEventListener("mousemove", (e) => {{
-        if (!drag) return;
-        const dx = e.clientX - drag.startX;
-        const delta = drag.maxLeft > 0 ? (dx / drag.maxLeft) * drag.max : 0;
-        scrollMain.scrollLeft = drag.startLeft + delta;
-      }});
-      window.addEventListener("mouseup", () => {{ drag = null; }});
     }}
     hbars.forEach(bindHBar);
+    window.addEventListener("mousemove", (e) => {{
+      if (!hDrag) return;
+      const dx = e.clientX - hDrag.startX;
+      const delta = hDrag.maxLeft > 0 ? (dx / hDrag.maxLeft) * hDrag.max : 0;
+      scrollMain.scrollLeft = hDrag.startLeft + delta;
+    }});
+    window.addEventListener("mouseup", () => {{ hDrag = null; }});
 
     // Middle-button drag pans horizontally; Shift+wheel also pans.
     let pan = null;
