@@ -35,14 +35,21 @@ stay = DEFAULT_STAY if stay < 1
 
 echo "login_touch: waiting for in-game prompt…"
 
-# Room / prompt signals that we are past character select and into the world.
-wait_until(120) do
+# Room title signals we are past character select and into the world.
+deadline = Time.now + 120
+loop do
   begin
     room = XMLData.room_title.to_s
-    !room.empty? && room !~ /Character\s*Manager|Character\s*Select|Selecting/i
-  rescue
-    false
+    break if !room.empty? && room !~ /Character\s*Manager|Character\s*Select|Selecting/i
+  rescue StandardError
+    # still booting
   end
+  if Time.now >= deadline
+    echo "login_touch: timed out waiting for room — quitting anyway"
+    do_client('quit')
+    exit
+  end
+  sleep 0.5
 end
 
 echo "login_touch: in game (#{XMLData.room_title}) — staying #{stay}s"
