@@ -1178,7 +1178,7 @@ def render_index(docs: list[dict]) -> str:
 </head>
 <body>
   <h1>Saga log summaries</h1>
-  <p class="sub">Derived from <code>~/.config/saga/logs</code>. EBP% clean ≈ unmodified avoidance; lower <b>Hits blink-down %</b> means fewer hits during 1215 downtime. Click a column header to sort. Top scrollbar, middle-drag, or Shift+wheel pans sideways.</p>
+  <p class="sub">Derived from <code>~/.config/saga/logs</code>. EBP% clean ≈ unmodified avoidance; lower <b>Hits blink-down %</b> means fewer hits during 1215 downtime. Click a column header to sort. Top and bottom scrollbars stay visible; middle-drag or Shift+wheel also pans sideways.</p>
   <div class="toggles" id="periods"></div>
   <div class="toggles" id="toggles"></div>
   <div class="chart-wrap">
