@@ -1,64 +1,64 @@
 =begin
 
-  Watches for finished XP absorption while resting, then logs out.
+  Logs out after field XP is fully absorbed while you are idle/resting.
 
-  After Field Exp is 0 and mind is "clear as a bell", each Saga EXPERIENCE
-  pulse (~1/min during rest) counts as one clear cycle. After N cycles
-  (default 3) in a row, sends EXIT to log out.
+  Counts Saga EXPERIENCE pulses that show Field Exp 0 + "clear as a bell".
+  After N such pulses (default 3) with no recent player commands, sends EXIT.
 
-  Log review 2026-10-11 (Vorghul-Prime 10.10.2026 - 5.txt):
-    - rest_quit started 11:26 PM; Saga rest entered 12:42 AM
-    - dozens of Field Exp 0 + clear-as-a-bell pulses until 2:00 AM
-    - NO rest_quit clear-cycle echoes; NO auto logout
-    - session ended by manual look / exit
-  Cause: v0.1 gated on "[Entering Saga rest mode…]" via get(), but those
-  Saga UI lines never reached the script, so resting stayed false and every
-  pulse was ignored. v0.2 counts EXPERIENCE pulses directly (cadence-based)
-  and still honors enter/leave when they do appear.
+  Log review:
+    2026-10-10 night (v0.1): gated on Saga "[Entering rest mode]" via get();
+      those UI lines never arrived, so zero cycles counted through a long rest.
+    2026-10-11 morning (v0.2): counted while actively hunting (cadence mode),
+      then "pulse gap 155s > 90s" reset the counter when XP returned — never EXIT.
+  v0.3: only count pulses while idle (no player cmds recently); ignore
+    exp/experience as activity (Saga rest fires those); reset only when
+    absorbing again; remove the gap wipe between clear pulses.
 
   Usage:
     ;rest_quit              - start watching
     ;rest_quit status       - show settings / mind / field
     ;rest_quit cycles N     - require N clear cycles before exit (default 3)
-    ;rest_quit kill         - stop (or ;kill rest_quit)
+    ;rest_quit kill         - stop
 
        creator: loraque (loraque@gmail.com)
         author: loraque (loraque@gmail.com)
           game: Gemstone
           tags: rest, experience, logout, saga, utility
       required: Lich >= 5.12.0
-       version: 0.2.0
+       version: 0.3.0
 
   changelog:
+    0.3.0 (2026-10-11)
+      only count clear pulses while idle; UpstreamHook tracks activity
+      ignore exp/experience commands (Saga rest auto-exp)
+      reset counter only when absorbing; drop 90s gap wipe
+      logout via exit (Saga) with quit fallback
     0.2.0 (2026-10-11)
-      fix: do not require Saga rest-enter lines on get() (they may be
-        client-only); count clear-as-a-bell EXPERIENCE pulses by cadence
-      logout via exit (matches Saga), with quit fallback
-      louder per-pulse echoes for log verification
+      count EXPERIENCE pulses without requiring Saga enter lines
     0.1.0 (2026-10-10)
-      initial: Saga rest watch; quit after N clear-as-a-bell rest cycles
+      initial
 
 =end
 
-# Optional — may never arrive on Lich's get() stream (Saga UI chrome).
 REST_ENTER_RE = /Entering Saga rest mode/i
 REST_LEAVE_RE = /Leaving Saga rest mode/i
 FIELD_EXP_RE  = /Field Exp:\s*([\d,]+)\s*\/\s*([\d,]+)/
 MIND_BELL_RE  = /Your mind is as clear as a bell\./i
 MIND_STATE_RE = /Your mind (?:is as clear as a bell\.|is fresh and clear\.|is clear\.|is muddled\.|is becoming numbed\.|is numbed\.|can't take much more of this!|is completely saturated)/i
 
+# Commands that do not count as "player activity" (Saga rest / panels fire these).
+IGNORE_CMD_RE = /^(?:exp|experience|skill|skills|info|favor|resource|flag|society)\b/i
+
 DEFAULT_CYCLES = 3
-# Saga rest EXPERIENCE dumps are ~60s apart; allow some jitter.
-MAX_PULSE_GAP = 90
+# Must have no real player commands for this long before a clear pulse counts.
+IDLE_SECS = 45
 
 def rq_echo(msg)
-  # Lich already tags echo lines with the script name
   echo msg
 end
 
 def rq_logout!
   rq_echo "logging out (exit)"
-  # Saga session log used `exit`; ewatchdog uses quit — try both.
   begin
     do_client('exit')
   rescue StandardError
@@ -120,35 +120,66 @@ if Script.current.vars[1].to_s =~ /^status$/i
   exit
 end
 
-resting_hint   = false # true if we ever saw a Saga rest-enter line
-clear_cycles   = 0
-pending_field  = nil
-last_pulse_at  = nil
+clear_cycles  = 0
+pending_field = nil
+last_activity = Time.now # require a period of idleness after login before counting
+rest_hint     = false
 
-rq_echo "watching v0.2 (EXIT after #{required} clear-as-a-bell pulse(s); Saga enter lines optional)"
+HOOK = 'rest_quit_activity'
+UpstreamHook.add(HOOK, proc { |cmd|
+  begin
+    c = cmd.to_s.strip
+    unless c.empty? || c =~ IGNORE_CMD_RE
+      last_activity = Time.now
+      if clear_cycles > 0
+        clear_cycles = 0
+        rq_echo "player command — clear counter reset"
+      end
+    end
+  rescue StandardError
+    nil
+  end
+  cmd
+})
 
-before_dying { rq_echo "stopped" }
+before_dying {
+  UpstreamHook.remove(HOOK) rescue nil
+  rq_echo "stopped"
+}
+
+rq_echo "watching v0.3 (EXIT after #{required} idle clear-as-a-bell pulse(s))"
 
 loop do
   line = get
   now = Time.now
+  idle_for = now - last_activity
 
   if line =~ REST_ENTER_RE
-    resting_hint = true
+    rest_hint = true
     clear_cycles = 0
     pending_field = nil
-    last_pulse_at = nil
     rq_echo "Saga rest enter seen — counter reset; need #{required}"
     next
   end
 
   if line =~ REST_LEAVE_RE
     rq_echo "Saga rest leave seen — counter reset (was #{clear_cycles}/#{required})"
-    resting_hint = false
+    rest_hint = false
     clear_cycles = 0
     pending_field = nil
-    last_pulse_at = nil
     next
+  end
+
+  # Player commands also appear on the game stream as ">verb ..."
+  if line =~ /^>(\S+)/
+    cmd = $1.to_s
+    unless cmd.empty? || cmd =~ IGNORE_CMD_RE
+      last_activity = now
+      if clear_cycles > 0
+        clear_cycles = 0
+        rq_echo "player command (>#{cmd}) — clear counter reset"
+      end
+    end
   end
 
   if line =~ FIELD_EXP_RE
@@ -164,21 +195,16 @@ loop do
   bell = !!(line =~ MIND_BELL_RE)
   mind_txt = line.to_s.strip
 
-  # Stale chain (manual exp earlier, then later hunting, etc.)
-  if last_pulse_at && (now - last_pulse_at) > MAX_PULSE_GAP
-    if clear_cycles > 0
-      rq_echo "pulse gap #{(now - last_pulse_at).to_i}s > #{MAX_PULSE_GAP}s — counter reset"
-    end
-    clear_cycles = 0
-  end
-  last_pulse_at = now
-
   if field == 0 && bell
+    if idle_for < IDLE_SECS
+      rq_echo "clear pulse ignored (active #{idle_for.to_i}s ago; need #{IDLE_SECS}s idle)"
+      next
+    end
     clear_cycles += 1
-    hint = resting_hint ? "rest-enter seen" : "cadence mode"
-    rq_echo "clear cycle #{clear_cycles}/#{required} (Field Exp 0, clear as a bell, #{hint})"
+    mode = rest_hint ? "rest-enter seen" : "idle #{idle_for.to_i}s"
+    rq_echo "clear cycle #{clear_cycles}/#{required} (Field Exp 0, clear as a bell, #{mode})"
     if clear_cycles >= required
-      rq_echo "no field XP left and #{required} clear cycle(s) done — EXIT"
+      rq_echo "no field XP left and #{required} idle clear cycle(s) done — EXIT"
       rq_logout!
       exit
     end
