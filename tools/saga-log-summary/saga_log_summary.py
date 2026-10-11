@@ -1132,13 +1132,37 @@ def render_index(docs: list[dict]) -> str:
   .toggles button:hover {{ border-color: var(--accent); color: var(--accent); }}
   .toggles button.active {{ background: var(--accent); color: var(--bg); border-color: var(--accent); }}
   .chart-wrap {{ position: relative; }}
+  /* Keep horizontal scrollbars always visible (Linux/Chromium overlay bars fade away). */
+  .scroll-top, .scroll {{
+    scrollbar-width: auto;
+    scrollbar-color: var(--accent) var(--line);
+  }}
+  .scroll-top::-webkit-scrollbar,
+  .scroll::-webkit-scrollbar {{
+    height: 14px;
+  }}
+  .scroll-top::-webkit-scrollbar-track,
+  .scroll::-webkit-scrollbar-track {{
+    background: var(--line);
+  }}
+  .scroll-top::-webkit-scrollbar-thumb,
+  .scroll::-webkit-scrollbar-thumb {{
+    background: var(--accent);
+    border-radius: 7px;
+    border: 2px solid var(--line);
+    min-width: 48px;
+  }}
   .scroll-top {{
-    overflow-x: auto; overflow-y: hidden; height: 14px;
+    overflow-x: scroll; overflow-y: hidden; height: 16px;
     position: sticky; top: 0; z-index: 2; background: var(--bg);
     margin-bottom: 2px;
   }}
   .scroll-top-inner {{ height: 1px; width: 1px; }}
-  .scroll {{ overflow-x: auto; cursor: default; }}
+  /* Cap height so the bottom horizontal scrollbar stays on screen. */
+  .scroll {{
+    overflow-x: scroll; overflow-y: auto; cursor: default;
+    max-height: calc(100vh - 14rem);
+  }}
   .scroll.panning {{ cursor: grabbing; user-select: none; }}
   table {{ border-collapse: collapse; width: max-content; min-width: 100%; background: var(--card); }}
   th, td {{ border-bottom: 1px solid var(--line); padding: .45rem .6rem; text-align: right; white-space: nowrap; }}
@@ -1482,7 +1506,9 @@ def render_index(docs: list[dict]) -> str:
     let syncingScroll = false;
 
     function syncTopScroll() {{
-      scrollTopInner.style.width = scrollMain.scrollWidth + "px";
+      // Match the full table width so the top bar always has a real scrollbar thumb.
+      const w = Math.max(scrollMain.scrollWidth, scrollMain.clientWidth + 1);
+      scrollTopInner.style.width = w + "px";
       if (!syncingScroll) scrollTop.scrollLeft = scrollMain.scrollLeft;
     }}
     scrollTop.addEventListener("scroll", () => {{
@@ -1498,6 +1524,12 @@ def render_index(docs: list[dict]) -> str:
       syncingScroll = false;
     }});
     window.addEventListener("resize", syncTopScroll);
+    // Re-measure after fonts/layout settle (first paint can under-report scrollWidth).
+    requestAnimationFrame(() => {{
+      syncTopScroll();
+      setTimeout(syncTopScroll, 100);
+      setTimeout(syncTopScroll, 500);
+    }});
 
     // Middle-button drag pans horizontally; Shift+wheel also pans.
     let pan = null;
