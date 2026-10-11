@@ -52,7 +52,8 @@ DEFAULT_CYCLES = 3
 MAX_PULSE_GAP = 90
 
 def rq_echo(msg)
-  echo "rest_quit: #{msg}"
+  # Lich already tags echo lines with the script name
+  echo msg
 end
 
 def rq_logout!

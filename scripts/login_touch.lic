@@ -54,6 +54,22 @@ end
 
 echo "login_touch: in game (#{XMLData.room_title}) — staying #{stay}s"
 sleep stay
-echo "login_touch: quitting"
-do_client('quit')
+echo "login_touch: exiting"
+begin
+  do_client('exit')
+rescue StandardError
+  nil
+end
+sleep 0.3
+begin
+  fput 'exit'
+rescue StandardError
+  nil
+end
+sleep 0.3
+begin
+  do_client('quit')
+rescue StandardError
+  nil
+end
 exit
