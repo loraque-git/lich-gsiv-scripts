@@ -113,6 +113,9 @@ end
                                     the click handler. Ship icon changes load on the GTK thread instead of a
                                     background thread, and the Mac settings window closes on the next main-loop pass
                                     instead of inside its own button handler.
+                                    The map and settings windows now show the Nautical-Charts icon instead of the
+                                    Ruby gem. ;nautical-charts update downloads it (nautical_charts.png from
+                                    OSA-Script-Icons); if it is missing the windows keep the default icon.
 =end
 
 i_stand_alone
@@ -212,6 +215,12 @@ PORTS_GIT_REPO  = 'OSA-Ports'
 PORTS_GIT_PATH  = ''
 LOCAL_PORTS_DIR = File.join(MAP_DIR, 'OSAMaps', 'Ports')
 
+APPICON_GIT_USER  = 'jmbreitfeld'
+APPICON_GIT_REPO  = 'OSA-Script-Icons'
+APPICON_GIT_PATH  = ''
+LOCAL_APPICON_DIR = File.join(MAP_DIR, 'OSAMaps', 'ScriptIcons')
+APPICON_FILE      = File.join(LOCAL_APPICON_DIR, 'nautical_charts.png')
+
 SOUNDS_GIT_USER  = 'jmbreitfeld'
 SOUNDS_GIT_REPO  = 'OSA-Ocean-Sounds'
 SOUNDS_GIT_PATH  = ''
@@ -280,6 +289,23 @@ def charts_download_folder(user, repo, api_path, local_dir)
   end
 end
 
+# Window icon for the map and settings windows (replaces the Ruby gem icon).
+# Loaded once; nil if the file hasn't been downloaded yet, so GTK keeps its default.
+def charts_window_icon
+  return $charts_window_icon if defined?($charts_window_icon_loaded) && $charts_window_icon_loaded
+  $charts_window_icon_loaded = true
+  $charts_window_icon = File.exist?(APPICON_FILE) ? GdkPixbuf::Pixbuf.new(file: APPICON_FILE) : nil
+rescue StandardError
+  $charts_window_icon = nil
+end
+
+def charts_apply_window_icon(win)
+  icon = charts_window_icon
+  win.set_icon(icon) if icon && win && !win.destroyed?
+rescue StandardError
+  nil
+end
+
 def nautical_sync_all
   charts_sync_echo("Connecting to OSA Repository...")
   png_updates = charts_download_folder(MAP_GIT_USER, MAP_GIT_REPO, MAP_GIT_PATH, LOCAL_MAP_DIR)
@@ -288,7 +314,8 @@ def nautical_sync_all
   icons_updates = charts_download_folder(ICONS_GIT_USER, ICONS_GIT_REPO, ICONS_GIT_PATH, LOCAL_ICONS_DIR)
   ports_updates = charts_download_folder(PORTS_GIT_USER, PORTS_GIT_REPO, PORTS_GIT_PATH, LOCAL_PORTS_DIR)
   sounds_updates = charts_download_folder(SOUNDS_GIT_USER, SOUNDS_GIT_REPO, SOUNDS_GIT_PATH, LOCAL_SOUNDS_DIR)
-  total = png_updates + json_updates + icons_updates + bg_updates + sounds_updates + ports_updates
+  appicon_updates = charts_download_folder(APPICON_GIT_USER, APPICON_GIT_REPO, APPICON_GIT_PATH, LOCAL_APPICON_DIR)
+  total = png_updates + json_updates + icons_updates + bg_updates + sounds_updates + ports_updates + appicon_updates
   if total > 0
     charts_sync_echo("Success! Updated #{total} files from all repositories.")
   else
@@ -946,6 +973,7 @@ def show_mac_settings_window
 	$mac_settings_win = win
 	refs << win
 	win.set_default_size(280, 420)
+	charts_apply_window_icon(win)
 	win.set_keep_above(true)
 	win.set_resizable(true)
 
@@ -1263,6 +1291,7 @@ else
 end
 	$charts_build_proc = proc do
 		$minimap_win = Gtk::Window.new("Nautical-Charts")
+		charts_apply_window_icon($minimap_win)
 		
 		# 1. Apply Saved Position and Size
 		# We use the variables loaded from UserVars at the start of the script
