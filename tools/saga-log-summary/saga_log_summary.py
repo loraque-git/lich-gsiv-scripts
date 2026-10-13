@@ -2008,14 +2008,11 @@ def render_index(docs: list[dict], lootcap_discovery: dict | None = None) -> str
         const cells = [row.label];
         if (showChar) cells.push(row.chars);
         const lootActual = t.silver_loot_actual != null ? t.silver_loot_actual : t.silver_gross;
-        const phase = t.gem_fixate_phase
-          || (t.gem_fixate || t.gem_fixate_activated ? "active"
-            : (t.gem_fixate_week_committed && (t.gemstone_geodes_week || 0) > 0 ? "post" : null)
-            || (t.gem_fixate_week ? "active" : null));
+        let phase = t.gem_fixate_phase || null;
+        if (!phase && (t.gem_fixate || t.gem_fixate_activated)) phase = "active";
         const fixateLabel = phase === "active" ? "active"
           : phase === "geode_day" ? "geode"
           : phase === "post_geode" ? "post"
-          : (t.gem_fixate || t.gem_fixate_activated) ? "active"
           : "—";
         const geodes = t.gemstone_geodes_found != null ? t.gemstone_geodes_found
           : (t.gemstone_geodes_week || 0);
