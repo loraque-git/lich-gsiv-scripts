@@ -1641,7 +1641,7 @@ def render_index(docs: list[dict], lootcap_discovery: dict | None = None) -> str
           peak = peak == null ? p : Math.max(peak, p);
         }}
         if (s.gem_fixate || s.gem_fixate_activated || s.gem_fixate_week) fixate = true;
-        geodes += Number(s.gemstone_geodes_found || s.gemstone_geodes_week || 0);
+        geodes += Number(s.gemstone_geodes_found || 0);
         if (s.gem_fixate_blocked || s.gem_fixate_blocked_week) blocked = true;
       }}
       t.silver_loot_actual = actualSum;
@@ -2092,7 +2092,9 @@ def main(argv: list[str] | None = None) -> int:
         f"lootcap={fmt_num(t.get('lootcap_used'))}/"
         f"{fmt_num(t.get('lootcap_remaining'))} left "
         f"week_actual={fmt_num(t.get('silver_loot_week_actual'))} "
-        f"week_peak={fmt_num(t.get('lootcap_week_peak'))}"
+        f"week_peak={fmt_num(t.get('lootcap_week_peak'))} "
+        f"fixate={'yes' if t.get('gem_fixate') or t.get('gem_fixate_week') else 'no'} "
+        f"geodes={t.get('gemstone_geodes_found') or t.get('gemstone_geodes_week') or 0}"
     )
     print(html)
     return 0
