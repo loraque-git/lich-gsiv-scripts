@@ -22,6 +22,10 @@ LOG_ROOT = Path.home() / ".config/saga/logs"
 SUMMARY_ROOT = Path.home() / ".config/saga/log-summaries"
 VIEWER_DIR = Path(__file__).resolve().parent
 
+# Weekly account-wide loot-cap ceiling (subscriber figure). ledger.lic's ~lootcap
+# column is estimated used amount only; remaining = WEEKLY_LOOT_CAP − used.
+WEEKLY_LOOT_CAP = 2_000_000
+
 FILE_RE = re.compile(
     r"^(?P<stem>.+) (?P<mm>\d{2})\.(?P<dd>\d{2})\.(?P<yyyy>\d{4}) - (?P<n>\d+)\.txt$"
 )
@@ -136,6 +140,15 @@ INTERESTING_RE = re.compile(
     r"^Interesting, (?:he|she|it) carried (.+) on (?:him|her|it)\.$"
 )
 LOCKSMITH_RE = re.compile(rf"totaling {NUM} silvers\.  You will need")
+# ledger.lic appends this table after BANK ACCOUNT; ~lootcap is weekly used estimate.
+LOOTCAP_HEADER_RE = re.compile(
+    r"^\|\s*\w+\s*\|\s*hourly\s*\|\s*daily\s*\|\s*monthly\s*\|\s*yearly\s*\|\s*~lootcap\s*\|",
+    re.I,
+)
+LOOTCAP_SILVER_RE = re.compile(
+    rf"^\|\s*silver\s*\|\s*-?{NUM}\s*\|\s*-?{NUM}\s*\|\s*-?{NUM}\s*\|\s*-?{NUM}\s*\|\s*{NUM}\s*\|",
+    re.I,
+)
 TELLER_RE = re.compile(r"^The teller scribbles the transaction")
 HIT_FOR_RE = re.compile(r"and hits for (\d+) points of damage!")
 CLEAN_MISS_RE = re.compile(r"A clean miss")
@@ -197,6 +210,43 @@ HUNTING_ROOM_RE = re.compile(
 
 def parse_num(s: str) -> int:
     return int(s.replace(",", ""))
+
+
+def ts_sort_key(ts: str | None) -> tuple:
+    """Order Saga wall-clock stamps like '3:45:23 PM' within a single day."""
+    if not ts:
+        return (99, 0, 0, 0)
+    m = re.match(r"(\d{1,2}):(\d{2}):(\d{2}) (AM|PM)$", ts)
+    if not m:
+        return (99, 0, 0, 0)
+    h, mi, sec, ap = int(m.group(1)), int(m.group(2)), int(m.group(3)), m.group(4)
+    if ap == "AM":
+        h = 0 if h == 12 else h
+    else:
+        h = 12 if h == 12 else h + 12
+    return (0, h, mi, sec)
+
+
+def lootcap_fields(snapshots: list) -> dict:
+    """Derive used / remaining / daily-toward-cap from ledger ~lootcap snapshots."""
+    snaps = sorted(snapshots or [], key=lambda s: ts_sort_key(s.get("ts")))
+    if not snaps:
+        return {
+            "lootcap_snapshots": [],
+            "lootcap_used": None,
+            "lootcap_remaining": None,
+            "lootcap_weekly_cap": WEEKLY_LOOT_CAP,
+            "silver_loot_toward_cap": None,
+        }
+    used = snaps[-1]["used"]
+    toward = snaps[-1]["used"] - snaps[0]["used"] if len(snaps) >= 2 else None
+    return {
+        "lootcap_snapshots": snaps,
+        "lootcap_used": used,
+        "lootcap_remaining": WEEKLY_LOOT_CAP - used,
+        "lootcap_weekly_cap": WEEKLY_LOOT_CAP,
+        "silver_loot_toward_cap": toward,
+    }
 
 
 def avg(n: int, d: int) -> float | None:
