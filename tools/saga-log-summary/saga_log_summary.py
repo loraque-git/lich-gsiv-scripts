@@ -445,6 +445,7 @@ def enrich_lootcap_week_stats(docs: list[dict]) -> dict:
         first_geode_iso = None
         status_post_geode = 0
         post_days = 0
+        geode_seen_w = False
 
         for wd in full:
             st = stats_for(wd, None)
@@ -471,7 +472,7 @@ def enrich_lootcap_week_stats(docs: list[dict]) -> dict:
                             if status_fixate_peak is None
                             else max(status_fixate_peak, used_i)
                         )
-                    if phase in ("active", "geode_day"):
+                    if not geode_seen_w or geodes > 0:
                         active_actual += actual
                         active_searches += searches
                 else:
@@ -481,17 +482,18 @@ def enrich_lootcap_week_stats(docs: list[dict]) -> dict:
                             if status_clear_peak is None
                             else max(status_clear_peak, used_i)
                         )
-                    if phase == "post_geode":
-                        post_actual += actual
-                        post_searches += searches
-                        post_days += 1
-                        if st.get("gem_fixate_status_after_geode"):
-                            status_post_geode += 1
-                    elif phase in ("active", "geode_day"):
-                        # Status cleared but still pre-geode somehow — count active.
-                        active_actual += actual
-                        active_searches += searches
-                if phase in ("active", "geode_day"):
+                # Pre = before/on first geode; post = after with status clear.
+                # Re-fixate after a find is excluded from both (separate window).
+                if phase == "post_geode":
+                    post_actual += actual
+                    post_searches += searches
+                    post_days += 1
+                    if st.get("gem_fixate_status_after_geode"):
+                        status_post_geode += 1
+                elif phase in ("active", "geode_day") and not geode_seen_w:
+                    pre_actual += actual
+                    pre_searches += searches
+                elif phase == "geode_day":
                     pre_actual += actual
                     pre_searches += searches
             else:
@@ -499,6 +501,9 @@ def enrich_lootcap_week_stats(docs: list[dict]) -> dict:
                 never_searches += searches
                 if used_i is not None:
                     never_peak = used_i if never_peak is None else max(never_peak, used_i)
+
+            if geodes > 0:
+                geode_seen_w = True
 
         status_after_geode_days += status_post_geode
         post_geode_days += post_days
