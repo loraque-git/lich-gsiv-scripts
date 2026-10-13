@@ -1845,11 +1845,21 @@ def render_index(docs: list[dict]) -> str:
 
 def rebuild_index() -> Path:
     docs = load_all_summaries()
+    enrich_lootcap_week_stats(docs)
     html_path = SUMMARY_ROOT / "index.html"
     html_path.write_text(render_index(docs), encoding="utf-8")
+    observed = [
+        int(u)
+        for d in docs
+        for src in [d.get("totals") or {}, *(d.get("characters") or {}).values()]
+        for u in [src.get("lootcap_used"), src.get("lootcap_week_peak")]
+        if u is not None
+    ]
     index = {
         "generated_at": datetime.now().isoformat(timespec="seconds"),
         "days": [d["date"] for d in docs],
+        "lootcap_weekly_cap_assumed": WEEKLY_LOOT_CAP,
+        "lootcap_observed_max": max(observed) if observed else None,
     }
     (SUMMARY_ROOT / "index.json").write_text(json.dumps(index, indent=2) + "\n")
     return html_path
@@ -1887,6 +1897,7 @@ def main(argv: list[str] | None = None) -> int:
                 f"ebp_clean={fmt_pct(t.get('ebp_pct_clean'))}  "
                 f"deaths={t.get('deaths', 0)}  "
                 f"silver_net={fmt_num(t.get('silver_net'))}  "
+                f"loot_actual={fmt_num(t.get('silver_loot_actual'))}  "
                 f"loot_toward={fmt_num(t.get('silver_loot_toward_cap'))}  "
                 f"lootcap={fmt_num(t.get('lootcap_used'))}/"
                 f"{fmt_num(t.get('lootcap_remaining'))} left  "
@@ -1917,9 +1928,12 @@ def main(argv: list[str] | None = None) -> int:
         f"ebp_impaired={fmt_pct(t.get('ebp_pct_impaired'))} "
         f"deaths={t.get('deaths', 0)} "
         f"silver_net={fmt_num(t.get('silver_net'))} "
+        f"loot_actual={fmt_num(t.get('silver_loot_actual'))} "
         f"loot_toward={fmt_num(t.get('silver_loot_toward_cap'))} "
         f"lootcap={fmt_num(t.get('lootcap_used'))}/"
-        f"{fmt_num(t.get('lootcap_remaining'))} left"
+        f"{fmt_num(t.get('lootcap_remaining'))} left "
+        f"week_actual={fmt_num(t.get('silver_loot_week_actual'))} "
+        f"week_peak={fmt_num(t.get('lootcap_week_peak'))}"
     )
     print(html)
     return 0
