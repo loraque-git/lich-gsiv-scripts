@@ -1916,7 +1916,11 @@ def main(argv: list[str] | None = None) -> int:
     doc = summarize_day(day)
     path = write_day(doc)
     html = rebuild_index()
-    t = doc["totals"]
+    # Week-to-date fields live on the enriched index payload; re-derive for CLI.
+    docs = load_all_summaries()
+    enrich_lootcap_week_stats(docs)
+    enriched = next((d for d in docs if d.get("date") == day.isoformat()), doc)
+    t = enriched.get("totals") or doc["totals"]
     print(path)
     print(
         f"files={doc['source_file_count']} incoming={t['incoming_attacks']} "
