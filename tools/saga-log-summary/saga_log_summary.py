@@ -1200,11 +1200,14 @@ def summarize_day(day: date) -> dict:
             "deaths": "Unique player deaths (rising edge of 'You are a ghost!' / Deaths-channel self line), not every DEAD> prompt.",
             "silver": "Gross = corpse coins + box coins + jeweler + pawn + Cendadric + furrier + promissory notes. Net subtracts locksmith pool fees. Bank teller change ignored. This is event-sum loot, not wealth delta.",
             "lootcap": (
-                "lootcap_used is ledger.lic's ~lootcap column after BANK ACCOUNT "
-                "(sum of positive silver deposits under 1M this week, account-wide). "
-                f"lootcap_remaining = {WEEKLY_LOOT_CAP:,} − used. "
-                "silver_loot_toward_cap = last − first ~lootcap snapshot the same day "
-                "(needs ≥2 bank account checks)."
+                "silver_loot_actual = log-event loot/sales/bounty silver for the day "
+                "(always available). silver_loot_toward_cap = last − first ledger "
+                "~lootcap snapshot the same day (needs ≥2 BANK ACCOUNT checks). "
+                "lootcap_used is ledger's ~lootcap (deposits <1M this week, account-wide). "
+                f"lootcap_remaining uses assumed ceiling {WEEKLY_LOOT_CAP:,} (unpublished "
+                "by Simu — treat as a working guess). silver_loot_week_actual / "
+                "lootcap_week_peak are Sunday–Saturday week-to-date; when peak stalls "
+                "while actual keeps rising, the real soft-cap is near that peak."
             ),
             "dust": "Gemstone Dust motes gathered from the ground.",
             "skins": "Yields match 'You skinned the <creature>, yielding <product>.' Furrier silver includes any town furrier bulk cash/note sale plus single-skin accepts. est_silver_per_skin = silver_furrier / skins_sold (skins still in the cloak at day end are skins_pending).",
@@ -1368,10 +1371,13 @@ def render_index(docs: list[dict]) -> str:
     Hits blink-down % = share of landed hits that occurred with 1215 down (goal: lower this).
     Hit rate blink up/down and EBP% impaired split the same attacks another way.
     XP is bounty experience plus loot LTE × 10. Silver net = loot/sales − locksmith fees (event sum, not wealth).
-    Loot toward cap = change in ledger ~lootcap between the first and last BANK ACCOUNT check that day.
-    Lootcap used / left = latest ~lootcap vs the {WEEKLY_LOOT_CAP:,} weekly ceiling (account-wide).
+    <b>Loot actual</b> = same event-sum loot for the day (always available from the log).
+    <b>Loot toward (ledger)</b> = change in ledger ~lootcap between the first and last BANK ACCOUNT check that day.
+    <b>Lootcap used / left</b> = latest ~lootcap vs assumed {WEEKLY_LOOT_CAP:,} ceiling (Simu has not published the real number).
+    <b>Week actual / Week peak</b> = Sunday–Saturday week-to-date actual loot and highest ~lootcap seen; when peak stalls while actual keeps rising, the real soft-cap is near that peak.
     Est/skin = furrier silver ÷ skins sold (bulk cloak sales at any furrier, promissory notes, and single-skin sells).
   </p>
+  <p class="sub" id="lootcap-obs"></p>
   <h2 style="color:var(--accent);font-size:1.1rem;margin-top:1.5rem;">Creature searches</h2>
   <table>
     <thead><tr><th>Creature</th><th>Searches</th></tr></thead>
@@ -1488,18 +1494,30 @@ def render_index(docs: list[dict]) -> str:
       t.est_silver_per_skin = sold ? t.silver_furrier / sold
         : (t.skins_yielded ? t.silver_furrier / t.skins_yielded : null);
       t.xp_est = (t.bounty_xp || 0) + 10 * (t.lte || 0);
-      // Account-wide lootcap: sum daily toward-cap deltas; keep latest used/remaining.
-      let towardSum = 0, hasToward = false, used = null;
+      // Account-wide lootcap: sum actual + ledger toward; keep latest used / max peak.
+      let towardSum = 0, hasToward = false, used = null, actualSum = 0, peak = null;
       for (const s of list) {{
         if (!s) continue;
+        actualSum += Number(s.silver_loot_actual != null ? s.silver_loot_actual : (s.silver_gross || 0));
         if (s.silver_loot_toward_cap != null) {{
           towardSum += Number(s.silver_loot_toward_cap);
           hasToward = true;
         }}
-        if (s.lootcap_used != null) used = Number(s.lootcap_used);
+        if (s.lootcap_used != null) {{
+          const u = Number(s.lootcap_used);
+          used = u;
+          peak = peak == null ? u : Math.max(peak, u);
+        }}
+        if (s.lootcap_week_peak != null) {{
+          const p = Number(s.lootcap_week_peak);
+          peak = peak == null ? p : Math.max(peak, p);
+        }}
       }}
+      t.silver_loot_actual = actualSum;
       t.silver_loot_toward_cap = hasToward ? towardSum : null;
+      t.silver_loot_week_actual = actualSum;
       t.lootcap_used = used;
+      t.lootcap_week_peak = peak;
       t.lootcap_weekly_cap = {WEEKLY_LOOT_CAP};
       t.lootcap_remaining = used != null ? ({WEEKLY_LOOT_CAP} - used) : null;
       t.searches_by_creature = creatures;
@@ -1599,8 +1617,9 @@ def render_index(docs: list[dict]) -> str:
       if (showChar) heads.push("Characters");
       heads.push("Incoming","Deaths","Evade %","Block %","Parry %","EBP %","EBP% clean","EBP% impaired",
         "Blink uptime %","Hits blink-down %","Hit rate blink-up","Hit rate blink-down",
-        "Dmg blink-down %","Blink fire / ok","Impaired atks","Silver net","Loot toward cap",
-        "Lootcap used","Lootcap left","Avg silvers/search","XP",
+        "Dmg blink-down %","Blink fire / ok","Impaired atks","Silver net","Loot actual",
+        "Loot toward (ledger)","Lootcap used","Lootcap left","Week actual","Week peak",
+        "Avg silvers/search","XP",
         "Skins ok/botch","Est/skin","Boxes","Searches","Bounties","Bounty XP","RT sec",
         "Stuns","Dmg taken","Jewel/dust");
       table.tHead.innerHTML = "<tr>" + heads.map(h => "<th>"+h+"</th>").join("") + "</tr>";
@@ -1611,6 +1630,7 @@ def render_index(docs: list[dict]) -> str:
         const t = row.t;
         const cells = [row.label];
         if (showChar) cells.push(row.chars);
+        const lootActual = t.silver_loot_actual != null ? t.silver_loot_actual : t.silver_gross;
         cells.push(
           t.incoming_attacks || 0,
           t.deaths || 0,
@@ -1628,9 +1648,12 @@ def render_index(docs: list[dict]) -> str:
           (t.blink_fires || 0) + " / " + (t.blink_successes || 0),
           t.attacks_impaired || 0,
           num(t.silver_net),
+          num(lootActual),
           num(t.silver_loot_toward_cap),
           num(t.lootcap_used),
           num(t.lootcap_remaining),
+          num(t.silver_loot_week_actual),
+          num(t.lootcap_week_peak),
           num(t.avg_silver_per_search),
           num(xp(t)),
           (t.skins_yielded || 0) + "/" + (t.skins_botched || 0),
