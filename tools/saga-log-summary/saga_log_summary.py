@@ -275,12 +275,12 @@ def lootcap_fields(snapshots: list) -> dict:
     }
 
 
-def enrich_lootcap_week_stats(docs: list[dict]) -> None:
-    """Add week-to-date actual loot and peak ~lootcap (Sunday–Saturday weeks).
+def enrich_lootcap_week_stats(docs: list[dict]) -> dict:
+    """Add week-to-date lootcap/fixate fields; return cross-week discovery summary.
 
-    Mutates docs in place. Used to discover the unpublished real ceiling: when
-    Week peak stalls while Loot actual keeps climbing, the real soft-cap is near
-    that peak. WEEKLY_LOOT_CAP remains only a working guess for Lootcap left.
+    Mutates docs in place. Sunday–Saturday weeks. GEM FIXATE weeks are tagged so
+    fixate vs normal week peaks can bound the unpublished soft-cap (community
+    guess is fixate ≈ half earnings potential).
     """
     by_date = {d["date"]: d for d in docs if d.get("date")}
 
@@ -296,14 +296,28 @@ def enrich_lootcap_week_stats(docs: list[dict]) -> None:
             cur += timedelta(days=1)
         return out
 
+    def full_week_docs(iso: str) -> list[dict]:
+        """All known days in the Sunday–Saturday week containing iso."""
+        day = date.fromisoformat(iso)
+        start = sunday_week_start(day)
+        out = []
+        for i in range(7):
+            hit = by_date.get((start + timedelta(days=i)).isoformat())
+            if hit:
+                out.append(hit)
+        return out
+
     def stats_for(doc: dict, char: str | None) -> dict | None:
         if char is None:
             return doc.get("totals")
         return (doc.get("characters") or {}).get(char)
 
-    def week_metrics(week_docs: list[dict], char: str | None) -> tuple[int, int | None]:
+    def week_metrics(week_docs: list[dict], char: str | None) -> dict:
         actual_sum = 0
         peak: int | None = None
+        fixate = False
+        geodes = 0
+        blocked = False
         for wd in week_docs:
             st = stats_for(wd, char)
             if not st:
@@ -315,7 +329,18 @@ def enrich_lootcap_week_stats(docs: list[dict]) -> None:
             used = st.get("lootcap_used")
             if used is not None:
                 peak = int(used) if peak is None else max(peak, int(used))
-        return actual_sum, peak
+            if st.get("gem_fixate") or st.get("gem_fixate_activated"):
+                fixate = True
+            geodes += int(st.get("gemstone_geodes_found") or 0)
+            if st.get("gem_fixate_blocked"):
+                blocked = True
+        return {
+            "silver_loot_week_actual": actual_sum,
+            "lootcap_week_peak": peak,
+            "gem_fixate_week": fixate,
+            "gemstone_geodes_week": geodes,
+            "gem_fixate_blocked_week": blocked,
+        }
 
     for doc in docs:
         iso = doc.get("date")
@@ -323,13 +348,59 @@ def enrich_lootcap_week_stats(docs: list[dict]) -> None:
             continue
         week_docs = week_slice(iso)
         totals = doc.setdefault("totals", {})
-        wa, wp = week_metrics(week_docs, None)
-        totals["silver_loot_week_actual"] = wa
-        totals["lootcap_week_peak"] = wp
+        metrics = week_metrics(week_docs, None)
+        totals.update(metrics)
         for name, ch in (doc.get("characters") or {}).items():
-            wa, wp = week_metrics(week_docs, name)
-            ch["silver_loot_week_actual"] = wa
-            ch["lootcap_week_peak"] = wp
+            ch.update(week_metrics(week_docs, name))
+
+    # Completed-week peaks by fixate vs normal (use full Sun–Sat when present).
+    week_peaks: dict[str, dict] = {}
+    for doc in docs:
+        iso = doc.get("date")
+        if not iso:
+            continue
+        start = sunday_week_start(date.fromisoformat(iso)).isoformat()
+        if start in week_peaks:
+            continue
+        full = full_week_docs(iso)
+        m = week_metrics(full, None)
+        week_peaks[start] = {
+            "week_start": start,
+            "days_present": len(full),
+            "peak": m["lootcap_week_peak"],
+            "actual": m["silver_loot_week_actual"],
+            "fixate": m["gem_fixate_week"],
+            "geodes": m["gemstone_geodes_week"],
+            "blocked": m["gem_fixate_blocked_week"],
+        }
+
+    fixate_peaks = [
+        w["peak"] for w in week_peaks.values() if w["fixate"] and w["peak"] is not None
+    ]
+    normal_peaks = [
+        w["peak"]
+        for w in week_peaks.values()
+        if (not w["fixate"]) and w["peak"] is not None
+    ]
+    max_fixate = max(fixate_peaks) if fixate_peaks else None
+    max_normal = max(normal_peaks) if normal_peaks else None
+    ratio = None
+    if max_fixate and max_normal and max_normal > 0:
+        ratio = round(max_fixate / max_normal, 3)
+    # Extrapolate assuming fixate ≈ FIXATE_CAP_RATIO of normal soft-cap.
+    est_from_fixate = (
+        int(round(max_fixate / FIXATE_CAP_RATIO)) if max_fixate is not None else None
+    )
+    est_from_normal = max_normal
+    return {
+        "weeks": week_peaks,
+        "fixate_week_peak_max": max_fixate,
+        "normal_week_peak_max": max_normal,
+        "observed_fixate_to_normal_ratio": ratio,
+        "assumed_fixate_ratio": FIXATE_CAP_RATIO,
+        "estimated_normal_cap_from_fixate": est_from_fixate,
+        "estimated_normal_cap_from_normal_peak": est_from_normal,
+    }
 
 
 def avg(n: int, d: int) -> float | None:
@@ -1172,6 +1243,7 @@ def summarize_day(day: date) -> dict:
         "gem_eligible",
         "gemstones_found",
         "fried_mentions",
+        "gemstone_geodes_found",
         "attacks_blink_up",
         "attacks_blink_down",
         "hits_blink_up",
@@ -1209,6 +1281,12 @@ def summarize_day(day: date) -> dict:
         totals["dust_reserve_snapshots"].extend(c["dust_reserve_snapshots"])
         # ~lootcap is account-wide; merge all BANK ACCOUNT snapshots then re-derive.
         totals["lootcap_snapshots"].extend(c.get("lootcap_snapshots") or [])
+        if c.get("gem_fixate"):
+            totals["gem_fixate"] = True
+        if c.get("gem_fixate_activated"):
+            totals["gem_fixate_activated"] = True
+        if c.get("gem_fixate_blocked"):
+            totals["gem_fixate_blocked"] = True
         totals["skin_sales"].extend(c["skin_sales"])
         for name, n in c["skins_by_type"].items():
             totals["skins_by_type"][name] += n
