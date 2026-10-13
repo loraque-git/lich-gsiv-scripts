@@ -322,6 +322,7 @@ def empty_char() -> dict:
         "silver_furrier": 0,
         "silver_promissory": 0,
         "locksmith_fees": 0,
+        "lootcap_snapshots": [],
         "dust_motes": 0,
         "dust_reserve_snapshots": [],
         "skins_yielded": 0,
@@ -501,12 +502,28 @@ def parse_file(
         "dead": False,
     }
     char_first = (character or "").split()[0] if character else ""
+    awaiting_lootcap_row = False
 
     for i, raw in enumerate(raw_lines):
         ts, line = strip_line(raw)
         if ts:
             first_ts = first_ts or ts
             last_ts = ts
+
+        if LOOTCAP_HEADER_RE.match(line):
+            awaiting_lootcap_row = True
+            continue
+        if awaiting_lootcap_row:
+            if line.startswith("+"):
+                continue
+            m = LOOTCAP_SILVER_RE.match(line)
+            if m:
+                bucket["lootcap_snapshots"].append(
+                    {"ts": ts, "used": parse_num(m.group(5))}
+                )
+                awaiting_lootcap_row = False
+                continue
+            awaiting_lootcap_row = False
 
         sm = SESSION_RE.match(line)
         if sm:
@@ -906,6 +923,7 @@ def loot_snapshot(bucket: dict) -> dict:
         "silver_gross": gross,
         "silver_net": gross - bucket["locksmith_fees"],
         "avg_silver_per_search": avg(bucket["silver_corpses"], searches),
+        **lootcap_fields(bucket.get("lootcap_snapshots") or []),
         "dust_motes": bucket["dust_motes"],
         "avg_dust_per_search": avg(bucket["dust_motes"], searches),
         "dust_reserve_snapshots": list(bucket["dust_reserve_snapshots"]),
