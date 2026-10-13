@@ -227,6 +227,12 @@ def ts_sort_key(ts: str | None) -> tuple:
     return (0, h, mi, sec)
 
 
+def sunday_week_start(day: date) -> date:
+    """Ledger / Simu weekly loot-cap week: Sunday 00:00 through Saturday (EST)."""
+    # date.weekday(): Mon=0 … Sun=6 → days since Sunday
+    return day - timedelta(days=(day.weekday() + 1) % 7)
+
+
 def lootcap_fields(snapshots: list) -> dict:
     """Derive used / remaining / daily-toward-cap from ledger ~lootcap snapshots."""
     snaps = sorted(snapshots or [], key=lambda s: ts_sort_key(s.get("ts")))
@@ -247,6 +253,63 @@ def lootcap_fields(snapshots: list) -> dict:
         "lootcap_weekly_cap": WEEKLY_LOOT_CAP,
         "silver_loot_toward_cap": toward,
     }
+
+
+def enrich_lootcap_week_stats(docs: list[dict]) -> None:
+    """Add week-to-date actual loot and peak ~lootcap (Sunday–Saturday weeks).
+
+    Mutates docs in place. Used to discover the unpublished real ceiling: when
+    Week peak stalls while Loot actual keeps climbing, the real soft-cap is near
+    that peak. WEEKLY_LOOT_CAP remains only a working guess for Lootcap left.
+    """
+    by_date = {d["date"]: d for d in docs if d.get("date")}
+
+    def week_slice(iso: str) -> list[dict]:
+        day = date.fromisoformat(iso)
+        start = sunday_week_start(day)
+        out = []
+        cur = start
+        while cur <= day:
+            hit = by_date.get(cur.isoformat())
+            if hit:
+                out.append(hit)
+            cur += timedelta(days=1)
+        return out
+
+    def stats_for(doc: dict, char: str | None) -> dict | None:
+        if char is None:
+            return doc.get("totals")
+        return (doc.get("characters") or {}).get(char)
+
+    def week_metrics(week_docs: list[dict], char: str | None) -> tuple[int, int | None]:
+        actual_sum = 0
+        peak: int | None = None
+        for wd in week_docs:
+            st = stats_for(wd, char)
+            if not st:
+                continue
+            actual = st.get("silver_loot_actual")
+            if actual is None:
+                actual = st.get("silver_gross") or 0
+            actual_sum += int(actual)
+            used = st.get("lootcap_used")
+            if used is not None:
+                peak = int(used) if peak is None else max(peak, int(used))
+        return actual_sum, peak
+
+    for doc in docs:
+        iso = doc.get("date")
+        if not iso:
+            continue
+        week_docs = week_slice(iso)
+        totals = doc.setdefault("totals", {})
+        wa, wp = week_metrics(week_docs, None)
+        totals["silver_loot_week_actual"] = wa
+        totals["lootcap_week_peak"] = wp
+        for name, ch in (doc.get("characters") or {}).items():
+            wa, wp = week_metrics(week_docs, name)
+            ch["silver_loot_week_actual"] = wa
+            ch["lootcap_week_peak"] = wp
 
 
 def avg(n: int, d: int) -> float | None:
@@ -922,6 +985,9 @@ def loot_snapshot(bucket: dict) -> dict:
         "locksmith_fees": bucket["locksmith_fees"],
         "silver_gross": gross,
         "silver_net": gross - bucket["locksmith_fees"],
+        # Log-event loot income (same as gross). Always available; compare to
+        # ledger silver_loot_toward_cap when bank account was checked ≥2×.
+        "silver_loot_actual": gross,
         "avg_silver_per_search": avg(bucket["silver_corpses"], searches),
         **lootcap_fields(bucket.get("lootcap_snapshots") or []),
         "dust_motes": bucket["dust_motes"],
