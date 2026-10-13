@@ -275,12 +275,33 @@ def lootcap_fields(snapshots: list) -> dict:
     }
 
 
+def _loot_actual(st: dict) -> int:
+    actual = st.get("silver_loot_actual")
+    if actual is None:
+        actual = st.get("silver_gross") or 0
+    return int(actual)
+
+
+def _rate_bundle(actual: int, searches: int) -> dict:
+    return {
+        "actual": actual,
+        "searches": searches,
+        "actual_per_search": round(actual / searches, 2) if searches > 0 else None,
+    }
+
+
 def enrich_lootcap_week_stats(docs: list[dict]) -> dict:
     """Add week-to-date lootcap/fixate fields; return cross-week discovery summary.
 
-    Mutates docs in place. Sunday–Saturday weeks. GEM FIXATE weeks are tagged so
-    fixate vs normal week peaks can bound the unpublished soft-cap (community
-    guess is fixate ≈ half earnings potential).
+    Mutates docs in place. Sunday–Saturday weeks.
+
+    Two competing models for GEM FIXATE vs weekly silver soft-cap:
+      ends_on_geode — status messaging ends after a geode; silver reduction ends too
+      week_long     — once fixate starts, silver reduction lasts the whole week
+                      even after a geode (status may still clear)
+
+    Pre/post-geode actual/search rates inside fixate-started weeks are compared
+    to never-fixate weeks to score which model fits better.
     """
     by_date = {d["date"]: d for d in docs if d.get("date")}
 
@@ -312,6 +333,11 @@ def enrich_lootcap_week_stats(docs: list[dict]) -> dict:
             return doc.get("totals")
         return (doc.get("characters") or {}).get(char)
 
+    def day_fixate_status(st: dict | None) -> bool:
+        if not st:
+            return False
+        return bool(st.get("gem_fixate") or st.get("gem_fixate_activated"))
+
     def week_metrics(week_docs: list[dict], char: str | None) -> dict:
         actual_sum = 0
         peak: int | None = None
@@ -322,14 +348,11 @@ def enrich_lootcap_week_stats(docs: list[dict]) -> dict:
             st = stats_for(wd, char)
             if not st:
                 continue
-            actual = st.get("silver_loot_actual")
-            if actual is None:
-                actual = st.get("silver_gross") or 0
-            actual_sum += int(actual)
+            actual_sum += _loot_actual(st)
             used = st.get("lootcap_used")
             if used is not None:
                 peak = int(used) if peak is None else max(peak, int(used))
-            if st.get("gem_fixate") or st.get("gem_fixate_activated"):
+            if day_fixate_status(st):
                 fixate = True
             geodes += int(st.get("gemstone_geodes_found") or 0)
             if st.get("gem_fixate_blocked"):
@@ -342,19 +365,60 @@ def enrich_lootcap_week_stats(docs: list[dict]) -> dict:
             "gem_fixate_blocked_week": blocked,
         }
 
+    def annotate_phases(full: list[dict], char: str | None) -> None:
+        """Tag each day with fixate phase under both status and week-long models."""
+        committed = False
+        geode_seen = False
+        for wd in full:
+            st = stats_for(wd, char)
+            if not st:
+                continue
+            if day_fixate_status(st):
+                committed = True
+            geodes = int(st.get("gemstone_geodes_found") or 0)
+            if not committed:
+                phase = "none"
+            elif geodes > 0:
+                phase = "geode_day"
+                geode_seen = True
+            elif geode_seen:
+                phase = "post_geode"
+            else:
+                phase = "active"
+            # Re-check: status messaging after a geode (wiki says it should end).
+            status_after_clear = bool(geode_seen and day_fixate_status(st) and geodes == 0)
+            st["gem_fixate_week_committed"] = committed
+            st["gem_fixate_phase"] = phase
+            st["gem_fixate_status_after_geode"] = status_after_clear
+            if geodes > 0:
+                geode_seen = True
+
     for doc in docs:
         iso = doc.get("date")
         if not iso:
             continue
+        # Annotate phases using the full week so post_geode is correct mid-week.
+        full = full_week_docs(iso)
+        annotate_phases(full, None)
+        for name in (doc.get("characters") or {}):
+            annotate_phases(full, name)
         week_docs = week_slice(iso)
         totals = doc.setdefault("totals", {})
         metrics = week_metrics(week_docs, None)
         totals.update(metrics)
+        # Carry phase fields from totals annotation onto the day totals if present.
         for name, ch in (doc.get("characters") or {}).items():
             ch.update(week_metrics(week_docs, name))
 
-    # Completed-week peaks (full Sun–Sat when present).
+    # Completed-week analysis.
     week_peaks: dict[str, dict] = {}
+    pre_actual = pre_searches = 0
+    post_actual = post_searches = 0
+    active_actual = active_searches = 0
+    never_actual = never_searches = 0
+    status_after_geode_days = 0
+    post_geode_days = 0
+
     for doc in docs:
         iso = doc.get("date")
         if not iso:
@@ -363,23 +427,75 @@ def enrich_lootcap_week_stats(docs: list[dict]) -> dict:
         if start in week_peaks:
             continue
         full = full_week_docs(iso)
+        # Ensure phases annotated (docs may only hit this loop once per week).
+        annotate_phases(full, None)
         m = week_metrics(full, None)
-        # Day-level peaks inside the week (fixate vs not), for mixed weeks.
-        fixate_day_peak = None
-        normal_day_peak = None
+
+        status_fixate_peak = None
+        status_clear_peak = None
+        committed_peak = None
+        never_peak = None
+        first_geode_iso = None
+        status_post_geode = 0
+        post_days = 0
+
         for wd in full:
             st = stats_for(wd, None)
-            if not st or st.get("lootcap_used") is None:
+            if not st:
                 continue
-            used = int(st["lootcap_used"])
-            if st.get("gem_fixate") or st.get("gem_fixate_activated"):
-                fixate_day_peak = (
-                    used if fixate_day_peak is None else max(fixate_day_peak, used)
-                )
+            phase = st.get("gem_fixate_phase") or "none"
+            actual = _loot_actual(st)
+            searches = int(st.get("searches") or 0)
+            used = st.get("lootcap_used")
+            used_i = int(used) if used is not None else None
+            geodes = int(st.get("gemstone_geodes_found") or 0)
+            if geodes > 0 and first_geode_iso is None:
+                first_geode_iso = wd.get("date")
+
+            if m["gem_fixate_week"]:
+                if used_i is not None:
+                    committed_peak = (
+                        used_i if committed_peak is None else max(committed_peak, used_i)
+                    )
+                if day_fixate_status(st):
+                    if used_i is not None:
+                        status_fixate_peak = (
+                            used_i
+                            if status_fixate_peak is None
+                            else max(status_fixate_peak, used_i)
+                        )
+                    if phase in ("active", "geode_day"):
+                        active_actual += actual
+                        active_searches += searches
+                else:
+                    if used_i is not None:
+                        status_clear_peak = (
+                            used_i
+                            if status_clear_peak is None
+                            else max(status_clear_peak, used_i)
+                        )
+                    if phase == "post_geode":
+                        post_actual += actual
+                        post_searches += searches
+                        post_days += 1
+                        if st.get("gem_fixate_status_after_geode"):
+                            status_post_geode += 1
+                    elif phase in ("active", "geode_day"):
+                        # Status cleared but still pre-geode somehow — count active.
+                        active_actual += actual
+                        active_searches += searches
+                if phase in ("active", "geode_day"):
+                    pre_actual += actual
+                    pre_searches += searches
             else:
-                normal_day_peak = (
-                    used if normal_day_peak is None else max(normal_day_peak, used)
-                )
+                never_actual += actual
+                never_searches += searches
+                if used_i is not None:
+                    never_peak = used_i if never_peak is None else max(never_peak, used_i)
+
+        status_after_geode_days += status_post_geode
+        post_geode_days += post_days
+
         week_peaks[start] = {
             "week_start": start,
             "days_present": len(full),
@@ -388,59 +504,142 @@ def enrich_lootcap_week_stats(docs: list[dict]) -> dict:
             "fixate": m["gem_fixate_week"],
             "geodes": m["gemstone_geodes_week"],
             "blocked": m["gem_fixate_blocked_week"],
-            "fixate_day_peak": fixate_day_peak,
-            "normal_day_peak": normal_day_peak,
+            "first_geode": first_geode_iso,
+            # ends_on_geode model (status messaging)
+            "fixate_day_peak": status_fixate_peak,
+            "normal_day_peak": status_clear_peak,
+            # week_long model (committed once fixate starts)
+            "committed_week_peak": committed_peak,
+            "never_fixate_peak": never_peak,
+            "status_after_geode_days": status_post_geode,
+            "post_geode_days": post_days,
         }
 
-    # Prefer day-level peaks: most weeks mix fixate + post-geode hunting.
-    fixate_day_peaks = [
+    pre_rate = _rate_bundle(pre_actual, pre_searches)
+    post_rate = _rate_bundle(post_actual, post_searches)
+    active_rate = _rate_bundle(active_actual, active_searches)
+    never_rate = _rate_bundle(never_actual, never_searches)
+
+    def _closer(a: float | None, b: float | None, c: float | None) -> str | None:
+        """Is a closer to b or to c?"""
+        if a is None or b is None or c is None:
+            return None
+        return "b" if abs(a - b) <= abs(a - c) else "c"
+
+    pre_aps = pre_rate["actual_per_search"]
+    post_aps = post_rate["actual_per_search"]
+    never_aps = never_rate["actual_per_search"]
+    closer = _closer(post_aps, pre_aps, never_aps)
+
+    # Score models. Status clearing after geode is expected under both models for
+    # the *find bonus*; the silver question is about post-geode earnings.
+    verdict = "inconclusive"
+    verdict_reason = "Need more fixate weeks with hunting both before and after a geode."
+    if post_aps is not None and pre_aps is not None and never_aps is not None:
+        # Relative gaps
+        vs_pre = abs(post_aps - pre_aps) / pre_aps if pre_aps else 1.0
+        vs_never = abs(post_aps - never_aps) / never_aps if never_aps else 1.0
+        if closer == "b" and vs_pre <= 0.20:
+            verdict = "supports_week_long"
+            verdict_reason = (
+                f"Post-geode actual/search ({post_aps}) stays near pre-geode "
+                f"({pre_aps}), not never-fixate ({never_aps}) — silver reduction "
+                f"looks week-long even after status clears."
+            )
+        elif closer == "c" and vs_never <= 0.20:
+            verdict = "supports_ends_on_geode"
+            verdict_reason = (
+                f"Post-geode actual/search ({post_aps}) rebounds toward never-fixate "
+                f"({never_aps}) vs pre-geode ({pre_aps}) — silver reduction looks "
+                f"tied to status/find window."
+            )
+        else:
+            verdict = "inconclusive"
+            verdict_reason = (
+                f"Post-geode actual/search ({post_aps}) is between pre-geode "
+                f"({pre_aps}) and never-fixate ({never_aps}); noise or soft-cap "
+                f"overlap — keep collecting."
+            )
+
+    # Peaks under each model
+    status_fixate_peaks = [
         w["fixate_day_peak"]
         for w in week_peaks.values()
         if w.get("fixate_day_peak") is not None
     ]
-    normal_day_peaks = [
+    status_clear_peaks = [
         w["normal_day_peak"]
         for w in week_peaks.values()
         if w.get("normal_day_peak") is not None
     ]
-    # Also pure weeks (all-fixate or all-normal) for context.
-    pure_fixate_week_peaks = [
-        w["peak"]
+    committed_peaks = [
+        w["committed_week_peak"]
         for w in week_peaks.values()
-        if w["fixate"]
-        and w["peak"] is not None
-        and w.get("normal_day_peak") is None
+        if w.get("committed_week_peak") is not None
     ]
-    pure_normal_week_peaks = [
-        w["peak"]
+    never_peaks = [
+        w["never_fixate_peak"]
         for w in week_peaks.values()
-        if (not w["fixate"]) and w["peak"] is not None
+        if w.get("never_fixate_peak") is not None
     ]
-    max_fixate_day = max(fixate_day_peaks) if fixate_day_peaks else None
-    max_normal_day = max(normal_day_peaks) if normal_day_peaks else None
-    max_pure_fixate = max(pure_fixate_week_peaks) if pure_fixate_week_peaks else None
-    max_pure_normal = max(pure_normal_week_peaks) if pure_normal_week_peaks else None
-    ratio = None
-    if max_fixate_day and max_normal_day and max_normal_day > 0:
-        ratio = round(max_fixate_day / max_normal_day, 3)
+    max_status_fixate = max(status_fixate_peaks) if status_fixate_peaks else None
+    max_status_clear = max(status_clear_peaks) if status_clear_peaks else None
+    max_committed = max(committed_peaks) if committed_peaks else None
+    max_never = max(never_peaks) if never_peaks else None
+
+    ratio_status = None
+    if max_status_fixate and max_status_clear and max_status_clear > 0:
+        ratio_status = round(max_status_fixate / max_status_clear, 3)
+    ratio_committed = None
+    if max_committed and max_never and max_never > 0:
+        ratio_committed = round(max_committed / max_never, 3)
+
     est_from_fixate = (
-        int(round(max_fixate_day / FIXATE_CAP_RATIO))
-        if max_fixate_day is not None
-        else None
+        int(round(max_committed / FIXATE_CAP_RATIO))
+        if max_committed is not None
+        else (
+            int(round(max_status_fixate / FIXATE_CAP_RATIO))
+            if max_status_fixate is not None
+            else None
+        )
     )
+
     return {
         "weeks": week_peaks,
-        "fixate_day_peak_max": max_fixate_day,
-        "normal_day_peak_max": max_normal_day,
-        "pure_fixate_week_peak_max": max_pure_fixate,
-        "pure_normal_week_peak_max": max_pure_normal,
-        # Back-compat aliases used by older subtitle text.
-        "fixate_week_peak_max": max_fixate_day,
-        "normal_week_peak_max": max_normal_day,
-        "observed_fixate_to_normal_ratio": ratio,
+        "fixate_duration_models": {
+            "ends_on_geode": {
+                "fixate_day_peak_max": max_status_fixate,
+                "clear_day_peak_max": max_status_clear,
+                "ratio": ratio_status,
+            },
+            "week_long": {
+                "committed_week_peak_max": max_committed,
+                "never_fixate_peak_max": max_never,
+                "ratio_vs_never": ratio_committed,
+            },
+        },
+        "pre_geode_rate": pre_rate,
+        "post_geode_rate": post_rate,
+        "active_status_rate": active_rate,
+        "never_fixate_rate": never_rate,
+        "post_geode_closer_to": (
+            "pre_geode"
+            if closer == "b"
+            else ("never_fixate" if closer == "c" else None)
+        ),
+        "status_messaging_after_geode_days": status_after_geode_days,
+        "post_geode_days": post_geode_days,
+        "fixate_duration_verdict": verdict,
+        "fixate_duration_reason": verdict_reason,
+        # Back-compat / subtitle fields
+        "fixate_day_peak_max": max_status_fixate,
+        "normal_day_peak_max": max_status_clear,
+        "fixate_week_peak_max": max_committed or max_status_fixate,
+        "normal_week_peak_max": max_never or max_status_clear,
+        "observed_fixate_to_normal_ratio": ratio_committed or ratio_status,
         "assumed_fixate_ratio": FIXATE_CAP_RATIO,
         "estimated_normal_cap_from_fixate": est_from_fixate,
-        "estimated_normal_cap_from_normal_peak": max_normal_day,
+        "estimated_normal_cap_from_normal_peak": max_never or max_status_clear,
     }
 
 
