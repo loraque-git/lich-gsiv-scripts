@@ -1326,7 +1326,10 @@ def summarize_day(day: date) -> dict:
                 f"lootcap_remaining uses assumed ceiling {WEEKLY_LOOT_CAP:,} (unpublished "
                 "by Simu — treat as a working guess). silver_loot_week_actual / "
                 "lootcap_week_peak are Sunday–Saturday week-to-date; when peak stalls "
-                "while actual keeps rising, the real soft-cap is near that peak."
+                "while actual keeps rising, the real soft-cap is near that peak. "
+                "gem_fixate marks GEM FIXATE active that day (status/activate lines); "
+                "gemstone_geodes_found counts self geode drops (ends fixate). "
+                f"Assumed fixate≈{FIXATE_CAP_RATIO:.0%} of normal cap for extrapolation."
             ),
             "dust": "Gemstone Dust motes gathered from the ground.",
             "skins": "Yields match 'You skinned the <creature>, yielding <product>.' Furrier silver includes any town furrier bulk cash/note sale plus single-skin accepts. est_silver_per_skin = silver_furrier / skins_sold (skins still in the cloak at day end are skins_pending).",
@@ -1494,6 +1497,8 @@ def render_index(docs: list[dict]) -> str:
     <b>Loot toward (ledger)</b> = change in ledger ~lootcap between the first and last BANK ACCOUNT check that day.
     <b>Lootcap used / left</b> = latest ~lootcap vs assumed {WEEKLY_LOOT_CAP:,} ceiling (Simu has not published the real number).
     <b>Week actual / Week peak</b> = Sunday–Saturday week-to-date actual loot and highest ~lootcap seen; when peak stalls while actual keeps rising, the real soft-cap is near that peak.
+    <b>Fixate</b> = GEM FIXATE was active that day (reduces treasure earnings for better Gemstone odds until week end or a geode find).
+    <b>Geodes</b> = self crystalline-geode finds (ends fixate). Compare fixate vs normal week peaks to bound the unpublished cap (community guess ≈ half under fixate).
     Est/skin = furrier silver ÷ skins sold (bulk cloak sales at any furrier, promissory notes, and single-skin sells).
   </p>
   <p class="sub" id="lootcap-obs"></p>
@@ -1615,6 +1620,7 @@ def render_index(docs: list[dict]) -> str:
       t.xp_est = (t.bounty_xp || 0) + 10 * (t.lte || 0);
       // Account-wide lootcap: sum actual + ledger toward; keep latest used / max peak.
       let towardSum = 0, hasToward = false, used = null, actualSum = 0, peak = null;
+      let fixate = false, geodes = 0, blocked = false;
       for (const s of list) {{
         if (!s) continue;
         actualSum += Number(s.silver_loot_actual != null ? s.silver_loot_actual : (s.silver_gross || 0));
@@ -1631,6 +1637,9 @@ def render_index(docs: list[dict]) -> str:
           const p = Number(s.lootcap_week_peak);
           peak = peak == null ? p : Math.max(peak, p);
         }}
+        if (s.gem_fixate || s.gem_fixate_activated || s.gem_fixate_week) fixate = true;
+        geodes += Number(s.gemstone_geodes_found || s.gemstone_geodes_week || 0);
+        if (s.gem_fixate_blocked || s.gem_fixate_blocked_week) blocked = true;
       }}
       t.silver_loot_actual = actualSum;
       t.silver_loot_toward_cap = hasToward ? towardSum : null;
@@ -1639,6 +1648,11 @@ def render_index(docs: list[dict]) -> str:
       t.lootcap_week_peak = peak;
       t.lootcap_weekly_cap = {WEEKLY_LOOT_CAP};
       t.lootcap_remaining = used != null ? ({WEEKLY_LOOT_CAP} - used) : null;
+      t.gem_fixate = fixate;
+      t.gem_fixate_week = fixate;
+      t.gemstone_geodes_found = geodes;
+      t.gemstone_geodes_week = geodes;
+      t.gem_fixate_blocked = blocked;
       t.searches_by_creature = creatures;
       return t;
     }}
@@ -1738,7 +1752,7 @@ def render_index(docs: list[dict]) -> str:
         "Blink uptime %","Hits blink-down %","Hit rate blink-up","Hit rate blink-down",
         "Dmg blink-down %","Blink fire / ok","Impaired atks","Silver net","Loot actual",
         "Loot toward (ledger)","Lootcap used","Lootcap left","Week actual","Week peak",
-        "Avg silvers/search","XP",
+        "Fixate","Geodes","Avg silvers/search","XP",
         "Skins ok/botch","Est/skin","Boxes","Searches","Bounties","Bounty XP","RT sec",
         "Stuns","Dmg taken","Jewel/dust");
       table.tHead.innerHTML = "<tr>" + heads.map(h => "<th>"+h+"</th>").join("") + "</tr>";
@@ -1750,6 +1764,9 @@ def render_index(docs: list[dict]) -> str:
         const cells = [row.label];
         if (showChar) cells.push(row.chars);
         const lootActual = t.silver_loot_actual != null ? t.silver_loot_actual : t.silver_gross;
+        const fixateOn = !!(t.gem_fixate || t.gem_fixate_week || t.gem_fixate_activated);
+        const geodes = t.gemstone_geodes_found != null ? t.gemstone_geodes_found
+          : (t.gemstone_geodes_week || 0);
         cells.push(
           t.incoming_attacks || 0,
           t.deaths || 0,
@@ -1773,6 +1790,8 @@ def render_index(docs: list[dict]) -> str:
           num(t.lootcap_remaining),
           num(t.silver_loot_week_actual),
           num(t.lootcap_week_peak),
+          fixateOn ? "yes" : "—",
+          geodes || 0,
           num(t.avg_silver_per_search),
           num(xp(t)),
           (t.skins_yielded || 0) + "/" + (t.skins_botched || 0),
