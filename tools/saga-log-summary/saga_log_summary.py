@@ -1708,11 +1708,35 @@ def render_index(docs: list[dict]) -> str:
       return Number.isNaN(n) ? t.toLowerCase() : n;
     }}
 
+    function renderLootcapObs() {{
+      let peak = null;
+      for (const d of days) {{
+        const buckets = [d.totals || {{}}, ...Object.values(d.characters || {{}})];
+        for (const s of buckets) {{
+          if (!s) continue;
+          for (const k of ["lootcap_used", "lootcap_week_peak"]) {{
+            if (s[k] != null) peak = peak == null ? Number(s[k]) : Math.max(peak, Number(s[k]));
+          }}
+        }}
+      }}
+      const el = document.getElementById("lootcap-obs");
+      if (!el) return;
+      if (peak == null) {{
+        el.textContent = "No ledger ~lootcap snapshots in the loaded days yet.";
+        return;
+      }}
+      el.textContent = "Observed max ~lootcap across loaded days: "
+        + Number(peak).toLocaleString()
+        + " (assumed ceiling " + Number({WEEKLY_LOOT_CAP}).toLocaleString()
+        + "). Real weekly soft-cap is unpublished — compare Week peak to Week actual to bound it.";
+    }}
+
     function render() {{
       renderToggles();
       renderTable();
       renderCreatures();
       renderSkins();
+      renderLootcapObs();
       syncHBars();
     }}
 
