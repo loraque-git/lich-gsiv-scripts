@@ -1100,6 +1100,8 @@ def summarize_day(day: date) -> dict:
         for k in loot_keys:
             totals[k] += c[k]
         totals["dust_reserve_snapshots"].extend(c["dust_reserve_snapshots"])
+        # ~lootcap is account-wide; merge all BANK ACCOUNT snapshots then re-derive.
+        totals["lootcap_snapshots"].extend(c.get("lootcap_snapshots") or [])
         totals["skin_sales"].extend(c["skin_sales"])
         for name, n in c["skins_by_type"].items():
             totals["skins_by_type"][name] += n
@@ -1130,7 +1132,14 @@ def summarize_day(day: date) -> dict:
             "blink": "1215 uptime tracked from cast eruption through splinter fade / successful blink. pct_hits_while_blink_down is the share of landed hits that occurred with Blink down — lower is better.",
             "impaired": "Incoming attacks while stunned, prone, webbed, unconscious, or rooted. EBP% impaired vs EBP% clean shows how much status tanks avoidance.",
             "deaths": "Unique player deaths (rising edge of 'You are a ghost!' / Deaths-channel self line), not every DEAD> prompt.",
-            "silver": "Gross = corpse coins + box coins + jeweler + pawn + Cendadric + furrier + promissory notes. Net subtracts locksmith pool fees. Bank teller change ignored.",
+            "silver": "Gross = corpse coins + box coins + jeweler + pawn + Cendadric + furrier + promissory notes. Net subtracts locksmith pool fees. Bank teller change ignored. This is event-sum loot, not wealth delta.",
+            "lootcap": (
+                "lootcap_used is ledger.lic's ~lootcap column after BANK ACCOUNT "
+                "(sum of positive silver deposits under 1M this week, account-wide). "
+                f"lootcap_remaining = {WEEKLY_LOOT_CAP:,} − used. "
+                "silver_loot_toward_cap = last − first ~lootcap snapshot the same day "
+                "(needs ≥2 bank account checks)."
+            ),
             "dust": "Gemstone Dust motes gathered from the ground.",
             "skins": "Yields match 'You skinned the <creature>, yielding <product>.' Furrier silver includes any town furrier bulk cash/note sale plus single-skin accepts. est_silver_per_skin = silver_furrier / skins_sold (skins still in the cloak at day end are skins_pending).",
             "hunt": "Searches-by-creature, RT, stuns, herbs, bounty turn-ins, LTE convert, gemstone eligibility.",
@@ -1292,7 +1301,9 @@ def render_index(docs: list[dict]) -> str:
     EBP% clean = evade/block/parry while not stunned/prone/webbed/unconscious/rooted (best compare to in-game dodge).
     Hits blink-down % = share of landed hits that occurred with 1215 down (goal: lower this).
     Hit rate blink up/down and EBP% impaired split the same attacks another way.
-    XP is bounty experience plus loot LTE × 10. Silver net = loot/sales − locksmith fees.
+    XP is bounty experience plus loot LTE × 10. Silver net = loot/sales − locksmith fees (event sum, not wealth).
+    Loot toward cap = change in ledger ~lootcap between the first and last BANK ACCOUNT check that day.
+    Lootcap used / left = latest ~lootcap vs the {WEEKLY_LOOT_CAP:,} weekly ceiling (account-wide).
     Est/skin = furrier silver ÷ skins sold (bulk cloak sales at any furrier, promissory notes, and single-skin sells).
   </p>
   <h2 style="color:var(--accent);font-size:1.1rem;margin-top:1.5rem;">Creature searches</h2>
@@ -1411,6 +1422,20 @@ def render_index(docs: list[dict]) -> str:
       t.est_silver_per_skin = sold ? t.silver_furrier / sold
         : (t.skins_yielded ? t.silver_furrier / t.skins_yielded : null);
       t.xp_est = (t.bounty_xp || 0) + 10 * (t.lte || 0);
+      // Account-wide lootcap: sum daily toward-cap deltas; keep latest used/remaining.
+      let towardSum = 0, hasToward = false, used = null;
+      for (const s of list) {{
+        if (!s) continue;
+        if (s.silver_loot_toward_cap != null) {{
+          towardSum += Number(s.silver_loot_toward_cap);
+          hasToward = true;
+        }}
+        if (s.lootcap_used != null) used = Number(s.lootcap_used);
+      }}
+      t.silver_loot_toward_cap = hasToward ? towardSum : null;
+      t.lootcap_used = used;
+      t.lootcap_weekly_cap = {WEEKLY_LOOT_CAP};
+      t.lootcap_remaining = used != null ? ({WEEKLY_LOOT_CAP} - used) : null;
       t.searches_by_creature = creatures;
       return t;
     }}
@@ -1508,7 +1533,8 @@ def render_index(docs: list[dict]) -> str:
       if (showChar) heads.push("Characters");
       heads.push("Incoming","Deaths","Evade %","Block %","Parry %","EBP %","EBP% clean","EBP% impaired",
         "Blink uptime %","Hits blink-down %","Hit rate blink-up","Hit rate blink-down",
-        "Dmg blink-down %","Blink fire / ok","Impaired atks","Silver net","Avg silvers/search","XP",
+        "Dmg blink-down %","Blink fire / ok","Impaired atks","Silver net","Loot toward cap",
+        "Lootcap used","Lootcap left","Avg silvers/search","XP",
         "Skins ok/botch","Est/skin","Boxes","Searches","Bounties","Bounty XP","RT sec",
         "Stuns","Dmg taken","Jewel/dust");
       table.tHead.innerHTML = "<tr>" + heads.map(h => "<th>"+h+"</th>").join("") + "</tr>";
@@ -1536,6 +1562,9 @@ def render_index(docs: list[dict]) -> str:
           (t.blink_fires || 0) + " / " + (t.blink_successes || 0),
           t.attacks_impaired || 0,
           num(t.silver_net),
+          num(t.silver_loot_toward_cap),
+          num(t.lootcap_used),
+          num(t.lootcap_remaining),
           num(t.avg_silver_per_search),
           num(xp(t)),
           (t.skins_yielded || 0) + "/" + (t.skins_botched || 0),
@@ -1745,6 +1774,9 @@ def main(argv: list[str] | None = None) -> int:
                 f"ebp_clean={fmt_pct(t.get('ebp_pct_clean'))}  "
                 f"deaths={t.get('deaths', 0)}  "
                 f"silver_net={fmt_num(t.get('silver_net'))}  "
+                f"loot_toward={fmt_num(t.get('silver_loot_toward_cap'))}  "
+                f"lootcap={fmt_num(t.get('lootcap_used'))}/"
+                f"{fmt_num(t.get('lootcap_remaining'))} left  "
                 f"avg/search={fmt_num(t.get('avg_silver_per_search'))}  "
                 f"dust={t.get('dust_motes', 0)}  "
                 f"skins={t.get('skins_yielded', 0)} est/skin={fmt_num(t.get('est_silver_per_skin'))}"
