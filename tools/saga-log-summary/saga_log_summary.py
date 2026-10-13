@@ -376,17 +376,23 @@ def enrich_lootcap_week_stats(docs: list[dict]) -> dict:
             if day_fixate_status(st):
                 committed = True
             geodes = int(st.get("gemstone_geodes_found") or 0)
+            # Phase is status/find oriented. Re-fixating after a geode returns to
+            # active. Days with no status after a geode are post_geode (silver
+            # effect may still be week-long — see discovery verdict).
             if not committed:
                 phase = "none"
-            elif geode_seen:
-                phase = "geode_day" if geodes > 0 else "post_geode"
             elif geodes > 0:
                 phase = "geode_day"
+            elif day_fixate_status(st):
+                phase = "active"
+            elif geode_seen:
+                phase = "post_geode"
             else:
                 phase = "active"
             if geodes > 0:
                 geode_seen = True
-            # Status still claiming active on a later day after a geode find.
+            # Status on after a prior geode without a new geode today (re-fixate
+            # or sticky messaging).
             status_after = bool(
                 geode_seen and geodes == 0 and day_fixate_status(st)
             )
@@ -536,30 +542,51 @@ def enrich_lootcap_week_stats(docs: list[dict]) -> dict:
     # the *find bonus*; the silver question is about post-geode earnings.
     verdict = "inconclusive"
     verdict_reason = "Need more fixate weeks with hunting both before and after a geode."
-    if post_aps is not None and pre_aps is not None and never_aps is not None:
-        # Relative gaps
+    # Primary signal: does the geode find change earnings rate?
+    # Secondary: never-fixate baseline (often thin / different hunts).
+    if post_aps is not None and pre_aps is not None:
         vs_pre = abs(post_aps - pre_aps) / pre_aps if pre_aps else 1.0
-        vs_never = abs(post_aps - never_aps) / never_aps if never_aps else 1.0
-        if closer == "b" and vs_pre <= 0.20:
+        never_n = never_rate["searches"]
+        never_usable = never_aps is not None and never_n >= 1000
+        if vs_pre <= 0.15:
             verdict = "supports_week_long"
             verdict_reason = (
-                f"Post-geode actual/search ({post_aps}) stays near pre-geode "
-                f"({pre_aps}), not never-fixate ({never_aps}) — silver reduction "
-                f"looks week-long even after status clears."
+                f"Post-geode actual/search ({post_aps}) is within 15% of pre-geode "
+                f"({pre_aps}) while status messaging is usually clear — geode find "
+                f"does not look like it changes silver rate; fits week-long silver "
+                f"effect (or fixate not moving rate much)."
             )
-        elif closer == "c" and vs_never <= 0.20:
-            verdict = "supports_ends_on_geode"
-            verdict_reason = (
-                f"Post-geode actual/search ({post_aps}) rebounds toward never-fixate "
-                f"({never_aps}) vs pre-geode ({pre_aps}) — silver reduction looks "
-                f"tied to status/find window."
-            )
+            if never_usable:
+                verdict_reason += (
+                    f" Never-fixate baseline ({never_aps} over {never_n} searches) "
+                    f"is for context only."
+                )
+        elif never_usable and closer == "c":
+            vs_never = abs(post_aps - never_aps) / never_aps if never_aps else 1.0
+            if vs_never <= 0.15 and post_aps > pre_aps * 1.10:
+                verdict = "supports_ends_on_geode"
+                verdict_reason = (
+                    f"Post-geode actual/search ({post_aps}) rises from pre-geode "
+                    f"({pre_aps}) toward never-fixate ({never_aps}) — silver "
+                    f"reduction looks tied to the status/find window."
+                )
+            else:
+                verdict = "inconclusive"
+                verdict_reason = (
+                    f"Post-geode ({post_aps}) differs from pre-geode ({pre_aps}) but "
+                    f"does not cleanly match never-fixate ({never_aps})."
+                )
         else:
             verdict = "inconclusive"
             verdict_reason = (
-                f"Post-geode actual/search ({post_aps}) is between pre-geode "
-                f"({pre_aps}) and never-fixate ({never_aps}); noise or soft-cap "
-                f"overlap — keep collecting."
+                f"Post-geode actual/search ({post_aps}) differs from pre-geode "
+                f"({pre_aps})"
+                + (
+                    f"; never-fixate sample too small ({never_n} searches)."
+                    if not never_usable
+                    else f" vs never-fixate ({never_aps})."
+                )
+                + " Keep collecting fixate weeks with hunts before and after a geode."
             )
 
     # Peaks under each model
