@@ -1372,8 +1372,9 @@ def fmt_num(v) -> str:
     return f"{int(v):,}"
 
 
-def render_index(docs: list[dict]) -> str:
+def render_index(docs: list[dict], lootcap_discovery: dict | None = None) -> str:
     payload = json.dumps(docs)
+    discovery = json.dumps(lootcap_discovery or {})
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -1518,8 +1519,10 @@ def render_index(docs: list[dict]) -> str:
     <tbody id="skins-creature"></tbody>
   </table>
   <script type="application/json" id="data">{payload}</script>
+  <script type="application/json" id="lootcap-discovery">{discovery}</script>
   <script>
     const days = JSON.parse(document.getElementById("data").textContent);
+    const lootcapDiscovery = JSON.parse(document.getElementById("lootcap-discovery").textContent || "{{}}");
     const names = [...new Set(days.flatMap(d => Object.keys(d.characters || {{}})))].sort();
     const KEY = "saga-log-char";
     const PERIOD_KEY = "saga-log-period";
@@ -1859,14 +1862,27 @@ def render_index(docs: list[dict]) -> str:
       }}
       const el = document.getElementById("lootcap-obs");
       if (!el) return;
+      const parts = [];
       if (peak == null) {{
-        el.textContent = "No ledger ~lootcap snapshots in the loaded days yet.";
-        return;
+        parts.push("No ledger ~lootcap snapshots in the loaded days yet.");
+      }} else {{
+        parts.push("Observed max ~lootcap: " + Number(peak).toLocaleString()
+          + " (assumed ceiling " + Number({WEEKLY_LOOT_CAP}).toLocaleString() + ").");
       }}
-      el.textContent = "Observed max ~lootcap across loaded days: "
-        + Number(peak).toLocaleString()
-        + " (assumed ceiling " + Number({WEEKLY_LOOT_CAP}).toLocaleString()
-        + "). Real weekly soft-cap is unpublished — compare Week peak to Week actual to bound it.";
+      const disc = lootcapDiscovery || {{}};
+      if (disc.fixate_week_peak_max != null) {{
+        parts.push("Fixate-week peak max: " + Number(disc.fixate_week_peak_max).toLocaleString()
+          + " → est. normal cap @" + Number(disc.assumed_fixate_ratio || 0.5).toLocaleString(undefined, {{style:"percent"}})
+          + " ratio: " + Number(disc.estimated_normal_cap_from_fixate).toLocaleString() + ".");
+      }}
+      if (disc.normal_week_peak_max != null) {{
+        parts.push("Non-fixate week peak max: " + Number(disc.normal_week_peak_max).toLocaleString() + ".");
+      }}
+      if (disc.observed_fixate_to_normal_ratio != null) {{
+        parts.push("Observed fixate/normal peak ratio: "
+          + Number(disc.observed_fixate_to_normal_ratio).toFixed(3) + ".");
+      }}
+      el.textContent = parts.join(" ");
     }}
 
     function render() {{
@@ -1983,9 +1999,9 @@ def render_index(docs: list[dict]) -> str:
 
 def rebuild_index() -> Path:
     docs = load_all_summaries()
-    enrich_lootcap_week_stats(docs)
+    discovery = enrich_lootcap_week_stats(docs)
     html_path = SUMMARY_ROOT / "index.html"
-    html_path.write_text(render_index(docs), encoding="utf-8")
+    html_path.write_text(render_index(docs, discovery), encoding="utf-8")
     observed = [
         int(u)
         for d in docs
@@ -1998,6 +2014,7 @@ def rebuild_index() -> Path:
         "days": [d["date"] for d in docs],
         "lootcap_weekly_cap_assumed": WEEKLY_LOOT_CAP,
         "lootcap_observed_max": max(observed) if observed else None,
+        "lootcap_discovery": discovery,
     }
     (SUMMARY_ROOT / "index.json").write_text(json.dumps(index, indent=2) + "\n")
     return html_path
