@@ -1802,7 +1802,11 @@ def main(argv: list[str] | None = None) -> int:
         f"hits_blink_down={fmt_pct(t.get('pct_hits_while_blink_down'))} "
         f"ebp_clean={fmt_pct(t.get('ebp_pct_clean'))} "
         f"ebp_impaired={fmt_pct(t.get('ebp_pct_impaired'))} "
-        f"deaths={t.get('deaths', 0)}"
+        f"deaths={t.get('deaths', 0)} "
+        f"silver_net={fmt_num(t.get('silver_net'))} "
+        f"loot_toward={fmt_num(t.get('silver_loot_toward_cap'))} "
+        f"lootcap={fmt_num(t.get('lootcap_used'))}/"
+        f"{fmt_num(t.get('lootcap_remaining'))} left"
     )
     print(html)
     return 0
