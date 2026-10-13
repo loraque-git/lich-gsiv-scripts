@@ -378,20 +378,21 @@ def enrich_lootcap_week_stats(docs: list[dict]) -> dict:
             geodes = int(st.get("gemstone_geodes_found") or 0)
             if not committed:
                 phase = "none"
+            elif geode_seen:
+                phase = "geode_day" if geodes > 0 else "post_geode"
             elif geodes > 0:
                 phase = "geode_day"
-                geode_seen = True
-            elif geode_seen:
-                phase = "post_geode"
             else:
                 phase = "active"
-            # Re-check: status messaging after a geode (wiki says it should end).
-            status_after_clear = bool(geode_seen and day_fixate_status(st) and geodes == 0)
-            st["gem_fixate_week_committed"] = committed
-            st["gem_fixate_phase"] = phase
-            st["gem_fixate_status_after_geode"] = status_after_clear
             if geodes > 0:
                 geode_seen = True
+            # Status still claiming active on a later day after a geode find.
+            status_after = bool(
+                geode_seen and geodes == 0 and day_fixate_status(st)
+            )
+            st["gem_fixate_week_committed"] = committed
+            st["gem_fixate_phase"] = phase
+            st["gem_fixate_status_after_geode"] = status_after
 
     for doc in docs:
         iso = doc.get("date")
@@ -1738,8 +1739,8 @@ def render_index(docs: list[dict], lootcap_discovery: dict | None = None) -> str
     <b>Loot toward (ledger)</b> = change in ledger ~lootcap between the first and last BANK ACCOUNT check that day.
     <b>Lootcap used / left</b> = latest ~lootcap vs assumed {WEEKLY_LOOT_CAP:,} ceiling (Simu has not published the real number).
     <b>Week actual / Week peak</b> = Sunday–Saturday week-to-date actual loot and highest ~lootcap seen; when peak stalls while actual keeps rising, the real soft-cap is near that peak.
-    <b>Fixate</b> = GEM FIXATE was active that day (reduces treasure earnings for better Gemstone odds until week end or a geode find).
-    <b>Geodes</b> = self crystalline-geode finds (ends fixate). Compare fixate vs normal week peaks to bound the unpublished cap (community guess ≈ half under fixate).
+    <b>Fixate</b> phase: <code>active</code> (status on), <code>geode</code> (found that day), <code>post</code> (after geode in a week that started fixate — status usually clear; silver effect may still be week-long), or —.
+    <b>Geodes</b> = self crystalline-geode finds. Wiki says find-bonus ends on geode; whether silver soft-cap reduction also ends is tested in the subtitle (pre vs post vs never-fixate actual/search).
     Est/skin = furrier silver ÷ skins sold (bulk cloak sales at any furrier, promissory notes, and single-skin sells).
   </p>
   <p class="sub" id="lootcap-obs"></p>
@@ -2007,7 +2008,15 @@ def render_index(docs: list[dict], lootcap_discovery: dict | None = None) -> str
         const cells = [row.label];
         if (showChar) cells.push(row.chars);
         const lootActual = t.silver_loot_actual != null ? t.silver_loot_actual : t.silver_gross;
-        const fixateOn = !!(t.gem_fixate || t.gem_fixate_week || t.gem_fixate_activated);
+        const phase = t.gem_fixate_phase
+          || (t.gem_fixate || t.gem_fixate_activated ? "active"
+            : (t.gem_fixate_week_committed && (t.gemstone_geodes_week || 0) > 0 ? "post" : null)
+            || (t.gem_fixate_week ? "active" : null));
+        const fixateLabel = phase === "active" ? "active"
+          : phase === "geode_day" ? "geode"
+          : phase === "post_geode" ? "post"
+          : (t.gem_fixate || t.gem_fixate_activated) ? "active"
+          : "—";
         const geodes = t.gemstone_geodes_found != null ? t.gemstone_geodes_found
           : (t.gemstone_geodes_week || 0);
         cells.push(
@@ -2033,7 +2042,7 @@ def render_index(docs: list[dict], lootcap_discovery: dict | None = None) -> str
           num(t.lootcap_remaining),
           num(t.silver_loot_week_actual),
           num(t.lootcap_week_peak),
-          fixateOn ? "yes" : "—",
+          fixateLabel,
           geodes || 0,
           num(t.avg_silver_per_search),
           num(xp(t)),
@@ -2110,20 +2119,51 @@ def render_index(docs: list[dict], lootcap_discovery: dict | None = None) -> str
           + " (assumed ceiling " + Number({WEEKLY_LOOT_CAP}).toLocaleString() + ").");
       }}
       const disc = lootcapDiscovery || {{}};
-      const fPeak = disc.fixate_day_peak_max != null ? disc.fixate_day_peak_max : disc.fixate_week_peak_max;
-      const nPeak = disc.normal_day_peak_max != null ? disc.normal_day_peak_max : disc.normal_week_peak_max;
-      if (fPeak != null) {{
-        parts.push("Max ~lootcap on fixate days: " + Number(fPeak).toLocaleString()
-          + " → est. normal @" + Number(disc.assumed_fixate_ratio || 0.5).toLocaleString(undefined, {{style:"percent"}})
-          + ": " + Number(disc.estimated_normal_cap_from_fixate).toLocaleString() + ".");
+      const models = disc.fixate_duration_models || {{}};
+      const weekLong = models.week_long || {{}};
+      const endsOn = models.ends_on_geode || {{}};
+      if (disc.fixate_duration_verdict) {{
+        const label = {{
+          supports_week_long: "leans week-long silver effect",
+          supports_ends_on_geode: "leans ends-on-geode for silver",
+          inconclusive: "inconclusive on fixate duration"
+        }}[disc.fixate_duration_verdict] || disc.fixate_duration_verdict;
+        parts.push("Fixate duration: " + label + ".");
+        if (disc.fixate_duration_reason) parts.push(disc.fixate_duration_reason);
       }}
-      if (nPeak != null) {{
-        parts.push("Max ~lootcap on non-fixate days: " + Number(nPeak).toLocaleString() + ".");
+      const fmtRate = (r) => r && r.actual_per_search != null
+        ? (Number(r.actual_per_search).toLocaleString() + "/search over "
+          + Number(r.searches).toLocaleString() + " searches")
+        : null;
+      const rates = [];
+      const pre = fmtRate(disc.pre_geode_rate);
+      const post = fmtRate(disc.post_geode_rate);
+      const never = fmtRate(disc.never_fixate_rate);
+      if (pre) rates.push("pre-geode " + pre);
+      if (post) rates.push("post-geode " + post);
+      if (never) rates.push("never-fixate " + never);
+      if (rates.length) parts.push("Rates: " + rates.join("; ") + ".");
+      if (disc.post_geode_days != null) {{
+        parts.push("Post-geode days: " + disc.post_geode_days
+          + " (status still active on "
+          + Number(disc.status_messaging_after_geode_days || 0) + ").");
       }}
-      if (disc.observed_fixate_to_normal_ratio != null) {{
-        parts.push("Observed fixate/normal day-peak ratio: "
-          + Number(disc.observed_fixate_to_normal_ratio).toFixed(3)
-          + " (0.5 would mean half).");
+      if (weekLong.committed_week_peak_max != null) {{
+        parts.push("Week-long model peak (any day after fixate started): "
+          + Number(weekLong.committed_week_peak_max).toLocaleString() + ".");
+      }}
+      if (endsOn.fixate_day_peak_max != null) {{
+        parts.push("Ends-on-geode model status-on peak: "
+          + Number(endsOn.fixate_day_peak_max).toLocaleString()
+          + "; status-clear peak: "
+          + (endsOn.clear_day_peak_max != null
+            ? Number(endsOn.clear_day_peak_max).toLocaleString() : "—") + ".");
+      }}
+      if (disc.estimated_normal_cap_from_fixate != null) {{
+        parts.push("Est. normal cap @"
+          + Number(disc.assumed_fixate_ratio || 0.5).toLocaleString(undefined, {{style:"percent"}})
+          + " of fixate peak: "
+          + Number(disc.estimated_normal_cap_from_fixate).toLocaleString() + ".");
       }}
       el.textContent = parts.join(" ");
     }}
