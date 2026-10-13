@@ -24,6 +24,7 @@ VIEWER_DIR = Path(__file__).resolve().parent
 
 # Weekly account-wide loot-cap ceiling (subscriber figure). ledger.lic's ~lootcap
 # column is estimated used amount only; remaining = WEEKLY_LOOT_CAP − used.
+# Simu has not published the real number; this is a working guess only.
 WEEKLY_LOOT_CAP = 2_000_000
 
 FILE_RE = re.compile(
@@ -149,6 +150,25 @@ LOOTCAP_SILVER_RE = re.compile(
     rf"^\|\s*silver\s*\|\s*-?{NUM}\s*\|\s*-?{NUM}\s*\|\s*-?{NUM}\s*\|\s*-?{NUM}\s*\|\s*{NUM}\s*\|",
     re.I,
 )
+# GEM FIXATE: trades silver earnings for better Gemstone odds (through week or until find).
+GEM_FIXATE_ACTIVE_RE = re.compile(
+    r"^GEM FIXATE is active until the end of the week or until you find a Gemstone\.?$"
+)
+GEM_FIXATE_ON_RE = re.compile(
+    r"^You fixate on the possibility of finding a Gemstone\."
+)
+GEM_FIXATE_ALREADY_RE = re.compile(
+    r"^You are already under the effects of GEM FIXATE\."
+)
+GEM_FIXATE_TOO_MUCH_RE = re.compile(
+    r"^You have earned too much treasure this week to fixate"
+)
+GEM_GEODE_FIND_RE = re.compile(
+    r"\*\* A glint of light catches your eye, and you notice a rough crystalline geode "
+    r"at your feet! \*\*"
+)
+# Working guess: fixate roughly halves weekly soft-cap earnings potential.
+FIXATE_CAP_RATIO = 0.5
 TELLER_RE = re.compile(r"^The teller scribbles the transaction")
 HIT_FOR_RE = re.compile(r"and hits for (\d+) points of damage!")
 CLEAN_MISS_RE = re.compile(r"A clean miss")
