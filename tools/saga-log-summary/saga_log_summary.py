@@ -353,7 +353,7 @@ def enrich_lootcap_week_stats(docs: list[dict]) -> dict:
         for name, ch in (doc.get("characters") or {}).items():
             ch.update(week_metrics(week_docs, name))
 
-    # Completed-week peaks by fixate vs normal (use full Sun–Sat when present).
+    # Completed-week peaks (full Sun–Sat when present).
     week_peaks: dict[str, dict] = {}
     for doc in docs:
         iso = doc.get("date")
@@ -364,6 +364,22 @@ def enrich_lootcap_week_stats(docs: list[dict]) -> dict:
             continue
         full = full_week_docs(iso)
         m = week_metrics(full, None)
+        # Day-level peaks inside the week (fixate vs not), for mixed weeks.
+        fixate_day_peak = None
+        normal_day_peak = None
+        for wd in full:
+            st = stats_for(wd, None)
+            if not st or st.get("lootcap_used") is None:
+                continue
+            used = int(st["lootcap_used"])
+            if st.get("gem_fixate") or st.get("gem_fixate_activated"):
+                fixate_day_peak = (
+                    used if fixate_day_peak is None else max(fixate_day_peak, used)
+                )
+            else:
+                normal_day_peak = (
+                    used if normal_day_peak is None else max(normal_day_peak, used)
+                )
         week_peaks[start] = {
             "week_start": start,
             "days_present": len(full),
@@ -372,34 +388,59 @@ def enrich_lootcap_week_stats(docs: list[dict]) -> dict:
             "fixate": m["gem_fixate_week"],
             "geodes": m["gemstone_geodes_week"],
             "blocked": m["gem_fixate_blocked_week"],
+            "fixate_day_peak": fixate_day_peak,
+            "normal_day_peak": normal_day_peak,
         }
 
-    fixate_peaks = [
-        w["peak"] for w in week_peaks.values() if w["fixate"] and w["peak"] is not None
+    # Prefer day-level peaks: most weeks mix fixate + post-geode hunting.
+    fixate_day_peaks = [
+        w["fixate_day_peak"]
+        for w in week_peaks.values()
+        if w.get("fixate_day_peak") is not None
     ]
-    normal_peaks = [
+    normal_day_peaks = [
+        w["normal_day_peak"]
+        for w in week_peaks.values()
+        if w.get("normal_day_peak") is not None
+    ]
+    # Also pure weeks (all-fixate or all-normal) for context.
+    pure_fixate_week_peaks = [
+        w["peak"]
+        for w in week_peaks.values()
+        if w["fixate"]
+        and w["peak"] is not None
+        and w.get("normal_day_peak") is None
+    ]
+    pure_normal_week_peaks = [
         w["peak"]
         for w in week_peaks.values()
         if (not w["fixate"]) and w["peak"] is not None
     ]
-    max_fixate = max(fixate_peaks) if fixate_peaks else None
-    max_normal = max(normal_peaks) if normal_peaks else None
+    max_fixate_day = max(fixate_day_peaks) if fixate_day_peaks else None
+    max_normal_day = max(normal_day_peaks) if normal_day_peaks else None
+    max_pure_fixate = max(pure_fixate_week_peaks) if pure_fixate_week_peaks else None
+    max_pure_normal = max(pure_normal_week_peaks) if pure_normal_week_peaks else None
     ratio = None
-    if max_fixate and max_normal and max_normal > 0:
-        ratio = round(max_fixate / max_normal, 3)
-    # Extrapolate assuming fixate ≈ FIXATE_CAP_RATIO of normal soft-cap.
+    if max_fixate_day and max_normal_day and max_normal_day > 0:
+        ratio = round(max_fixate_day / max_normal_day, 3)
     est_from_fixate = (
-        int(round(max_fixate / FIXATE_CAP_RATIO)) if max_fixate is not None else None
+        int(round(max_fixate_day / FIXATE_CAP_RATIO))
+        if max_fixate_day is not None
+        else None
     )
-    est_from_normal = max_normal
     return {
         "weeks": week_peaks,
-        "fixate_week_peak_max": max_fixate,
-        "normal_week_peak_max": max_normal,
+        "fixate_day_peak_max": max_fixate_day,
+        "normal_day_peak_max": max_normal_day,
+        "pure_fixate_week_peak_max": max_pure_fixate,
+        "pure_normal_week_peak_max": max_pure_normal,
+        # Back-compat aliases used by older subtitle text.
+        "fixate_week_peak_max": max_fixate_day,
+        "normal_week_peak_max": max_normal_day,
         "observed_fixate_to_normal_ratio": ratio,
         "assumed_fixate_ratio": FIXATE_CAP_RATIO,
         "estimated_normal_cap_from_fixate": est_from_fixate,
-        "estimated_normal_cap_from_normal_peak": est_from_normal,
+        "estimated_normal_cap_from_normal_peak": max_normal_day,
     }
 
 
@@ -1870,17 +1911,20 @@ def render_index(docs: list[dict], lootcap_discovery: dict | None = None) -> str
           + " (assumed ceiling " + Number({WEEKLY_LOOT_CAP}).toLocaleString() + ").");
       }}
       const disc = lootcapDiscovery || {{}};
-      if (disc.fixate_week_peak_max != null) {{
-        parts.push("Fixate-week peak max: " + Number(disc.fixate_week_peak_max).toLocaleString()
-          + " → est. normal cap @" + Number(disc.assumed_fixate_ratio || 0.5).toLocaleString(undefined, {{style:"percent"}})
-          + " ratio: " + Number(disc.estimated_normal_cap_from_fixate).toLocaleString() + ".");
+      const fPeak = disc.fixate_day_peak_max != null ? disc.fixate_day_peak_max : disc.fixate_week_peak_max;
+      const nPeak = disc.normal_day_peak_max != null ? disc.normal_day_peak_max : disc.normal_week_peak_max;
+      if (fPeak != null) {{
+        parts.push("Max ~lootcap on fixate days: " + Number(fPeak).toLocaleString()
+          + " → est. normal @" + Number(disc.assumed_fixate_ratio || 0.5).toLocaleString(undefined, {{style:"percent"}})
+          + ": " + Number(disc.estimated_normal_cap_from_fixate).toLocaleString() + ".");
       }}
-      if (disc.normal_week_peak_max != null) {{
-        parts.push("Non-fixate week peak max: " + Number(disc.normal_week_peak_max).toLocaleString() + ".");
+      if (nPeak != null) {{
+        parts.push("Max ~lootcap on non-fixate days: " + Number(nPeak).toLocaleString() + ".");
       }}
       if (disc.observed_fixate_to_normal_ratio != null) {{
-        parts.push("Observed fixate/normal peak ratio: "
-          + Number(disc.observed_fixate_to_normal_ratio).toFixed(3) + ".");
+        parts.push("Observed fixate/normal day-peak ratio: "
+          + Number(disc.observed_fixate_to_normal_ratio).toFixed(3)
+          + " (0.5 would mean half).");
       }}
       el.textContent = parts.join(" ");
     }}
@@ -2093,8 +2137,8 @@ def main(argv: list[str] | None = None) -> int:
         f"{fmt_num(t.get('lootcap_remaining'))} left "
         f"week_actual={fmt_num(t.get('silver_loot_week_actual'))} "
         f"week_peak={fmt_num(t.get('lootcap_week_peak'))} "
-        f"fixate={'yes' if t.get('gem_fixate') or t.get('gem_fixate_week') else 'no'} "
-        f"geodes={t.get('gemstone_geodes_found') or t.get('gemstone_geodes_week') or 0}"
+        f"fixate={'yes' if t.get('gem_fixate') else 'no'} "
+        f"geodes={t.get('gemstone_geodes_found') or 0}"
     )
     print(html)
     return 0
