@@ -445,6 +445,10 @@ def empty_char() -> dict:
         "gem_eligible": 0,
         "gemstones_found": 0,
         "fried_mentions": 0,
+        "gem_fixate": False,
+        "gem_fixate_activated": False,
+        "gem_fixate_blocked": False,
+        "gemstone_geodes_found": 0,
         "as_expect": None,
     }
 
@@ -607,6 +611,19 @@ def parse_file(
                 awaiting_lootcap_row = False
                 continue
             awaiting_lootcap_row = False
+
+        if (
+            GEM_FIXATE_ACTIVE_RE.match(line)
+            or GEM_FIXATE_ALREADY_RE.match(line)
+            or GEM_FIXATE_ON_RE.match(line)
+        ):
+            bucket["gem_fixate"] = True
+            if GEM_FIXATE_ON_RE.match(line):
+                bucket["gem_fixate_activated"] = True
+        if GEM_FIXATE_TOO_MUCH_RE.match(line):
+            bucket["gem_fixate_blocked"] = True
+        if GEM_GEODE_FIND_RE.search(line):
+            bucket["gemstone_geodes_found"] += 1
 
         sm = SESSION_RE.match(line)
         if sm:
@@ -1067,6 +1084,10 @@ def extra_snapshot(bucket: dict) -> dict:
         "gem_eligible": bucket["gem_eligible"],
         "gemstones_found": bucket["gemstones_found"],
         "fried_mentions": bucket["fried_mentions"],
+        "gem_fixate": bool(bucket.get("gem_fixate")),
+        "gem_fixate_activated": bool(bucket.get("gem_fixate_activated")),
+        "gem_fixate_blocked": bool(bucket.get("gem_fixate_blocked")),
+        "gemstone_geodes_found": bucket.get("gemstone_geodes_found", 0),
         "silver_per_rt_hour": avg(bucket["silver_corpses"] * 3600, rt)
         if rt
         else None,
