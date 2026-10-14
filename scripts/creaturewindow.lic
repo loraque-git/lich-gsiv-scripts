@@ -94,8 +94,10 @@
   Author: Claude Code(Creator and Feature Additions), Codex(Bug Fixes and Review), RuseofFools (Very Little)
   Required: Lich >= 5.20.0
   Tags: wrayth, saga, frontend, mod, window, target, creature, mob, bounty, advguild, avalon, wizard, gtk3
-  Version: 1.38.0
+  Version: 1.39.0
   Recently changed:
+    v1.39.0 (2026-10-14)
+      - Added the "panic" status icon (double exclamation) to the unicode and emoji icon sets.
     v1.38.0 (2026-10-12)
       - Fixed herb bounty foraging failing outright on a random leading
         color descriptor zzherb's own catalog doesn't recognize --
@@ -315,6 +317,14 @@ module CreatureWindow
   EMPYREAN_SINCE_CAPTAIN_ICON = "&#x1F6F8;" # U+1F6F8 flying saucer
   CAPTAIN_FLEE_PATTERN = /battle-worn Empyrean captain.*?portal.*?(?:disappearing from sight|vanishing|wink(?:s|ing)? away|dives? into it)/i.freeze
   CAPTAIN_DEFEATED_PATTERN = /battle-worn Empyrean captain.*?(?:collapses|fading away with a final shimmer|leaving nothing behind)/i.freeze
+
+  # Panic never appears in <crtrStatus> or the room text, only in combat
+  # messaging, so it's tracked per creature id off the RAW line (the id is
+  # in the creature's <a exist=...> link). PANIC_MAX_SECONDS is a safety
+  # expiry in case the "subsides" line is missed.
+  PANIC_START_PATTERN = /exist="(\d+)"[^>]*>[^<]*<\/a>(?:<popBold\/>)? casts about wildly, too panicked to act/i.freeze
+  PANIC_END_PATTERN = /exist="(\d+)"[^>]*>[^<]*<\/a>(?:<popBold\/>)? steadies as .{0,120}?panic subsides/i.freeze
+  PANIC_MAX_SECONDS = 30
 
   # *cwicon <slot> <emoji> lets the player override specific icons without
   # editing the script -- currently just the two Empyrean counters (slots
@@ -881,6 +891,7 @@ def CreatureWindow.ensure_runtime_state!
   @cw_creature_timestamps ||= {}
   @cw_creature_targeted ||= {}
   @cw_custom_status_cache ||= {}
+  @cw_panic_until ||= {}
   @cw_time_to_kill_list ||= []
   @cw_counted_dead_creature_ids ||= {}
   @cw_empyrean_counted_ids ||= {}
@@ -964,6 +975,30 @@ def CreatureWindow.push_recent_line(line)
   CreatureWindow.ensure_runtime_state!
   @cw_recent_lines << line
   @cw_recent_lines.shift if @cw_recent_lines.size > 25
+end
+
+# Returns true when the line changed a creature's panic state, so the caller
+# can queue a redraw.
+def CreatureWindow.track_panic_line(line)
+  CreatureWindow.ensure_runtime_state!
+  if (m = line.match(CreatureWindow::PANIC_START_PATTERN))
+    @cw_panic_until[m[1].to_s] = Time.now + CreatureWindow::PANIC_MAX_SECONDS
+    true
+  elsif (m = line.match(CreatureWindow::PANIC_END_PATTERN))
+    !@cw_panic_until.delete(m[1].to_s).nil?
+  else
+    false
+  end
+end
+
+def CreatureWindow.panicked?(id)
+  CreatureWindow.ensure_runtime_state!
+  return false unless id
+  expires = @cw_panic_until[id.to_s]
+  return false unless expires
+  return true if Time.now < expires
+  @cw_panic_until.delete(id.to_s)
+  false
 end
 
 @cw_startup_request_gtk = (CreatureWindow.use_gtk_window || !Frontend.supports_room_window?)
@@ -1535,6 +1570,7 @@ def CreatureWindow.creature_status_fix(status, name = nil, id = nil)
 
   all_statuses = crtr_statuses.dup
   all_statuses << text_status if text_status
+  all_statuses << "panic" if CreatureWindow.panicked?(id)
   all_statuses.concat(custom_statuses)
   all_statuses = all_statuses.compact.uniq
   all_statuses.empty? ? nil : all_statuses.join(" ")
@@ -1569,6 +1605,7 @@ CW_SAGA_STATUS_ICONS_UNICODE = {
   /\bprone\b/i       => "&#x21D3;",   # U+21D3 downwards double arrow
   /\bflying\b/i      => "&#x21D1;",   # U+21D1 upwards double arrow
   /\bnatures_decay\b/i => "&#x273F;", # U+273F black florette
+  /\bpanic(?:ked)?\b/i => "&#x203C;", # U+203C double exclamation mark
   /\broundtime\b/i   => "&#x231B;"    # U+231B hourglass with flowing sand
 }.freeze
 
@@ -1599,6 +1636,7 @@ CW_SAGA_STATUS_ICONS_EMOJI = {
   /\bvulnerable\b/i  => "&#x1F4A5;",           # U+1F4A5 collision (matches effectsbar)
   /\bdisoriented\b/i => "&#x1F635;&#x200D;&#x1F4AB;", # U+1F635 200D 1F4AB face with spiral eyes
   /\blimb_favored\b/i => "&#x1FA79;",          # U+1FA79 adhesive bandage
+  /\bpanic(?:ked)?\b/i => "&#x203C;&#xFE0F;", # U+203C double exclamation mark
   /\bdazed\b/i       => "&#x1F300;",           # U+1F300 cyclone -- distinct from disoriented's spiral-eyes icon above; both are real, separate statuses (see STATUS_DURATIONS in lib/common/creature/creature_base.rb)
   /\broundtime\b/i   => "&#x231B;"             # U+231B hourglass with flowing sand
 }.freeze
@@ -2089,6 +2127,7 @@ def CreatureWindow.track_creature_kill(creature_id, creature_name)
   @cw_creature_timestamps.delete(creature_id)
   @cw_creature_targeted.delete(creature_id)
   @cw_custom_status_cache.delete(creature_id)
+  @cw_panic_until.delete(creature_id.to_s)
 end
 
 def CreatureWindow.sanitize_xml(value)
@@ -4017,6 +4056,7 @@ DownstreamHook.remove(downstream_hook_id) rescue nil
 DownstreamHook.add(downstream_hook_id, proc do |line|
   begin
     CreatureWindow.push_recent_line(line.to_s.strip)
+    CreatureWindow::CMD_QUEUE.push("update_window") if CreatureWindow.track_panic_line(line.to_s)
     # DownstreamHook fires on the RAW server line (see
     # Game::Sge#process_downstream_hooks in lib/games.rb), before Lich's own
     # XML parser strips it down to plain text -- so a monster-bold-wrapped
