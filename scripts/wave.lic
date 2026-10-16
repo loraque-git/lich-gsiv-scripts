@@ -1,0 +1,403 @@
+=begin
+
+  Wave a wand at a foe. Uses the wand in hand, or pulls one from reserve.
+  Stances offensive only when the wand's spell is an AS bolt/ball attack
+  (Spell#stance from effect-list). Warding / utility wands stay in current stance.
+
+  Usage:
+    ;wave                     - wave at current/best target
+    ;wave <name>              - prefer a living NPC whose name matches
+    ;wave prefer <pat>        - save preferred wand name pattern (CharSettings)
+    ;wave prefer clear        - clear preferred wand pattern
+    ;wave reserve <pat>       - save reserve container name pattern
+    ;wave reserve clear       - clear reserve pattern (use stow + inv search)
+    ;wave as <name?>          - force offensive stance this wave
+    ;wave noas <name?>        - skip offensive stance this wave
+    ;wave help                - this help
+
+  Config (edit script):
+    STANCE_DANCE  - master toggle; when false, never stance-dances
+    PUT_BACK      - return a reserve-drawn wand after waving
+    AS_EXTRA / NO_AS_EXTRA - name regexes that force / forbid AS stance
+
+       creator: loraque (loraque@gmail.com)
+        author: loraque (loraque@gmail.com)
+          game: Gemstone
+          tags: wand, combat, stance
+      required: Lich >= 5.12.0
+       version: 0.1.0
+
+  changelog:
+    0.1.0 (2026-04-14)
+      initial: kk-style targeting; hand or reserve wand; AS stance via Spell#stance
+
+=end
+
+# BEGIN config
+STANCE_DANCE = true
+PUT_BACK = true
+
+# Optional name regexes beyond the built-in wand→spell map.
+# AS_EXTRA always stance-dances; NO_AS_EXTRA never does (wins over AS_EXTRA).
+AS_EXTRA = [
+  # /my custom bolt wand/i,
+]
+NO_AS_EXTRA = [
+  # /my custom warding wand/i,
+]
+
+# Built-in treasure/alchemy wand names → spell number (more specific first).
+# Used with Spell[n].stance to decide AS bolt/ball stance-dancing.
+WAND_SPELL_MAP = [
+  [/nacre-inlaid alabaster wand/i, 306],
+  [/sleek alabaster wand/i, 1108],
+  [/slender mithril wand/i, 910],
+  [/slender azure rod/i, 907],
+  [/slender crimson rod/i, 908],
+  [/slender ivory wand/i, 1106],
+  [/slender blue wand/i, 1709],
+  [/wavy grey crystal wand/i, 412],
+  [/shadowy dark crystal wand/i, 413],
+  [/clear prismatic wand/i, 502],
+  [/spiraled sapphire wand/i, 505],
+  [/faceted topaz wand/i, 510],
+  [/faceted amethyst wand/i, 1110],
+  [/dark amethyst wand/i, 1210],
+  [/white starstone wand/i, 1408],
+  [/green coral wand/i, 1707],
+  [/smooth amber wand/i, 1708],
+  [/crystal wand/i, 1710],
+  [/rainbow glaes wand/i, 502],
+  [/whorled quartz wand/i, 505],
+  [/lustrous beryl wand/i, 110],
+  [/wavy driftwood wand/i, 110],
+  [/grooved ebony wand/i, 111],
+  [/electrum wand/i, 111],
+  [/spiraled willow wand/i, 306],
+  [/grooved witchwood wand/i, 409],
+  [/mithril wand/i, 409],
+  [/blackthorn wand/i, 412],
+  [/poisonwood wand/i, 413],
+  [/polished bloodwood wand/i, 701],
+  [/smooth bone wand/i, 705],
+  [/clear glass wand/i, 706],
+  [/pale thanot wand/i, 708],
+  [/fluted black stone wand/i, 713],
+  [/iridescent opal wand/i, 903],
+  [/smooth crystalline wand/i, 904],
+  [/black walnut wand/i, 904],
+  [/cracked ivory wand/i, 1106],
+  [/white linden wand/i, 1108],
+  [/lapis lazuli wand/i, 1110],
+  [/oaken wand/i, 108],
+  [/rowan wand/i, 611],
+  [/twisted wand/i, 702],
+  [/gnarled yew wand/i, 703],
+  [/iron wand/i, 901],
+  [/silver wand/i, 901],
+  [/aquamarine wand/i, 903],
+  [/golden wand/i, 906],
+  [/metal wand/i, 907],
+  [/drake wand/i, 908],
+  [/copper wand/i, 910],
+  [/bronze wand/i, 510],
+]
+# END config
+
+# BEGIN lock
+LOCK_TIMEOUT = 5.0
+
+elapsed = 0.0
+while (stale = Script.list.find { |s| s.name == Script.current.name && s != Script.current })
+  pause 0.1
+  elapsed += 0.1
+  if elapsed >= LOCK_TIMEOUT
+    stale.kill
+    break
+  end
+end
+# END lock
+
+manual_input = Script.current.vars[0].to_s.strip
+force_as = nil # nil = auto; true/false = one-shot override
+target_arg = manual_input
+
+if manual_input.empty?
+  # fall through to targeting
+elsif manual_input =~ /^help$/i
+  echo "Usage: ;wave [as|noas] [<creature>]"
+  echo "       ;wave prefer <pat>|clear"
+  echo "       ;wave reserve <pat>|clear"
+  echo "Stances offensive only for AS bolt/ball wands (Spell#stance) unless as/noas."
+  prefer = CharSettings[:wave_prefer]
+  reserve = CharSettings[:wave_reserve]
+  echo "prefer: #{prefer ? prefer.inspect : '(none)'}"
+  echo "reserve: #{reserve ? reserve.inspect : '(stow + inv search)'}"
+  exit
+elsif manual_input =~ /^prefer\s+clear$/i
+  CharSettings[:wave_prefer] = nil
+  echo "Cleared preferred wand pattern."
+  exit
+elsif manual_input =~ /^prefer\s+(.+)$/i
+  CharSettings[:wave_prefer] = $1.strip
+  echo "Preferred wand pattern set to #{$1.strip.inspect}."
+  exit
+elsif manual_input =~ /^reserve\s+clear$/i
+  CharSettings[:wave_reserve] = nil
+  echo "Cleared reserve container pattern."
+  exit
+elsif manual_input =~ /^reserve\s+(.+)$/i
+  CharSettings[:wave_reserve] = $1.strip
+  echo "Reserve container pattern set to #{$1.strip.inspect}."
+  exit
+elsif manual_input =~ /^(as|noas)(?:\s+(.*))?$/i
+  force_as = ($1.downcase == "as")
+  target_arg = $2.to_s.strip
+end
+
+wandish = lambda { |obj|
+  obj && obj.id && obj.name !~ /empty/i && (
+    obj.type.to_s =~ /\bwand\b/i ||
+    obj.noun.to_s =~ /^(?:wand|rod|baton)$/i ||
+    obj.name.to_s =~ /\b(?:wand|rod)\b/i
+  )
+}
+
+empty_hand = lambda { |obj|
+  obj.nil? || obj.name.to_s =~ /^empty$/i || !obj.id
+}
+
+spell_for_wand = lambda { |obj|
+  name = obj.name.to_s
+  pair = WAND_SPELL_MAP.find { |re, _| name =~ re }
+  pair && pair[1]
+}
+
+wand_is_as = lambda { |obj|
+  name = obj.name.to_s
+  return false if NO_AS_EXTRA.any? { |re| name =~ re }
+  return true if AS_EXTRA.any? { |re| name =~ re }
+  num = spell_for_wand.call(obj)
+  return false unless num
+  spell = Spell[num] rescue nil
+  !!(spell && spell.stance)
+}
+
+ensure_contents = lambda { |container|
+  return [] unless container && container.id
+  contents = container.contents
+  if contents.nil?
+    fput "look in ##{container.id}"
+    pause 0.2
+    contents = container.contents
+  end
+  contents.is_a?(Array) ? contents : []
+}
+
+reserve_containers = lambda {
+  inv = GameObj.inv.to_a
+  preferred = CharSettings[:wave_reserve].to_s.strip
+  list = []
+  if !preferred.empty?
+    pre = /#{Regexp.escape(preferred)}/i
+    list.concat(inv.select { |c| c.name.to_s =~ pre })
+  end
+  stow_id = XMLData.stow_container_id rescue nil
+  if stow_id
+    stow = inv.find { |c| c.id == stow_id }
+    list << stow if stow
+  end
+  list.concat(inv)
+  seen = {}
+  list.select { |c|
+    next false unless c && c.id && !seen[c.id]
+    seen[c.id] = true
+    true
+  }
+}
+
+find_wand_in_hand = lambda {
+  [GameObj.right_hand, GameObj.left_hand].find { |h| wandish.call(h) }
+}
+
+find_wand_in_reserve = lambda {
+  prefer = CharSettings[:wave_prefer].to_s.strip
+  prefer_re = prefer.empty? ? nil : /#{Regexp.escape(prefer)}/i
+  candidates = []
+  reserve_containers.call.each do |bag|
+    ensure_contents.call(bag).each do |item|
+      next unless wandish.call(item)
+      candidates << [bag, item]
+    end
+  end
+  if prefer_re
+    hit = candidates.find { |_, item| item.name.to_s =~ prefer_re }
+    return hit if hit
+  end
+  candidates.first
+}
+
+# BEGIN targeting
+living_foe = lambda { |obj|
+  obj && obj.id &&
+    obj.status !~ /dead|gone/ &&
+    obj.name !~ /^animated /
+}
+
+if dead? || checkstunned || checkwebbed
+  echo "Cannot choose a target right now."
+  exit
+end
+
+target_obj = nil
+
+living = []
+seen = {}
+(GameObj.npcs + GameObj.targets).each do |obj|
+  next unless living_foe.call(obj)
+  next if seen[obj.id]
+  seen[obj.id] = true
+  living << obj
+end
+
+if !target_arg.empty?
+  name_re = /#{Regexp.escape(target_arg)}/i
+  target_obj = living.find { |obj| obj.name =~ name_re }
+  unless target_obj
+    echo "No living NPC matching #{target_arg.inspect}."
+    exit
+  end
+else
+  current_target = GameObj.target
+  if living_foe.call(current_target)
+    room_npc = GameObj.npcs.find { |npc| npc.id == current_target.id }
+    target_obj = current_target if room_npc.nil? || living_foe.call(room_npc)
+  end
+  target_obj ||= living.find { |obj| obj.type.to_s =~ /aggro|monster/ }
+  target_obj ||= GameObj.targets.find { |obj| living_foe.call(obj) }
+end
+
+unless living_foe.call(target_obj)
+  echo "No valid living targets found."
+  exit
+end
+
+put "target ##{target_obj.id}" unless GameObj.target&.id == target_obj.id
+# END targeting
+
+# BEGIN waitrt
+waitrt?
+waitcastrt?
+if target_obj.nil? || !target_obj.id ||
+    target_obj.status =~ /dead|gone/ ||
+    target_obj.name =~ /^animated /
+  echo "Target is no longer valid."
+  exit
+end
+# END waitrt
+
+# Resolve wand (hand first, then reserve)
+wand_obj = find_wand_in_hand.call
+from_reserve = nil
+stowed_for_wave = nil
+drew_from_reserve = false
+
+unless wand_obj
+  pair = find_wand_in_reserve.call
+  unless pair
+    echo "No wand in hand or reserve."
+    exit
+  end
+  from_reserve, wand_obj = pair
+  drew_from_reserve = true
+
+  right = GameObj.right_hand
+  left = GameObj.left_hand
+  if empty_hand.call(right)
+    # get into right
+  elsif empty_hand.call(left)
+    # get into left
+  else
+    # Free right hand into stow / reserve so we can hold the wand.
+    stowed_for_wave = right
+    fput "stow right"
+    waitrt?
+    if !empty_hand.call(GameObj.right_hand) && !empty_hand.call(GameObj.left_hand)
+      echo "Could not free a hand for the wand."
+      exit
+    end
+  end
+
+  fput "get ##{wand_obj.id}"
+  waitrt?
+  wand_obj = find_wand_in_hand.call
+  unless wand_obj
+    echo "Failed to get wand into hand."
+    if stowed_for_wave && stowed_for_wave.id
+      fput "get ##{stowed_for_wave.id}"
+    end
+    exit
+  end
+end
+
+need_stance = if !force_as.nil?
+                force_as
+              else
+                STANCE_DANCE && wand_is_as.call(wand_obj)
+              end
+
+# BEGIN stance
+if need_stance
+  stance_tries = 0
+  while Char.stance !~ /^offensive$/i
+    if dead? || checkstunned || checkwebbed
+      echo "Cannot change stance right now."
+      exit
+    end
+    stance_tries += 1
+    if stance_tries > 8
+      echo "Could not reach offensive stance."
+      exit
+    end
+    fput "stance offensive"
+  end
+end
+
+if target_obj.nil? || !target_obj.id ||
+    target_obj.status =~ /dead|gone/ ||
+    target_obj.name =~ /^animated /
+  echo "Target is no longer valid."
+  exit
+end
+# END stance
+
+# BEGIN action
+if target_obj.nil? || !target_obj.id ||
+    target_obj.status =~ /dead|gone/ ||
+    target_obj.name =~ /^animated /
+  echo "Target is no longer valid."
+  exit
+end
+
+unless wandish.call(wand_obj)
+  echo "Wand is no longer in hand."
+  exit
+end
+
+line = dothistimeout "wave ##{wand_obj.id} at ##{target_obj.id}", 3,
+  /You .*wave|Roundtime|Cast Roundtime|\.\.\.wait|What were you referring|I could not find|You don't seem to be able|crumbles?|has no more charges|fizzles|You fail to activate/
+echo "wave: #{wand_obj.name} (#{need_stance ? 'AS stance' : 'no stance'}) -> #{target_obj.name}"
+
+if PUT_BACK && drew_from_reserve && from_reserve && from_reserve.id && wandish.call(find_wand_in_hand.call)
+  still = find_wand_in_hand.call
+  fput "put ##{still.id} in ##{from_reserve.id}" if still
+  waitrt?
+end
+
+if stowed_for_wave && stowed_for_wave.id
+  unless [GameObj.right_hand, GameObj.left_hand].any? { |h| h && h.id == stowed_for_wave.id }
+    fput "get ##{stowed_for_wave.id}"
+    waitrt?
+  end
+end
+# END action
