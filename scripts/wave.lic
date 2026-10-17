@@ -25,9 +25,10 @@
           game: Gemstone
           tags: wand, combat, stance
       required: Lich >= 5.12.0
-       version: 0.1.0
-
-  changelog:
+       version: 0.2.0
+    changelog:
+    0.2.0 (2026-10-16)
+      targeting: prefer oldest living foe (min gameobj id) over newest
     0.1.0 (2026-10-14)
       initial: kk-style targeting; hand or reserve wand; AS stance via Spell#stance
 
@@ -244,6 +245,12 @@ living_foe = lambda { |obj|
     obj.name !~ /^animated /
 }
 
+# Oldest living foe first (lowest gameobj id). FE dropdown / Array#find
+# surface newest-first; numeric ids track arrival order more reliably.
+oldest_living = lambda { |list|
+  list.min_by { |obj| obj.id.to_i }
+}
+
 if dead? || checkstunned || checkwebbed
   echo "Cannot choose a target right now."
   exit
@@ -262,7 +269,8 @@ end
 
 if !target_arg.empty?
   name_re = /#{Regexp.escape(target_arg)}/i
-  target_obj = living.find { |obj| obj.name =~ name_re }
+  matches = living.select { |obj| obj.name =~ name_re }
+  target_obj = oldest_living.call(matches)
   unless target_obj
     echo "No living NPC matching #{target_arg.inspect}."
     exit
@@ -273,8 +281,11 @@ else
     room_npc = GameObj.npcs.find { |npc| npc.id == current_target.id }
     target_obj = current_target if room_npc.nil? || living_foe.call(room_npc)
   end
-  target_obj ||= living.find { |obj| obj.type.to_s =~ /aggro|monster/ }
-  target_obj ||= GameObj.targets.find { |obj| living_foe.call(obj) }
+  unless target_obj
+    aggro = living.select { |obj| obj.type.to_s =~ /aggro|monster/ }
+    target_obj = oldest_living.call(aggro)
+  end
+  target_obj ||= oldest_living.call(GameObj.targets.select { |obj| living_foe.call(obj) })
 end
 
 unless living_foe.call(target_obj)

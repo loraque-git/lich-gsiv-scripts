@@ -11,9 +11,10 @@
           game: Gemstone
           tags: attack, combat, aim, stance
       required: Lich >= 5.12.0
-       version: 0.7.0
-
-  changelog:
+       version: 0.8.0
+    changelog:
+    0.8.0 (2026-10-16)
+      targeting: prefer oldest living foe (min gameobj id) over newest
     0.7.0 (2026-09-09)
       lock: kill stale same-name copy after 5s instead of overlapping
       action: re-check target is still living before the swing
@@ -62,6 +63,12 @@ living_foe = lambda { |obj|
     obj.name !~ /^animated /
 }
 
+# Oldest living foe first (lowest gameobj id). FE dropdown / Array#find
+# surface newest-first; numeric ids track arrival order more reliably.
+oldest_living = lambda { |list|
+  list.min_by { |obj| obj.id.to_i }
+}
+
 if dead? || checkstunned || checkwebbed
   echo "Cannot choose a target right now."
   exit
@@ -81,7 +88,8 @@ end
 
 if !manual_input.empty?
   name_re = /#{Regexp.escape(manual_input)}/i
-  target_obj = living.find { |obj| obj.name =~ name_re }
+  matches = living.select { |obj| obj.name =~ name_re }
+  target_obj = oldest_living.call(matches)
   unless target_obj
     echo "No living NPC matching #{manual_input.inspect}."
     exit
@@ -92,8 +100,11 @@ else
     room_npc = GameObj.npcs.find { |npc| npc.id == current_target.id }
     target_obj = current_target if room_npc.nil? || living_foe.call(room_npc)
   end
-  target_obj ||= living.find { |obj| obj.type.to_s =~ /aggro|monster/ }
-  target_obj ||= GameObj.targets.find { |obj| living_foe.call(obj) }
+  unless target_obj
+    aggro = living.select { |obj| obj.type.to_s =~ /aggro|monster/ }
+    target_obj = oldest_living.call(aggro)
+  end
+  target_obj ||= oldest_living.call(GameObj.targets.select { |obj| living_foe.call(obj) })
 end
 
 unless living_foe.call(target_obj)
