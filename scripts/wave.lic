@@ -26,7 +26,8 @@
           tags: wand, combat, stance
       required: Lich >= 5.12.0
        version: 0.2.0
-    changelog:
+
+  changelog:
     0.2.0 (2026-10-16)
       targeting: prefer oldest living foe (min gameobj id) over newest
     0.1.0 (2026-10-14)

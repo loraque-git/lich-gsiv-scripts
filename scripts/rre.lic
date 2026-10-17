@@ -12,7 +12,8 @@
           tags: attack, combat, aim, stance
       required: Lich >= 5.12.0
        version: 0.8.0
-    changelog:
+
+  changelog:
     0.8.0 (2026-10-16)
       targeting: prefer oldest living foe (min gameobj id) over newest
     0.7.0 (2026-09-09)
