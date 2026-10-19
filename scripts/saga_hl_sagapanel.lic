@@ -174,6 +174,59 @@ module SagaHl
   def self.char_slug(key = nil)
     normalize_char_key(key || char_key || detect_char_key).tr('|', '-')
   end
+
+  def self.split_char_key(key)
+    name, inst = normalize_char_key(key).split('|', 2)
+    [name.to_s, (inst.nil? || inst.empty?) ? 'prime' : inst]
+  end
+
+  def self.pretty_char_name(key)
+    name, _inst = split_char_key(key)
+    return name if name.empty?
+    name[0].upcase + name[1..]
+  end
+
+  def self.pretty_instance(inst)
+    INSTANCE_TITLES[inst.to_s.downcase] || inst.to_s.split(/[-_]/).map { |p| p[0].upcase + p[1..] }.join(' ')
+  end
+
+  def self.list_character_keys
+    (read_prefs_hash['characterSettings'] || {}).keys.map(&:to_s).sort_by(&:downcase)
+  end
+
+  def self.rule_count_for(key)
+    prefs = read_prefs_hash
+    cs = prefs['characterSettings'] || {}
+    hit = cs.keys.find { |k| k.to_s.downcase == key.to_s.downcase }
+    rec = hit ? cs[hit] : {}
+    ((rec['customHighlights'] || []).size)
+  end
+
+  def self.group_count_for(key)
+    prefs = read_prefs_hash
+    cs = prefs['characterSettings'] || {}
+    hit = cs.keys.find { |k| k.to_s.downcase == key.to_s.downcase }
+    rec = hit ? cs[hit] : {}
+    ((rec['highlightGroups'] || []).size)
+  end
+
+  def self.characters_by_instance
+    list_character_keys.group_by { |k| split_char_key(k)[1] }
+  end
+
+  def self.instance_order
+    known = INSTANCE_TITLES.keys
+    present = characters_by_instance.keys
+    (known & present) + (present - known).sort
+  end
+
+  def self.ensure_instance_filter!
+    if instance_filter.to_s.empty?
+      _n, inst = split_char_key(char_key || detect_char_key)
+      self.instance_filter = inst
+    end
+    instance_filter
+  end
 end
 # END saga_hl/paths
 
@@ -399,6 +452,57 @@ module SagaHl
     end
     toggles[key] = !toggles[key]
     toggles[key]
+  end
+
+  def self.set_improver!(name, on)
+    ensure_toggles!
+    key = name.to_s.downcase.tr(' ', '_').to_sym
+    key = :dedupe if key == :dedupe_exact
+    row = improver_row(key)
+    unless row
+      raise "unknown improver #{name.inspect}"
+    end
+    unless row[3]
+      toggles[key] = false
+      raise "#{key} is not implemented yet"
+    end
+    toggles[key] = !!on
+    toggles[key]
+  end
+
+  def self.select_character!(raw_key)
+    key = normalize_char_key(raw_key)
+    self.char_key = key
+    _n, inst = split_char_key(key)
+    self.instance_filter = inst
+    self.working = load_set_from_prefs(key)
+    n = (working['highlights'] || []).size
+    self.last_status = "selected #{pretty_char_name(key)} · #{pretty_instance(inst)} · #{n} rules"
+    self.last_action = :char
+    self.dirty = true
+    key
+  end
+
+  def self.select_instance!(raw_inst)
+    inst = raw_inst.to_s.strip.downcase
+    raise "unknown instance #{raw_inst.inspect}" if inst.empty?
+    self.instance_filter = inst
+    keys = characters_by_instance[inst] || []
+    if keys.empty?
+      self.last_status = "no characters on #{pretty_instance(inst)}"
+    elsif char_key && split_char_key(char_key)[1] == inst
+      self.last_status = "instance #{pretty_instance(inst)}"
+    else
+      # Prefer the logged-in name on that instance, else the richest ruleset.
+      want = char_name.downcase
+      pick = keys.find { |k| split_char_key(k)[0] == want }
+      pick ||= keys.max_by { |k| rule_count_for(k) }
+      select_character!(pick) if pick
+      self.last_status = "instance #{pretty_instance(inst)}"
+    end
+    self.last_action = :instance
+    self.dirty = true
+    inst
   end
 
   def self.enable_standard_package!
