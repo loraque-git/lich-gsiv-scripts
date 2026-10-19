@@ -786,14 +786,43 @@ module SagaHl
     case cmd
     when /\Ahelp\z/i
       msgs.concat([
-        'saga-hl:',
-        '  click Apply / Backup / Write import in the panel',
-        '  *hl status | *hl toggle <name> | *hl apply | *hl package',
-        '  *hl backup | *hl write | *hl restore <backup-id>',
+        'saga-hl panel:',
+        '  Instance tabs · Character dropdown · Improve checkboxes',
+        '  Apply / Backup / Write import · Restore dropdown',
+        '  *hl status | *hl char <name|instance> | *hl instance <id>',
+        '  *hl set <improver> 0|1 | *hl toggle <improver>',
+        '  *hl apply | *hl package | *hl backup | *hl write | *hl restore <id>',
         "  live improvers: #{implemented_improvers.map { |i, _, _, _| i }.join(', ')}"
       ])
     when /\Astatus\z/i
       msgs.concat(status_lines)
+      self.dirty = true
+    when /\Achar\s+(\S+)\z/i
+      begin
+        select_character!(Regexp.last_match(1))
+        msgs << "saga-hl: #{last_status}"
+      rescue StandardError => e
+        msgs << "saga-hl char failed: #{e.message}"
+      end
+      self.dirty = true
+    when /\Ainstance\s+(\S+)\z/i
+      begin
+        select_instance!(Regexp.last_match(1))
+        msgs << "saga-hl: #{last_status}"
+      rescue StandardError => e
+        msgs << "saga-hl instance failed: #{e.message}"
+      end
+      self.dirty = true
+    when /\Aset\s+(\S+)\s+(\S+)\z/i
+      begin
+        name = Regexp.last_match(1)
+        raw = Regexp.last_match(2).downcase
+        on = %w[1 true on yes].include?(raw)
+        set_improver!(name, on)
+        msgs << "saga-hl: #{name} → #{on ? 'ON' : 'off'}"
+      rescue StandardError => e
+        msgs << "saga-hl: #{e.message}"
+      end
       self.dirty = true
     when /\Atoggle\s+(\S+)\z/i
       begin
@@ -807,6 +836,7 @@ module SagaHl
     when /\Aapply\z/i
       begin
         info = apply_pipeline(mode: :selected)
+        self.last_action = :apply
         msgs << "saga-hl: #{last_status}"
         msgs.concat(import_restore_lines(info))
       rescue StandardError => e
@@ -816,6 +846,7 @@ module SagaHl
     when /\Apackage\z/i
       begin
         info = apply_pipeline(mode: :package)
+        self.last_action = :package
         msgs << "saga-hl: #{last_status}"
         msgs.concat(import_restore_lines(info))
       rescue StandardError => e
@@ -824,8 +855,9 @@ module SagaHl
       self.dirty = true
     when /\Abackup\z/i
       begin
-        set = load_set_from_prefs
+        set = working || load_set_from_prefs
         bak = save_backup(set, reason: 'manual')
+        self.last_action = :backup
         self.last_status = "backup #{bak} (#{(set['highlights'] || []).size} rules)"
         msgs << "saga-hl: #{last_status}"
       rescue StandardError => e
@@ -836,6 +868,7 @@ module SagaHl
       begin
         set = working || load_set_from_prefs
         path = write_import(set)
+        self.last_action = :write
         self.last_status = "wrote #{File.basename(path)} (#{(set['highlights'] || []).size} rules)"
         msgs << "saga-hl: #{last_status}"
         msgs.concat(import_restore_lines('importPath' => path, 'backup' => last_backup_id || '(backup first)'))
@@ -847,6 +880,7 @@ module SagaHl
       begin
         bid = Regexp.last_match(1)
         path = restore_backup_to_import(bid)
+        self.last_action = :restore
         self.last_status = "restored #{bid}"
         msgs << "saga-hl: #{last_status} → #{path}"
         msgs << 'Saga → Import Settings → Custom highlights → that file.'
