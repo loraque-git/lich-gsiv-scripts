@@ -11,15 +11,16 @@
     5. Tell you how to Import in Saga, and how to restore if you dislike it
 
   In-game:
-    ;saga_hl_sagapanel          - Start the panel
+    ;saga-hl / ;saga_hl_sagapanel - Start the panel
+    Panel clicks: toggle rows, Apply, Backup, Write import
     *hl help                    - Commands
     *hl status                  - Counts / paths
     *hl toggle <name>           - Flip an improver on/off
     *hl apply                   - Backup → enabled improvers → write import JSON
     *hl package                 - Enable standard package, then apply
     *hl backup                  - Snapshot only
-    *hl write                   - Write import JSON from last working set (no improvers)
-    *hl restore <backup-id>     - Write that backup as the import JSON (then Import Settings)
+    *hl write                   - Write import JSON from working set (no improvers)
+    *hl restore <backup-id>     - Rewrite import JSON from that backup
 
   Outside the game (script source / local AI — NOT a panel action):
     See "Local AI / maintainer" at the end of this header.
