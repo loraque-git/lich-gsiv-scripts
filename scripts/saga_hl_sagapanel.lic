@@ -732,11 +732,10 @@ module SagaHl
       notes << "HM roster skipped: #{e.message}"
     end
 
-    scan_args = ['scan-names', '--char', key, '--promote', '--write-import', out_path]
-    scan_args[1, 0] = ['--from-export', tmp] if hm_ok
-    # insert after command name: scan-names --from-export tmp --char ...
-    if hm_ok
-      scan_args = ['scan-names', '--from-export', tmp, '--char', key, '--promote', '--write-import', out_path]
+    scan_args = if hm_ok
+      ['scan-names', '--from-export', tmp, '--char', key, '--promote', '--write-import', out_path]
+    else
+      ['scan-names', '--char', key, '--promote', '--write-import', out_path]
     end
 
     begin
