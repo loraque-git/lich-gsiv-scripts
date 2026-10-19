@@ -30,9 +30,14 @@
   Author: loraque (loraque@gmail.com)
   Required: Lich >= 5.12.0
   Tags: saga, frontend, panel, highlights, import
-  Version: 0.1.0
+  Version: 0.2.0
 
   Recently changed:
+    0.2.0 (2026-10-18)
+      - Fix dead panel clicks: queue *hl work on the script main loop
+        (UpstreamHook only sets a flag; echo/_respond stay top-level).
+      - Cleaner panel: header, live toggles, Apply / Backup / Write import.
+        Hide unimplemented improvers until they ship.
     0.1.0 (2026-10-18)
       - Initial panel: read prefs, backup, dedupe improver, write import JSON,
         Import Settings + restore prompts. Windows/Linux paths.
@@ -68,20 +73,20 @@ module SagaHl
   BACKUP_KEEP = 40
   IMPORT_BASENAME = 'saga-highlights.json'
 
+  # id, label, default_on, implemented
   IMPROVERS = [
-    [:dedupe, 'Dedupe exact', true],
-    # Placeholders for later ports (off until implemented):
-    [:gender, 'Gender pairs', false],
-    [:spellprep, 'Enemy spell prep', false],
-    [:palette, 'Palette colors', false],
-    [:group_styles, 'Empath/Cleric groups', false]
+    [:dedupe, 'Dedupe exact', true, true],
+    [:gender, 'Gender pairs', false, false],
+    [:spellprep, 'Enemy spell prep', false, false],
+    [:palette, 'Palette colors', false, false],
+    [:group_styles, 'Empath/Cleric groups', false, false]
   ].freeze
 
   STANDARD_PACKAGE = [:dedupe].freeze
 
   class << self
     attr_accessor :toggles, :last_backup_id, :last_import_path, :last_status,
-                  :working, :dirty, :char_key
+                  :working, :dirty, :char_key, :pending_cmd
   end
 
   def self.windows?
