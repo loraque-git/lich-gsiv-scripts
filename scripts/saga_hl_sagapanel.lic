@@ -799,11 +799,19 @@ module SagaHl
   end
 
   def self.set_sync_group!(raw_id, on)
-    id = raw_id.to_s
+    token = raw_id.to_s
     self.sync_group_sel ||= {}
-    if id == 'all'
+    if token == 'all'
       (sync_group_meta || []).each { |m| sync_group_sel[m['id']] = !!on }
       return sync_group_sel
+    end
+    # Panel checkboxes pass a meta index; CLI may pass a raw bucket id.
+    id = if token =~ /\A\d+\z/
+      m = (sync_group_meta || [])[token.to_i]
+      raise "unknown sync group index #{token}" unless m
+      m['id']
+    else
+      token
     end
     raise "unknown sync group #{id.inspect}" unless (sync_group_meta || []).any? { |m| m['id'] == id }
     sync_group_sel[id] = !!on
@@ -1255,14 +1263,16 @@ module SagaHl
       msgs.concat([
         'saga-hl panel:',
         '  Character dropdown, Improve checkboxes, Improve+write / Backup / Write only',
-        '  Name pack (HM + logs), Copy-from + Sync, Restore dropdown',
-        '  Improve+write: backup, run ON improvers, write import JSON',
-        '  Write only: write current set to import JSON (no improvers)',
+        '  Name pack (HM + logs), Copy-from + group checkboxes + Sync, Restore',
+        '  Improve+write: backup, run ON improvers on the working set, write import JSON',
+        '  Write only: write current working set to import JSON (no improvers)',
+        '  Sync then Improve+write keeps the copied rules and dedupes them',
         '  *hl status | *hl char <name|instance>',
         '  *hl instance <id>   (CLI only; not on the panel)',
         '  *hl set <improver> 0|1 | *hl toggle <improver>',
         '  *hl apply | *hl package | *hl backup | *hl write',
-        '  *hl namepack | *hl sync <from-key> | *hl restore <id>',
+        '  *hl namepack | *hl syncsrc <key> | *hl syncgrp all|N 0|1',
+        '  *hl sync <from-key> | *hl restore <id>',
         "  live improvers: #{implemented_improvers.map { |i, _, _, _| i }.join(', ')}"
       ])
     when /\Astatus\z/i
@@ -1337,7 +1347,8 @@ module SagaHl
       self.dirty = true
     when /\Awrite\z/i
       begin
-        set = working || load_set_from_prefs
+        set = working_for
+        self.working = set
         path = write_import(set)
         self.last_action = :write
         self.last_status = "Write only: #{File.basename(path)} (#{(set['highlights'] || []).size} rules, no improvers)"
@@ -1349,21 +1360,44 @@ module SagaHl
       self.dirty = true
     when /\Asyncsrc\s+(\S+)\z/i
       begin
-        self.sync_source = normalize_char_key(Regexp.last_match(1))
-        self.last_status = "copy-from set to #{pretty_char_label(sync_source)}"
-        msgs << "saga-hl: #{last_status}"
+        raw = Regexp.last_match(1)
+        if raw == '_' || raw.empty?
+          msgs << 'saga-hl: pick a character in Copy from'
+        else
+          self.sync_source = normalize_char_key(raw)
+          init_sync_groups!(sync_source)
+          n = (sync_group_meta || []).size
+          msgs << "saga-hl: copy-from #{pretty_char_label(sync_source)} - #{n} group buckets (all selected)"
+          self.last_status = "copy-from #{pretty_char_label(sync_source)}"
+        end
       rescue StandardError => e
         msgs << "saga-hl syncsrc failed: #{e.message}"
+      end
+      self.dirty = true
+    when /\Asyncgrp\s+(\S+)\s+(\S+)\z/i
+      begin
+        token = Regexp.last_match(1)
+        rawv = Regexp.last_match(2).downcase
+        on = %w[1 true on yes].include?(rawv)
+        raise 'pick Copy from first' if sync_source.to_s.empty? || sync_group_meta.nil?
+        set_sync_group!(token, on)
+        sel_n = sync_group_sel.count { |_, v| v }
+        self.last_status = "groups #{sel_n}/#{sync_group_meta.size} selected"
+        msgs << "saga-hl: #{last_status}"
+      rescue StandardError => e
+        msgs << "saga-hl syncgrp failed: #{e.message}"
       end
       self.dirty = true
     when /\Async(?:\s+(\S+))?\z/i
       begin
         src = Regexp.last_match(1)
+        src = nil if src.to_s == '_'
         src = sync_source if src.to_s.strip.empty?
-        raise 'pick Copy from, then Sync (or *hl sync <char|instance>)' if src.to_s.strip.empty?
+        raise 'pick Copy from, check groups, then Sync (or *hl sync <char|instance>)' if src.to_s.strip.empty?
         info = sync_from!(src)
         self.last_action = :sync
         msgs << "saga-hl: #{last_status}"
+        msgs << '  Tip: Improve+write next to dedupe, then Saga Import Settings.'
         msgs.concat(import_restore_lines(info))
       rescue StandardError => e
         msgs << "saga-hl sync failed: #{e.message}"
@@ -1410,6 +1444,8 @@ SagaHl.dirty = false
 SagaHl.pending_cmd = nil
 SagaHl.last_action = nil
 SagaHl.sync_source = nil
+SagaHl.sync_group_sel = nil
+SagaHl.sync_group_meta = nil
 begin
   SagaHl.working = SagaHl.load_set_from_prefs
   SagaHl.char_key ||= SagaHl.working['character']
