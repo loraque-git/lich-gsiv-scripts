@@ -631,7 +631,7 @@ UpstreamHook.add(hl_upstream_hook_id, proc do |command|
   else
     command
   end
-end), persist: false)
+end, persist: false)
 
 _respond(SagaHl.open_dialog_xml)
 pause 0.2
