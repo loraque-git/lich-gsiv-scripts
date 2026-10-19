@@ -31,9 +31,13 @@
   Author: loraque (loraque@gmail.com)
   Required: Lich >= 5.12.0
   Tags: saga, frontend, panel, highlights, import
-  Version: 0.2.1
+  Version: 0.3.0
 
   Recently changed:
+    0.3.0 (2026-10-18)
+      - Redesign: Instance tabs (Prime vs Test/other), Character dropdown,
+        rule counts, native checkBox / cmdButton / dropDownBox, restore
+        picker, coach line for next step. Still queues work on main loop.
     0.2.1 (2026-10-18)
       - Fix *hl never matching UpstreamHook: FE sends <c>*hl … and working
         panels match /\*cmd/ without \A. Strip <c> and match like *exp/*ah.
@@ -73,9 +77,20 @@ module SagaHl
 
   DIALOG_ID = 'SagaHlPanel'
   ROW_HEIGHT = 18
-  PANEL_WIDTH = 560
+  DROP_HEIGHT = 24
+  BTN_HEIGHT = 22
+  PANEL_WIDTH = 360
   BACKUP_KEEP = 40
+  RESTORE_PICK_LIMIT = 8
   IMPORT_BASENAME = 'saga-highlights.json'
+
+  INSTANCE_TITLES = {
+    'prime' => 'Prime',
+    'test' => 'Test',
+    'platinum' => 'Platinum',
+    'shattered' => 'Shattered',
+    'prime-copy' => 'Prime copy'
+  }.freeze
 
   # id, label, default_on, implemented
   IMPROVERS = [
@@ -90,7 +105,8 @@ module SagaHl
 
   class << self
     attr_accessor :toggles, :last_backup_id, :last_import_path, :last_status,
-                  :working, :dirty, :char_key, :pending_cmd
+                  :working, :dirty, :char_key, :pending_cmd, :instance_filter,
+                  :last_action
   end
 
   def self.windows?
