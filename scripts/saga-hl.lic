@@ -7,25 +7,27 @@
   The panel itself lives in saga_hl_sagapanel.lic. Keep both files together
   when sharing: this launcher only starts that script.
 
-  Opens a large floating workspace (Browse / Diff / Backups / Tools), not an
-  always-on HUD. Close the dialog or use *hl close to stop the workspace.
+  Opens a floating saga-hl panel (one screen: Sync, Changes summary, Write).
+  Close the dialog or use *hl close to stop.
 
   Usage:
-    ;saga-hl                 - Start the saga-hl Saga workspace
+    ;saga-hl                 - Start the saga-hl Saga panel
     ;saga_hl_sagapanel       - Same, run the panel script directly
 
-  Once the workspace is running, use *hl help for commands.
+  Once the panel is running, use *hl help for commands.
 
   Saga-only. Requires Lich connected to the Saga frontend.
 
        creator: loraque (loraque@gmail.com)
         author: loraque (loraque@gmail.com)
           game: Gemstone
-          tags: saga, frontend, panel, highlights, launcher, workspace
+          tags: saga, frontend, panel, highlights, launcher
       required: Lich >= 5.12.0
-       version: 0.2.0
+       version: 0.3.0
 
   changelog:
+    0.3.0 (2026-10-19)
+      document simplified one-screen panel; pair with panel 0.6.0
     0.2.0 (2026-10-19)
       document floating workspace + Close / *hl close; pair with panel 0.5.0
     0.1.1 (2026-10-19)
@@ -36,7 +38,7 @@
 =end
 
 if Script.running?('saga_hl_sagapanel')
-  echo '[lich] saga-hl: workspace already running - *hl help / *hl close'
+  echo '[lich] saga-hl: panel already running - *hl help / *hl close'
 else
   Script.start('saga_hl_sagapanel')
 end
