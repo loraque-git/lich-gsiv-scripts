@@ -558,17 +558,43 @@ module SagaHl
       '--- saga-hl: next steps ---',
       "1. Wrote #{path}",
       '2. Saga → Import Settings → Custom highlights → that file',
-      "3. Undo: *hl restore #{bak}  then Import Settings again",
+      "3. Undo: pick a backup in the panel (or *hl restore #{bak})",
       '---------------------------'
     ]
   end
 
+  def self.coach_line
+    set = working || empty_set(char_key || detect_char_key)
+    n = (set['highlights'] || []).size
+    case last_action
+    when :apply, :package, :write
+      "Next: Saga → Import Settings → #{IMPORT_BASENAME}"
+    when :backup
+      'Snapshot saved. Apply when you want a new import file.'
+    when :restore
+      'Backup copied to import file. Import Settings to load it.'
+    when :char, :instance
+      n.zero? ? 'This character has no custom highlights yet.' : "Editing #{pretty_char_name(char_key)} · #{n} rules"
+    else
+      if last_backup_id.to_s.empty?
+        'Tip: Backup first — safe snapshot before you change anything.'
+      elsif n.zero?
+        'Empty set — pick another character or import from the web tool.'
+      else
+        'Ready. Apply runs enabled improvers → writes import JSON.'
+      end
+    end
+  end
+
   def self.status_lines
     ensure_toggles!
+    ensure_instance_filter!
     set = working || load_set_from_prefs
     self.char_key ||= set['character']
+    name, inst = split_char_key(char_key)
     lines = [
-      "saga-hl  #{char_key}  ·  #{(set['highlights'] || []).size} rules  ·  #{(set['groups'] || []).size} groups",
+      "saga-hl  #{pretty_char_name(char_key)}  ·  #{pretty_instance(inst)}  ·  #{(set['highlights'] || []).size} rules",
+      "  key: #{char_key}",
       "  import: #{last_import_path || import_path}",
       "  last backup: #{last_backup_id || '(none)'}"
     ]
@@ -577,6 +603,7 @@ module SagaHl
       lines << "  [#{on}] #{label}"
     end
     lines << "  #{last_status}" if last_status.to_s != ''
+    lines << "  coach: #{coach_line}"
     lines
   end
 end
@@ -588,48 +615,158 @@ module SagaHl
     value.to_s.gsub('&', '&amp;').gsub('<', '&lt;').gsub('>', '&gt;').gsub("'", '&apos;').gsub('"', '&quot;')
   end
 
+  # dropDownBox splits content_* on commas — never put commas in labels/values.
+  def self.dropdown_safe(text)
+    text.to_s.tr(',', ' ').gsub(/\s+/, ' ').strip
+  end
+
   def self.open_dialog_xml
     "<closeDialog id='#{DIALOG_ID}'/><openDialog type='dynamic' id='#{DIALOG_ID}' title='saga-hl' target='#{DIALOG_ID}' scroll='manual' location='main' resident='true'><dialogData id='#{DIALOG_ID}'></dialogData></openDialog>"
   end
 
-  # Returns [text, cmd_or_nil] rows. cmd nil => <label>; otherwise <link>.
-  def self.panel_rows
+  def self.widget(tag, attrs)
+    parts = attrs.map { |k, v| "#{k}='#{sanitize_xml(v)}'" }
+    "<#{tag} #{parts.join(' ')} />"
+  end
+
+  def self.build_dialog
     ensure_toggles!
+    ensure_instance_filter!
     set = working || (begin
       load_set_from_prefs
     rescue StandardError
       empty_set(detect_char_key)
     end)
     self.char_key ||= set['character']
-    n = (set['highlights'] || []).size
-    rows = []
-    rows << ["saga-hl  ·  #{char_key}  ·  #{n} rules", nil]
-    implemented_improvers.each do |id, label, _, _|
-      mark = toggles[id] ? '[ON]' : '[  ]'
-      rows << ["#{mark}  #{label}", "*hl toggle #{id}"]
-    end
-    rows << ['----', nil]
-    rows << ['Apply', '*hl apply']
-    rows << ['Backup', '*hl backup']
-    rows << ['Write import', '*hl write']
-    rows << ['----', nil]
-    rows << ["Import Settings → #{IMPORT_BASENAME}", nil]
-    status = last_status.to_s.empty? ? 'Ready.' : last_status.to_s
-    rows << [status, nil]
-    rows
-  end
+    name, inst = split_char_key(char_key)
+    rules = (set['highlights'] || []).size
+    groups = (set['groups'] || []).size
 
-  def self.build_dialog
     out = String.new("<dialogData id='#{DIALOG_ID}' clear='t'>")
-    panel_rows.each_with_index do |(text, cmd), i|
-      top = i * ROW_HEIGHT
-      val = sanitize_xml(text)
-      if cmd
-        out << "<link id='hl_r#{i}' value='#{val}' cmd='#{sanitize_xml(cmd)}' justify='left' left='2' top='#{top}' width='#{PANEL_WIDTH}' height='#{ROW_HEIGHT}' />"
-      else
-        out << "<label id='hl_r#{i}' value='#{val}' justify='left' left='2' top='#{top}' width='#{PANEL_WIDTH}' height='#{ROW_HEIGHT}' />"
-      end
+    y = 0
+    w = PANEL_WIDTH
+
+    # Title
+    out << widget('label', id: 'hl_title', value: 'saga-hl', left: 2, top: y, width: w, height: ROW_HEIGHT)
+    y += ROW_HEIGHT + 2
+
+    # Instance tabs — Prime first, then everything else (Test / specials)
+    out << widget('label', id: 'hl_inst_lbl', value: 'Instance', left: 2, top: y, width: 64, height: ROW_HEIGHT)
+    x = 70
+    instance_order.each_with_index do |iid, idx|
+      title = pretty_instance(iid)
+      mark = (iid == instance_filter) ? "[{#{title}}]" : "[ #{title} ]"
+      out << widget('link', id: "hl_inst_#{idx}", value: mark, cmd: "*hl instance #{iid}",
+                            left: x, top: y, width: 78, height: ROW_HEIGHT)
+      x += 80
     end
+    y += ROW_HEIGHT + 4
+
+    # Character dropdown (filtered to selected instance)
+    keys = characters_by_instance[instance_filter] || []
+    keys = list_character_keys if keys.empty?
+    labels = keys.map do |k|
+      n = rule_count_for(k)
+      dropdown_safe("#{pretty_char_name(k)} · #{n}")
+    end
+    values = keys.map { |k| dropdown_safe(k) }
+    selected_label = begin
+      i = keys.index { |k| k.downcase == char_key.to_s.downcase } || 0
+      labels[i] || labels[0] || dropdown_safe(pretty_char_name(char_key))
+    end
+    out << widget('label', id: 'hl_char_lbl', value: 'Character', left: 2, top: y + 2, width: 64, height: DROP_HEIGHT)
+    out << widget('dropDownBox',
+                  id: 'hl_char',
+                  value: selected_label,
+                  content_text: labels.join(','),
+                  content_value: values.join(','),
+                  cmd: '*hl char %hl_char%',
+                  left: 70, top: y, width: w - 72, height: DROP_HEIGHT)
+    y += DROP_HEIGHT + 2
+
+    # Stats — name and instance split, no raw key in the main chrome
+    out << widget('label', id: 'hl_stats',
+                  value: "#{pretty_char_name(char_key)}  ·  #{pretty_instance(inst)}  ·  #{rules} rules  ·  #{groups} groups",
+                  left: 2, top: y, width: w, height: ROW_HEIGHT)
+    y += ROW_HEIGHT + 6
+
+    # Improvers
+    out << widget('label', id: 'hl_imp_hdr', value: '— Improve —', left: 2, top: y, width: w, height: ROW_HEIGHT)
+    y += ROW_HEIGHT
+    implemented_improvers.each do |id, label, _, _|
+      checked = toggles[id] ? '1' : '0'
+      out << widget('checkBox',
+                    id: "hl_imp_#{id}",
+                    text: label,
+                    checked: checked,
+                    checked_value: '1',
+                    unchecked_value: '0',
+                    cmd: "*hl set #{id} %hl_imp_#{id}%",
+                    left: 8, top: y, width: w - 10, height: ROW_HEIGHT)
+      y += ROW_HEIGHT
+    end
+    # Coming-soon as quiet labels (discoverable, not clickable noise)
+    soon = IMPROVERS.reject { |_, _, _, impl| impl }.map { |_, lab, _, _| lab }
+    unless soon.empty?
+      out << widget('label', id: 'hl_soon', value: "Soon: #{soon.join(' · ')}",
+                    left: 8, top: y, width: w - 10, height: ROW_HEIGHT)
+      y += ROW_HEIGHT
+    end
+    y += 4
+
+    # Actions
+    out << widget('label', id: 'hl_act_hdr', value: '— Do —', left: 2, top: y, width: w, height: ROW_HEIGHT)
+    y += ROW_HEIGHT
+    btn_w = 108
+    out << widget('cmdButton', id: 'hl_apply', value: 'Apply', cmd: '*hl apply',
+                  left: 2, top: y, width: btn_w, height: BTN_HEIGHT)
+    out << widget('cmdButton', id: 'hl_backup', value: 'Backup', cmd: '*hl backup',
+                  left: 2 + btn_w + 6, top: y, width: btn_w, height: BTN_HEIGHT)
+    out << widget('cmdButton', id: 'hl_write', value: 'Write import', cmd: '*hl write',
+                  left: 2 + (btn_w + 6) * 2, top: y, width: btn_w, height: BTN_HEIGHT)
+    y += BTN_HEIGHT + 6
+
+    # Restore picker
+    out << widget('label', id: 'hl_undo_hdr', value: '— Undo —', left: 2, top: y, width: w, height: ROW_HEIGHT)
+    y += ROW_HEIGHT
+    backups = begin
+      list_backups(char_key).first(RESTORE_PICK_LIMIT)
+    rescue StandardError
+      []
+    end
+    if backups.empty?
+      out << widget('label', id: 'hl_nobak', value: 'No backups yet for this character.',
+                    left: 8, top: y, width: w - 10, height: ROW_HEIGHT)
+      y += ROW_HEIGHT
+    else
+      blabels = backups.map do |b|
+        id = b['id'].to_s
+        # 20261018-092205_write-import-web → 10-18 write-import
+        short = id.sub(/\A(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2})_/) { "#{Regexp.last_match(2)}-#{Regexp.last_match(3)} " }
+        short = short.split('_').first(2).join(' ')
+        n = b['highlightCount']
+        dropdown_safe(n ? "#{short} (#{n})" : short)
+      end
+      bvalues = backups.map { |b| dropdown_safe(b['id']) }
+      out << widget('dropDownBox',
+                    id: 'hl_restore',
+                    value: blabels[0],
+                    content_text: blabels.join(','),
+                    content_value: bvalues.join(','),
+                    cmd: '*hl restore %hl_restore%',
+                    left: 2, top: y, width: w - 4, height: DROP_HEIGHT)
+      y += DROP_HEIGHT
+    end
+    y += 6
+
+    # Coach + status
+    out << widget('label', id: 'hl_sep', value: '——————————————', left: 2, top: y, width: w, height: ROW_HEIGHT)
+    y += ROW_HEIGHT
+    out << widget('label', id: 'hl_coach', value: coach_line, left: 2, top: y, width: w, height: ROW_HEIGHT)
+    y += ROW_HEIGHT
+    note = last_status.to_s.empty? ? 'Ready.' : last_status.to_s
+    out << widget('label', id: 'hl_note', value: note, left: 2, top: y, width: w, height: ROW_HEIGHT)
+
     out << '</dialogData>'
     out
   end
