@@ -650,6 +650,12 @@ module SagaHl
     _n, inst = split_char_key(key)
     self.instance_filter = inst
     self.working = load_set_from_prefs(key)
+    # Drop copy-from selection when the target character changes.
+    if sync_source && normalize_char_key(sync_source) == key
+      self.sync_source = nil
+      self.sync_group_sel = nil
+      self.sync_group_meta = nil
+    end
     n = (working['highlights'] || []).size
     self.last_status = "selected #{pretty_char_label(key)} - #{n} rules"
     self.last_action = :char
@@ -697,7 +703,8 @@ module SagaHl
     ensure_toggles!
     enable_standard_package! if mode == :package
 
-    before = load_set_from_prefs(char_key || detect_char_key)
+    # Prefer panel working set (e.g. post-Sync) so improvers/dedupe keep imports.
+    before = working_for(char_key || detect_char_key)
     self.working = clone_set(before)
     bak = save_backup(before, reason: mode == :package ? 'before-package' : 'before-apply')
 
@@ -709,7 +716,12 @@ module SagaHl
     end
 
     path = write_import(working)
-    self.last_status = "Improve+write done - backup #{bak} - #{(working['highlights'] || []).size} rules"
+    dedupe_note = ''
+    if results['dedupe']
+      rem = results['dedupe']['removed'].to_i
+      dedupe_note = rem.positive? ? " (deduped -#{rem})" : ' (dedupe 0)'
+    end
+    self.last_status = "Improve+write done - backup #{bak} - #{(working['highlights'] || []).size} rules#{dedupe_note}"
     self.dirty = true
     {
       'backup' => bak,
@@ -720,19 +732,150 @@ module SagaHl
     }
   end
 
+  # Build selectable sync buckets: known groups + per-orphan-id + (no group).
+  def self.build_sync_group_meta(source_set)
+    groups = source_set['groups'] || []
+    by_id = {}
+    groups.each { |g| by_id[g['id'].to_s] = g }
+
+    counts = Hash.new(0)
+    samples = Hash.new { |h, k| h[k] = [] }
+    types = Hash.new { |h, k| h[k] = Hash.new(0) }
+    (source_set['highlights'] || []).each do |h|
+      gid = h['groupId'].to_s
+      key = if gid.empty?
+        SYNC_NONE
+      elsif by_id.key?(gid)
+        gid
+      else
+        "#{SYNC_ORPHAN_PREFIX}#{gid}"
+      end
+      counts[key] += 1
+      types[key][h['highlightType'].to_s.empty? ? 'general' : h['highlightType'].to_s] += 1
+      samples[key] << h['pattern'].to_s if samples[key].size < 2
+    end
+
+    meta = []
+    groups.each do |g|
+      id = g['id'].to_s
+      next if counts[id].to_i <= 0
+      meta << {
+        'id' => id,
+        'label' => ascii_label(g['name'].to_s),
+        'count' => counts[id],
+        'kind' => 'group'
+      }
+    end
+
+    counts.keys.select { |k| k.start_with?(SYNC_ORPHAN_PREFIX) }.sort_by { |k| -counts[k] }.each do |key|
+      top_type = (types[key].max_by { |_, n| n } || ['general', 0])[0]
+      sample = ascii_label(samples[key].first.to_s)[0, 28]
+      sample = sample.empty? ? 'rules' : sample
+      meta << {
+        'id' => key,
+        'label' => "other #{top_type}: #{sample}",
+        'count' => counts[key],
+        'kind' => 'orphan'
+      }
+    end
+
+    if counts[SYNC_NONE].to_i > 0
+      meta << {
+        'id' => SYNC_NONE,
+        'label' => '(no group)',
+        'count' => counts[SYNC_NONE],
+        'kind' => 'none'
+      }
+    end
+    meta
+  end
+
+  def self.init_sync_groups!(source_key)
+    src = load_set_from_prefs(source_key)
+    self.sync_group_meta = build_sync_group_meta(src)
+    self.sync_group_sel = {}
+    (sync_group_meta || []).each { |m| sync_group_sel[m['id']] = true }
+    sync_group_meta
+  end
+
+  def self.set_sync_group!(raw_id, on)
+    id = raw_id.to_s
+    self.sync_group_sel ||= {}
+    if id == 'all'
+      (sync_group_meta || []).each { |m| sync_group_sel[m['id']] = !!on }
+      return sync_group_sel
+    end
+    raise "unknown sync group #{id.inspect}" unless (sync_group_meta || []).any? { |m| m['id'] == id }
+    sync_group_sel[id] = !!on
+    sync_group_sel
+  end
+
+  def self.filter_set_by_sync_groups(source_set)
+    selected = sync_group_sel || {}
+    known = {}
+    (source_set['groups'] || []).each { |g| known[g['id'].to_s] = true }
+
+    keep_group_ids = {}
+    highlights = (source_set['highlights'] || []).select do |h|
+      gid = h['groupId'].to_s
+      bucket = if gid.empty?
+        SYNC_NONE
+      elsif known[gid]
+        gid
+      else
+        "#{SYNC_ORPHAN_PREFIX}#{gid}"
+      end
+      next false unless selected[bucket]
+      keep_group_ids[gid] = true unless gid.empty?
+      true
+    end
+
+    # Keep group defs that are selected known groups, or create stubs for orphans.
+    groups = []
+    (source_set['groups'] || []).each do |g|
+      groups << g.dup if selected[g['id'].to_s]
+    end
+    selected.each_key do |bucket|
+      next unless bucket.start_with?(SYNC_ORPHAN_PREFIX) && selected[bucket]
+      real_id = bucket.sub(/\A#{Regexp.escape(SYNC_ORPHAN_PREFIX)}/, '')
+      next if groups.any? { |g| g['id'].to_s == real_id }
+      label = (sync_group_meta || []).find { |m| m['id'] == bucket }
+      name = label ? label['label'] : "Imported #{real_id[-8, 8]}"
+      groups << {
+        'id' => real_id,
+        'name' => name,
+        'enabled' => true,
+        'collapsed' => false
+      }
+    end
+
+    {
+      'character' => source_set['character'],
+      'highlights' => highlights.map(&:dup),
+      'groups' => groups
+    }
+  end
+
   def self.sync_from!(source_raw)
     src_key = normalize_char_key(source_raw)
     tgt_key = normalize_char_key(char_key || detect_char_key)
     raise 'pick a different character to copy from' if src_key == tgt_key
 
-    source = load_set_from_prefs(src_key)
-    before = load_set_from_prefs(tgt_key)
+    self.sync_source = src_key
+    init_sync_groups!(src_key) if sync_group_meta.nil? || sync_group_sel.nil?
+
+    source_full = load_set_from_prefs(src_key)
+    source = filter_set_by_sync_groups(source_full)
+    selected_n = (sync_group_sel || {}).count { |_, v| v }
+    total_g = (sync_group_meta || []).size
+    raise 'select at least one group to copy' if (source['highlights'] || []).empty? && selected_n.zero?
+
+    before = working_for(tgt_key)
     self.working = clone_set(before)
     bak = save_backup(before, reason: 'before-sync')
     report = merge_sets!(working, source, mode: 'skip', copy_groups: true)
     path = write_import(working)
-    self.sync_source = src_key
-    self.last_status = "synced from #{pretty_char_label(src_key)}: +#{report['added']} skipped #{report['skipped']}"
+    self.last_status = "synced from #{pretty_char_label(src_key)} (#{selected_n}/#{total_g} groups): +#{report['added']} skipped #{report['skipped']}"
     self.dirty = true
     {
       'backup' => bak,
@@ -746,7 +889,7 @@ module SagaHl
 
   def self.name_pack!
     key = normalize_char_key(char_key || detect_char_key)
-    before = load_set_from_prefs(key)
+    before = working_for(key)
     self.working = clone_set(before)
     bak = save_backup(before, reason: 'before-name-pack')
     notes = []
