@@ -12,9 +12,12 @@
 
   In-game:
     ;saga-hl / ;saga_hl_sagapanel - Start the panel
-    Panel clicks: toggle rows, Apply, Backup, Write import
+    Panel: Instance tabs · Character dropdown · Improve · Apply/Backup/Write · Restore
     *hl help                    - Commands
     *hl status                  - Counts / paths
+    *hl char <name|instance>    - Switch working character
+    *hl instance <id>           - Prime / Test / …
+    *hl set <improver> 0|1      - Checkbox-driven improver state
     *hl toggle <name>           - Flip an improver on/off
     *hl apply                   - Backup → enabled improvers → write import JSON
     *hl package                 - Enable standard package, then apply
@@ -524,7 +527,7 @@ module SagaHl
     ensure_toggles!
     enable_standard_package! if mode == :package
 
-    before = load_set_from_prefs
+    before = load_set_from_prefs(char_key || detect_char_key)
     self.working = clone_set(before)
     bak = save_backup(before, reason: mode == :package ? 'before-package' : 'before-apply')
 
@@ -903,12 +906,18 @@ end
 SagaHl.ensure_toggles!
 SagaHl.dirty = false
 SagaHl.pending_cmd = nil
+SagaHl.last_action = nil
 begin
   SagaHl.working = SagaHl.load_set_from_prefs
-  SagaHl.last_status = "loaded #{(SagaHl.working['highlights'] || []).size} rules"
+  SagaHl.char_key ||= SagaHl.working['character']
+  SagaHl.ensure_instance_filter!
+  name, inst = SagaHl.split_char_key(SagaHl.char_key)
+  SagaHl.last_status = "loaded #{SagaHl.pretty_char_name(SagaHl.char_key)} · #{SagaHl.pretty_instance(inst)} · #{(SagaHl.working['highlights'] || []).size} rules"
 rescue StandardError => e
   SagaHl.last_status = "load failed: #{e.message}"
   SagaHl.working = SagaHl.empty_set(SagaHl.detect_char_key)
+  SagaHl.char_key = SagaHl.working['character']
+  SagaHl.ensure_instance_filter!
 end
 
 # Match like exp/alsohere/timers: no \A anchor. Saga/FE often prefixes <c>.
