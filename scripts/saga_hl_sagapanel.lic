@@ -475,8 +475,10 @@ module SagaHl
     rows << "saga-hl  #{char_key}  ·  #{(set['highlights'] || []).size} rules"
     rows << "prefs: #{File.basename(File.dirname(prefs_path))}/prefs.json"
     IMPROVERS.each do |id, label, _|
+      implemented = STANDARD_PACKAGE.include?(id) || id == :dedupe
       mark = toggles[id] ? '[ON]' : '[ ]'
-      rows << "#{mark} #{label}   (*hl toggle #{id})"
+      suffix = implemented ? "(*hl toggle #{id})" : '(coming soon)'
+      rows << "#{mark} #{label}   #{suffix}"
     end
     rows << "----"
     rows << "Apply selected   (*hl apply)"
@@ -498,7 +500,7 @@ module SagaHl
         out << "<link id='hl_r#{i}' value='#{val}' cmd='*hl package' justify='left' top='#{top}' left='2' width='#{PANEL_WIDTH}' height='#{ROW_HEIGHT}' />"
       elsif text.start_with?('Backup only')
         out << "<link id='hl_r#{i}' value='#{val}' cmd='*hl backup' justify='left' top='#{top}' left='2' width='#{PANEL_WIDTH}' height='#{ROW_HEIGHT}' />"
-      elsif text =~ /\A\[/
+      elsif text =~ /\A\[/ && text !~ /coming soon/
         id = IMPROVERS.find { |_i, lab, _| text.include?(lab) }&.first
         cmd = id ? "*hl toggle #{id}" : '*hl status'
         out << "<link id='hl_r#{i}' value='#{val}' cmd='#{cmd}' justify='left' left='2' top='#{top}' width='#{PANEL_WIDTH}' height='#{ROW_HEIGHT}' />"
