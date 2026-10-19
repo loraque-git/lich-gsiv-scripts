@@ -1619,7 +1619,7 @@ module SagaHl
   end
 
   def self.open_dialog_xml
-    "<closeDialog id='#{DIALOG_ID}'/><openDialog type='dynamic' id='#{DIALOG_ID}' title='saga-hl' target='#{DIALOG_ID}' scroll='manual' location='main' resident='false'><dialogData id='#{DIALOG_ID}'></dialogData></openDialog>"
+    "<closeDialog id='#{DIALOG_ID}'/><openDialog type='dynamic' id='#{DIALOG_ID}' title='saga-hl workspace' target='#{DIALOG_ID}' scroll='manual' location='main' resident='false'><dialogData id='#{DIALOG_ID}'></dialogData></openDialog>"
   end
 
   def self.widget(tag, attrs)
