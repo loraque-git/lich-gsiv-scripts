@@ -101,8 +101,6 @@ no_kill_all
 require 'json'
 require 'fileutils'
 require 'time'
-require 'open3'
-require 'tmpdir'
 
 # BEGIN saga_hl/paths
 module SagaHl
@@ -197,25 +195,6 @@ module SagaHl
       ENV['LICH_DIR']
     else
       File.join(user_home, 'Lich5')
-    end
-  end
-
-  def self.find_saga_hl_bin
-    candidates = []
-    candidates << File.join(lich_dir, 'tools', 'saga-highlights', 'saga-hl')
-    candidates << File.join(user_home, '.local', 'bin', 'saga-hl')
-    candidates << File.join(user_home, 'Lich5', 'tools', 'saga-highlights', 'saga-hl')
-    begin
-      finder = windows? ? 'where' : 'which'
-      out, = Open3.capture2(finder, 'saga-hl')
-      out.to_s.lines.map(&:strip).reject(&:empty?).each { |p| candidates << p }
-    rescue StandardError
-      nil
-    end
-    candidates.find do |p|
-      next false if p.to_s.empty?
-      next false unless File.file?(p)
-      windows? || File.executable?(p)
     end
   end
 
@@ -517,12 +496,6 @@ module SagaHl
     path
   end
 
-  def self.run_saga_hl(args)
-    bin = find_saga_hl_bin
-    raise 'saga-hl CLI not found (install tools/saga-highlights or put saga-hl on PATH)' unless bin
-    out, status = Open3.capture2e(bin, *args)
-    [out.to_s, status.success?]
-  end
 end
 # END saga_hl/io
 
@@ -979,76 +952,6 @@ module SagaHl
     }
   end
 
-  def self.name_pack!
-    key = normalize_char_key(char_key || detect_char_key)
-    before = working_for(key)
-    self.working = clone_set(before)
-    bak = save_backup(before, reason: 'before-name-pack')
-    notes = []
-    tmp = File.join(Dir.tmpdir, "saga-hl-namepack-#{Process.pid}.json")
-    out_path = import_path
-    hm_ok = false
-
-    begin
-      out, ok = run_saga_hl([
-        'import-hm-names', '--char', key, '--mode', 'skip', '--write-import', tmp
-      ])
-      if ok && File.file?(tmp)
-        hm_ok = true
-        notes << 'HM roster merged'
-      else
-        notes << "HM roster skipped: #{out.to_s.lines.last.to_s.strip[0, 120]}"
-      end
-    rescue StandardError => e
-      notes << "HM roster skipped: #{e.message}"
-    end
-
-    scan_args = if hm_ok
-      ['scan-names', '--from-export', tmp, '--char', key, '--promote', '--write-import', out_path]
-    else
-      ['scan-names', '--char', key, '--promote', '--write-import', out_path]
-    end
-
-    begin
-      out, ok = run_saga_hl(scan_args)
-      if ok && File.file?(out_path)
-        notes << 'log names promoted'
-      else
-        # If scan failed but HM wrote tmp, promote tmp to import path
-        if hm_ok && File.file?(tmp)
-          FileUtils.cp(tmp, out_path)
-          self.last_import_path = out_path
-          notes << "log scan failed (kept HM): #{out.to_s.lines.last.to_s.strip[0, 100]}"
-        else
-          raise "name pack failed: #{out.to_s.lines.last.to_s.strip[0, 160]}"
-        end
-      end
-    rescue StandardError => e
-      if hm_ok && File.file?(tmp)
-        FileUtils.cp(tmp, out_path)
-        self.last_import_path = out_path
-        notes << "log scan error (kept HM): #{e.message}"
-      else
-        raise e
-      end
-    end
-
-    if File.file?(out_path)
-      data = read_json_file(out_path)
-      self.working = set_from_import_json(data, key)
-    end
-    FileUtils.rm_f(tmp) rescue nil
-
-    self.last_status = "name pack: #{notes.join('; ')} - #{(working['highlights'] || []).size} rules"
-    self.dirty = true
-    {
-      'backup' => bak,
-      'importPath' => out_path,
-      'count' => (working['highlights'] || []).size,
-      'beforeCount' => (before['highlights'] || []).size,
-      'notes' => notes
-    }
-  end
 end
 # END saga_hl/pipeline
 
@@ -1084,8 +987,6 @@ module SagaHl
       "Next: Saga -> Import Settings -> #{IMPORT_BASENAME} (no improvers ran)"
     when :sync
       'Synced into working set. Improve+write will dedupe these, then Import Settings.'
-    when :namepack
-      "Next: Improve+write (optional) then Import Settings -> #{IMPORT_BASENAME}"
     when :backup
       'Snapshot saved. Improve+write when you want a new import file.'
     when :restore
@@ -1096,7 +997,7 @@ module SagaHl
       if last_backup_id.to_s.empty?
         'Tip: Backup first - safe snapshot before you change anything.'
       elsif n.zero?
-        'Empty set - try Name pack, or Sync from another character.'
+        'Empty set - Sync from another character, or use saga-hl CLI for names.'
       else
         'Ready. Improve+write = improvers then file. Write only = file only.'
       end
@@ -1218,15 +1119,9 @@ module SagaHl
                   left: 2 + btn_w + 6 + 90 + 6, top: y, width: 100, height: BTN_HEIGHT)
     y += BTN_HEIGHT + 6
 
-    # Names + copy-from sync
-    out << widget('label', id: 'hl_names_hdr', value: 'Names and copy', left: 2, top: y, width: w, height: ROW_HEIGHT)
+    # Copy-from sync
+    out << widget('label', id: 'hl_copy_hdr', value: 'Copy from another character', left: 2, top: y, width: w, height: ROW_HEIGHT)
     y += ROW_HEIGHT
-    out << widget('cmdButton', id: 'hl_namepack', value: 'Name pack', cmd: '*hl namepack',
-                  left: 2, top: y, width: 110, height: BTN_HEIGHT)
-    out << widget('label', id: 'hl_name_hint',
-                  value: 'HM roster + log names (skip existing)',
-                  left: 118, top: y + 2, width: w - 120, height: ROW_HEIGHT)
-    y += BTN_HEIGHT + 4
 
     others = keys.reject { |k| k.downcase == char_key.to_s.downcase }
     if others.empty?
@@ -1350,16 +1245,17 @@ module SagaHl
         'saga-hl panel:',
         '  Working character = who you are logged in as (shown as a label)',
         '  Improve checkboxes, Improve+write / Backup / Write only',
-        '  Name pack (HM + logs), Copy-from + group checkboxes + Sync, Restore',
+        '  Copy-from + group checkboxes + Sync, Restore',
         '  Improve+write: backup, run ON improvers on the working set, write import JSON',
         '  Write only: write current working set to import JSON (no improvers)',
         '  Sync then Improve+write keeps the copied rules and dedupes them',
+        '  Names: use saga-hl filter-names / import-hm-names / scan-names (CLI)',
         '  *hl status',
         '  *hl char <name|instance> | *hl instance <id>   (CLI only)',
         '  *hl set <improver> 0|1 | *hl toggle <improver>',
         '  *hl apply | *hl package | *hl backup | *hl write',
-        '  *hl namepack | *hl syncsrc <key> | *hl syncgrp all|N 0|1',
-        '  *hl sync <from-key> | *hl restore <id>',
+        '  *hl syncsrc <key> | *hl syncgrp all|N 0|1 | *hl sync <from-key>',
+        '  *hl restore <id>',
         "  live improvers: #{implemented_improvers.map { |i, _, _, _| i }.join(', ')}"
       ])
     when /\Astatus\z/i
@@ -1491,18 +1387,6 @@ module SagaHl
         msgs << "saga-hl sync failed: #{e.message}"
       end
       self.dirty = true
-    when /\Anamepack\z/i
-      begin
-        msgs << 'saga-hl: running name pack (HM + logs) - may take a moment...'
-        info = name_pack!
-        self.last_action = :namepack
-        msgs << "saga-hl: #{last_status}"
-        (info['notes'] || []).each { |n| msgs << "  #{n}" }
-        msgs.concat(import_restore_lines(info))
-      rescue StandardError => e
-        msgs << "saga-hl namepack failed: #{e.message}"
-      end
-      self.dirty = true
     when /\Arestore\s+(\S+)\z/i
       begin
         bid = Regexp.last_match(1)
@@ -1569,7 +1453,7 @@ before_dying do
   _respond("<closeDialog id='#{SagaHl::DIALOG_ID}'/>")
 end
 
-SagaHl.story_echo('saga-hl panel active. Improve+write / Write only / Name pack / Sync, or *hl help.')
+SagaHl.story_echo('saga-hl panel active. Improve+write / Write only / Sync, or *hl help.')
 SagaHl.status_lines.each { |l| SagaHl.story_echo(l) }
 
 loop do
