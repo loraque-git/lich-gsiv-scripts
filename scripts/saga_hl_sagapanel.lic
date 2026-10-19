@@ -25,7 +25,9 @@
     *hl backup                  - Snapshot only
     *hl write                   - Write import JSON from working set (no improvers)
     *hl namepack                - HM roster + Saga log names (skip existing) -> write import
-    *hl sync <from-key>         - Copy missing rules from another character -> write import
+    *hl syncsrc <from-key>      - Set copy-from character and load group checkboxes
+    *hl syncgrp all|N 0|1       - Toggle groups to copy (N = checkbox index)
+    *hl sync <from-key>         - Copy selected groups (skip existing) -> write import
     *hl restore <backup-id>     - Rewrite import JSON from that backup
 
   Improve+write vs Write only:
@@ -869,8 +871,12 @@ module SagaHl
     tgt_key = normalize_char_key(char_key || detect_char_key)
     raise 'pick a different character to copy from' if src_key == tgt_key
 
-    self.sync_source = src_key
-    init_sync_groups!(src_key) if sync_group_meta.nil? || sync_group_sel.nil?
+    if sync_source.to_s.downcase != src_key || sync_group_meta.nil? || sync_group_sel.nil?
+      self.sync_source = src_key
+      init_sync_groups!(src_key)
+    else
+      self.sync_source = src_key
+    end
 
     source_full = load_set_from_prefs(src_key)
     source = filter_set_by_sync_groups(source_full)
@@ -1336,7 +1342,8 @@ module SagaHl
       self.dirty = true
     when /\Abackup\z/i
       begin
-        set = working || load_set_from_prefs
+        set = working_for
+        self.working = set
         bak = save_backup(set, reason: 'manual')
         self.last_action = :backup
         self.last_status = "backup #{bak} (#{(set['highlights'] || []).size} rules)"
