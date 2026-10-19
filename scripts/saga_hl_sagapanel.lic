@@ -1101,8 +1101,8 @@ module SagaHl
 
   def self.status_lines
     ensure_toggles!
-    set = working || load_set_from_prefs
-    self.char_key ||= set['character']
+    self.char_key ||= detect_char_key
+    set = working_for(char_key)
     lines = [
       "saga-hl  #{pretty_char_label(char_key)}  #{(set['highlights'] || []).size} rules",
       "  key: #{char_key}",
@@ -1142,12 +1142,17 @@ module SagaHl
 
   def self.build_dialog
     ensure_toggles!
-    set = working || (begin
-      load_set_from_prefs
-    rescue StandardError
-      empty_set(detect_char_key)
-    end)
-    self.char_key ||= set['character']
+    self.char_key ||= detect_char_key
+    # Prefer in-memory working set only when it matches the active character.
+    set = if working && working['character'].to_s.downcase == char_key.to_s.downcase
+      working
+    else
+      begin
+        load_set_from_prefs(char_key)
+      rescue StandardError
+        empty_set(char_key)
+      end
+    end
     rules = (set['highlights'] || []).size
     groups = (set['groups'] || []).size
 
