@@ -352,22 +352,30 @@ end
 module SagaHl
   def self.ensure_toggles!
     self.toggles ||= {}
-    IMPROVERS.each do |id, _label, default_on|
+    IMPROVERS.each do |id, _label, default_on, _impl|
       toggles[id] = default_on unless toggles.key?(id)
     end
+  end
+
+  def self.improver_row(id)
+    IMPROVERS.find { |i, _, _, _| i == id }
+  end
+
+  def self.implemented_improvers
+    IMPROVERS.select { |_, _, _, impl| impl }
   end
 
   def self.toggle!(name)
     ensure_toggles!
     key = name.to_s.downcase.tr(' ', '_').to_sym
     key = :dedupe if key == :dedupe_exact
-    unless IMPROVERS.any? { |id, _, _| id == key }
-      raise "unknown improver #{name.inspect} — try: #{IMPROVERS.map { |i, _, _| i }.join(', ')}"
+    row = improver_row(key)
+    unless row
+      raise "unknown improver #{name.inspect} — try: #{implemented_improvers.map { |i, _, _, _| i }.join(', ')}"
     end
-    unimplemented = %i[gender spellprep palette group_styles]
-    if unimplemented.include?(key)
+    unless row[3]
       toggles[key] = false
-      raise "#{key} is not implemented in v0.1.0 yet"
+      raise "#{key} is not implemented yet"
     end
     toggles[key] = !toggles[key]
     toggles[key]
@@ -375,7 +383,7 @@ module SagaHl
 
   def self.enable_standard_package!
     ensure_toggles!
-    IMPROVERS.each { |id, _, _| toggles[id] = false }
+    IMPROVERS.each { |id, _, _, _| toggles[id] = false }
     STANDARD_PACKAGE.each { |id| toggles[id] = true }
   end
 
@@ -397,13 +405,14 @@ module SagaHl
     bak = save_backup(before, reason: mode == :package ? 'before-package' : 'before-apply')
 
     results = {}
-    IMPROVERS.each do |id, label, _|
+    IMPROVERS.each do |id, label, _, impl|
       next unless toggles[id]
+      next unless impl
       results[id.to_s] = run_improver(id, working).merge('label' => label)
     end
 
     path = write_import(working)
-    self.last_status = "applied · backup #{bak} · #{(working['highlights'] || []).size} rules → #{path}"
+    self.last_status = "applied · backup #{bak} · #{(working['highlights'] || []).size} rules"
     self.dirty = true
     {
       'backup' => bak,
@@ -423,18 +432,11 @@ module SagaHl
     bak = info['backup'] || last_backup_id
     [
       '--- saga-hl: next steps ---',
-      "1. Import file written: #{path}",
-      '2. In Saga: Menu → Import Settings → Custom highlights → choose that file.',
-      '3. Review highlights in-game. Saga owns live colors after import.',
-      "4. If you dislike the result: *hl restore #{bak}",
-      "   (rewrites #{IMPORT_BASENAME} from the pre-change backup, then Import Settings again)",
-      '5. Do not edit prefs.json by hand while Saga is open.',
+      "1. Wrote #{path}",
+      '2. Saga → Import Settings → Custom highlights → that file',
+      "3. Undo: *hl restore #{bak}  then Import Settings again",
       '---------------------------'
     ]
-  end
-
-  def self.echo_import_restore(info)
-    import_restore_lines(info).each { |line| echo line }
   end
 
   def self.status_lines
@@ -442,17 +444,15 @@ module SagaHl
     set = working || load_set_from_prefs
     self.char_key ||= set['character']
     lines = [
-      "saga-hl status  char=#{char_key}  rules=#{(set['highlights'] || []).size}  groups=#{(set['groups'] || []).size}",
-      "  prefs:  #{prefs_path}",
+      "saga-hl  #{char_key}  ·  #{(set['highlights'] || []).size} rules  ·  #{(set['groups'] || []).size} groups",
       "  import: #{last_import_path || import_path}",
-      "  backups: #{File.join(backup_root, char_slug)}",
       "  last backup: #{last_backup_id || '(none)'}"
     ]
-    IMPROVERS.each do |id, label, _|
-      on = toggles[id] ? 'ON ' : 'off'
-      lines << "  [#{on}] #{id} — #{label}"
+    implemented_improvers.each do |id, label, _, _|
+      on = toggles[id] ? 'ON' : 'off'
+      lines << "  [#{on}] #{label}"
     end
-    lines << "  note: #{last_status}" if last_status.to_s != ''
+    lines << "  #{last_status}" if last_status.to_s != ''
     lines
   end
 end
