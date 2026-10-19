@@ -94,6 +94,7 @@
       Backups: paginated list, rename, starter set/load, load into working,
         compare vs working
       Tools: improvers + Improve+write / Write only / Backup / Sync
+      editBox Enter wired via enterButton; list_backups accepts import-only snaps
     0.4.5 (2026-10-19)
       header cleanup for sharing: creator/author attribution, accurate feature
         list, paths, and test notes; remove stale Name-pack panel references
@@ -641,10 +642,11 @@ module SagaHl
     root = File.join(backup_root, char_slug(key))
     return [] unless File.directory?(root)
     Dir.children(root).sort.reverse.filter_map do |name|
+      imp = File.join(root, name, 'import.json')
+      next unless File.file?(imp)
       man = File.join(root, name, 'manifest.json')
-      next unless File.file?(man)
       begin
-        m = read_json_file(man)
+        m = File.file?(man) ? read_json_file(man) : {}
         {
           'id' => name,
           'reason' => m['reason'].to_s,
@@ -1669,7 +1671,7 @@ module SagaHl
     # Filter row
     out << widget('label', id: 'hl_filt_lbl', value: 'Filter', left: 2, top: y + 2, width: 48, height: DROP_HEIGHT)
     out << widget('editBox', id: 'hl_filter', value: browse_filter.to_s,
-                  cmd: '*hl filter %hl_filter%', maxChars: '120',
+                  cmd: '*hl filter %hl_filter%', maxChars: '120', enterButton: 'hl_filt_btn',
                   left: 52, top: y, width: 280, height: DROP_HEIGHT)
     out << widget('cmdButton', id: 'hl_filt_btn', value: 'Filter', cmd: '*hl filter %hl_filter%',
                   left: 338, top: y, width: 70, height: BTN_HEIGHT)
@@ -1790,7 +1792,7 @@ module SagaHl
 
       out << widget('label', id: 'hl_pat_lbl', value: 'Pattern', left: 210, top: y + 2, width: 56, height: DROP_HEIGHT)
       out << widget('editBox', id: 'hl_pattern', value: sel['pattern'].to_s,
-                    cmd: '*hl pattern %hl_pattern%', maxChars: '200',
+                    cmd: '*hl pattern %hl_pattern%', maxChars: '200', enterButton: 'hl_pat_set',
                     left: 270, top: y, width: 420, height: DROP_HEIGHT)
       out << widget('cmdButton', id: 'hl_pat_set', value: 'Set', cmd: '*hl pattern %hl_pattern%',
                     left: 698, top: y, width: 50, height: BTN_HEIGHT)
@@ -1979,7 +1981,7 @@ module SagaHl
 
     out << widget('label', id: 'hl_ren_lbl', value: 'Rename label', left: 2, top: y + 2, width: 100, height: DROP_HEIGHT)
     out << widget('editBox', id: 'hl_bakren', value: bak_rename.to_s,
-                  cmd: '*hl bak rename %hl_bakid% %hl_bakren%', maxChars: '60',
+                  cmd: '*hl bak rename %hl_bakid% %hl_bakren%', maxChars: '60', enterButton: 'hl_renbtn',
                   left: 110, top: y, width: 300, height: DROP_HEIGHT)
     out << widget('cmdButton', id: 'hl_renbtn', value: 'Rename',
                   cmd: '*hl bak rename %hl_bakid% %hl_bakren%',
