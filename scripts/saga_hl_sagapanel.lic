@@ -658,7 +658,7 @@ module SagaHl
     x = 70
     instance_order.each_with_index do |iid, idx|
       title = pretty_instance(iid)
-      mark = (iid == instance_filter) ? "[{#{title}}]" : "[ #{title} ]"
+      mark = (iid == instance_filter) ? "{#{title}}" : title
       out << widget('link', id: "hl_inst_#{idx}", value: mark, cmd: "*hl instance #{iid}",
                             left: x, top: y, width: 78, height: ROW_HEIGHT)
       x += 80
