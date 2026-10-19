@@ -982,8 +982,10 @@ module SagaHl
       "Next: Saga -> Import Settings -> #{IMPORT_BASENAME} (improvers already ran)"
     when :write
       "Next: Saga -> Import Settings -> #{IMPORT_BASENAME} (no improvers ran)"
-    when :namepack, :sync
-      "Next: Saga -> Import Settings -> #{IMPORT_BASENAME}"
+    when :sync
+      'Synced into working set. Improve+write will dedupe these, then Import Settings.'
+    when :namepack
+      "Next: Improve+write (optional) then Import Settings -> #{IMPORT_BASENAME}"
     when :backup
       'Snapshot saved. Improve+write when you want a new import file.'
     when :restore
@@ -1141,7 +1143,14 @@ module SagaHl
       flabels = others.map { |k| dropdown_safe(pretty_char_label(k, with_count: true)) }
       fvalues = others.map { |k| dropdown_safe(k) }
       want = sync_source.to_s
-      fi = others.index { |k| k.downcase == want.downcase } || 0
+      fi = others.index { |k| k.downcase == want.downcase }
+      # Prefer remembered source; otherwise leave unset until user picks.
+      if fi.nil?
+        selected_from = 'Pick a character...'
+        flabels = [selected_from] + flabels
+        fvalues = ['_'] + fvalues
+        fi = 0
+      end
       out << widget('label', id: 'hl_from_lbl', value: 'Copy from', left: 2, top: y + 2, width: 64, height: DROP_HEIGHT)
       out << widget('dropDownBox',
                     id: 'hl_from',
@@ -1154,9 +1163,35 @@ module SagaHl
                     left: w - 100, top: y, width: 98, height: BTN_HEIGHT)
       y += DROP_HEIGHT + 2
       out << widget('label', id: 'hl_sync_hint',
-                    value: 'Sync adds missing rules from that character into the current one.',
+                    value: 'Check groups below, then Sync. Improve+write can dedupe after.',
                     left: 2, top: y, width: w, height: ROW_HEIGHT)
       y += ROW_HEIGHT
+
+      if sync_source && sync_group_meta && !sync_group_meta.empty?
+        out << widget('label', id: 'hl_grp_hdr', value: 'Groups to copy', left: 2, top: y, width: 120, height: ROW_HEIGHT)
+        out << widget('link', id: 'hl_grp_all', value: 'All', cmd: '*hl syncgrp all 1',
+                      left: 130, top: y, width: 36, height: ROW_HEIGHT)
+        out << widget('link', id: 'hl_grp_none', value: 'None', cmd: '*hl syncgrp all 0',
+                      left: 170, top: y, width: 40, height: ROW_HEIGHT)
+        sel_n = sync_group_sel.count { |_, v| v } rescue 0
+        out << widget('label', id: 'hl_grp_count', value: "#{sel_n}/#{sync_group_meta.size} selected",
+                      left: 220, top: y, width: w - 222, height: ROW_HEIGHT)
+        y += ROW_HEIGHT
+        sync_group_meta.each_with_index do |m, idx|
+          checked = (sync_group_sel || {})[m['id']] ? '1' : '0'
+          wid = "hl_sg_#{idx}"
+          text = dropdown_safe("#{m['label']} (#{m['count']})")
+          out << widget('checkBox',
+                        id: wid,
+                        text: text,
+                        checked: checked,
+                        checked_value: '1',
+                        unchecked_value: '0',
+                        cmd: "*hl syncgrp #{idx} %#{wid}%",
+                        left: 8, top: y, width: w - 10, height: ROW_HEIGHT)
+          y += ROW_HEIGHT
+        end
+      end
     end
     y += 4
 
