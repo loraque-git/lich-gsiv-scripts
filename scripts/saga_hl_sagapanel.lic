@@ -12,11 +12,11 @@
 
   In-game:
     ;saga-hl / ;saga_hl_sagapanel - Start the panel
-    Panel: Character dropdown, Improve toggles, Improve+write / Backup / Write only,
+    Panel: logged-in character (fixed), Improve toggles, Improve+write / Backup / Write only,
            Name pack, Copy-from + Sync, Restore
     *hl help                    - Commands
     *hl status                  - Counts / paths
-    *hl char <name|instance>    - Switch working character
+    *hl char <name|instance>    - CLI only: switch working character (panel stays logged-in)
     *hl instance <id>           - CLI only: filter/switch by instance (Prime/Test/...)
     *hl set <improver> 0|1      - Checkbox-driven improver state
     *hl toggle <name>           - Flip an improver on/off
@@ -44,9 +44,13 @@
   Author: loraque (loraque@gmail.com)
   Required: Lich >= 5.12.0
   Tags: saga, frontend, panel, highlights, import
-  Version: 0.4.2
+  Version: 0.4.3
 
   Recently changed:
+    0.4.3 (2026-10-19)
+      - Panel always uses the logged-in character (name + counts label only).
+        Removed top Character dropdown so Copy-from cannot steal the selection.
+      - load_set_from_prefs no longer overwrites char_key (syncsrc bug).
     0.4.2 (2026-10-19)
       - Story echoes use [lich] prefix for easy Saga filter.
       - Dedupe exact also collapses casefold-same patterns when colors are close.
@@ -462,9 +466,10 @@ module SagaHl
     {}
   end
 
+  # Read a character's highlights from prefs. Does not change char_key / working.
+  # Callers that switch the active character must set char_key themselves.
   def self.load_set_from_prefs(key = nil)
-    key = normalize_char_key(key || detect_char_key)
-    self.char_key = key
+    key = normalize_char_key(key || char_key || detect_char_key)
     prefs = read_prefs_hash
     cs_all = prefs['characterSettings'] || {}
     cs = cs_all[key] || cs_all[key.downcase] || {}
@@ -1153,27 +1158,16 @@ module SagaHl
     out << widget('label', id: 'hl_title', value: 'saga-hl', left: 2, top: y, width: w, height: ROW_HEIGHT)
     y += ROW_HEIGHT + 2
 
-    # Character dropdown (all instances; instance switch is CLI-only)
+    # Working character is always the logged-in one (no top dropdown).
     keys = list_character_keys
-    labels = keys.map { |k| dropdown_safe(pretty_char_label(k, with_count: true)) }
-    values = keys.map { |k| dropdown_safe(k) }
-    selected_label = begin
-      i = keys.index { |k| k.downcase == char_key.to_s.downcase } || 0
-      labels[i] || labels[0] || dropdown_safe(pretty_char_label(char_key))
-    end
-    out << widget('label', id: 'hl_char_lbl', value: 'Character', left: 2, top: y + 2, width: 64, height: DROP_HEIGHT)
-    out << widget('dropDownBox',
-                  id: 'hl_char',
-                  value: selected_label,
-                  content_text: labels.join(','),
-                  content_value: values.join(','),
-                  cmd: '*hl char %hl_char%',
-                  left: 70, top: y, width: w - 72, height: DROP_HEIGHT)
-    y += DROP_HEIGHT + 2
-
+    out << widget('label', id: 'hl_char_lbl', value: 'Character', left: 2, top: y, width: 64, height: ROW_HEIGHT)
+    out << widget('label', id: 'hl_char_name',
+                  value: pretty_char_label(char_key),
+                  left: 70, top: y, width: w - 72, height: ROW_HEIGHT)
+    y += ROW_HEIGHT
     out << widget('label', id: 'hl_stats',
-                  value: "#{pretty_char_label(char_key)}  #{rules} rules  #{groups} groups",
-                  left: 2, top: y, width: w, height: ROW_HEIGHT)
+                  value: "#{rules} rules  #{groups} groups",
+                  left: 70, top: y, width: w - 72, height: ROW_HEIGHT)
     y += ROW_HEIGHT + 6
 
     # Improvers
@@ -1345,13 +1339,14 @@ module SagaHl
     when /\Ahelp\z/i
       msgs.concat([
         'saga-hl panel:',
-        '  Character dropdown, Improve checkboxes, Improve+write / Backup / Write only',
+        '  Working character = who you are logged in as (shown as a label)',
+        '  Improve checkboxes, Improve+write / Backup / Write only',
         '  Name pack (HM + logs), Copy-from + group checkboxes + Sync, Restore',
         '  Improve+write: backup, run ON improvers on the working set, write import JSON',
         '  Write only: write current working set to import JSON (no improvers)',
         '  Sync then Improve+write keeps the copied rules and dedupes them',
-        '  *hl status | *hl char <name|instance>',
-        '  *hl instance <id>   (CLI only; not on the panel)',
+        '  *hl status',
+        '  *hl char <name|instance> | *hl instance <id>   (CLI only)',
         '  *hl set <improver> 0|1 | *hl toggle <improver>',
         '  *hl apply | *hl package | *hl backup | *hl write',
         '  *hl namepack | *hl syncsrc <key> | *hl syncgrp all|N 0|1',
@@ -1531,14 +1526,15 @@ SagaHl.sync_source = nil
 SagaHl.sync_group_sel = nil
 SagaHl.sync_group_meta = nil
 begin
-  SagaHl.working = SagaHl.load_set_from_prefs
-  SagaHl.char_key ||= SagaHl.working['character']
+  # Panel always targets the logged-in character.
+  SagaHl.char_key = SagaHl.detect_char_key
+  SagaHl.working = SagaHl.load_set_from_prefs(SagaHl.char_key)
   SagaHl.ensure_instance_filter!
   SagaHl.last_status = "loaded #{SagaHl.pretty_char_label(SagaHl.char_key)} - #{(SagaHl.working['highlights'] || []).size} rules"
 rescue StandardError => e
   SagaHl.last_status = "load failed: #{e.message}"
-  SagaHl.working = SagaHl.empty_set(SagaHl.detect_char_key)
-  SagaHl.char_key = SagaHl.working['character']
+  SagaHl.char_key = SagaHl.detect_char_key
+  SagaHl.working = SagaHl.empty_set(SagaHl.char_key)
   SagaHl.ensure_instance_filter!
 end
 
