@@ -84,6 +84,7 @@ require 'json'
 require 'fileutils'
 require 'time'
 require 'open3'
+require 'tmpdir'
 
 # BEGIN saga_hl/paths
 module SagaHl
@@ -178,14 +179,18 @@ module SagaHl
     candidates << File.join(lich_dir, 'tools', 'saga-highlights', 'saga-hl')
     candidates << File.join(user_home, '.local', 'bin', 'saga-hl')
     candidates << File.join(user_home, 'Lich5', 'tools', 'saga-highlights', 'saga-hl')
-    which = begin
-      out, = Open3.capture2('which', 'saga-hl')
-      out.to_s.strip
+    begin
+      finder = windows? ? 'where' : 'which'
+      out, = Open3.capture2(finder, 'saga-hl')
+      out.to_s.lines.map(&:strip).reject(&:empty?).each { |p| candidates << p }
     rescue StandardError
-      ''
+      nil
     end
-    candidates << which unless which.empty?
-    candidates.find { |p| p.to_s != '' && File.file?(p) && File.executable?(p) }
+    candidates.find do |p|
+      next false if p.to_s.empty?
+      next false unless File.file?(p)
+      windows? || File.executable?(p)
+    end
   end
 
   def self.char_name
