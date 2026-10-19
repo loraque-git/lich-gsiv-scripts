@@ -1,0 +1,29 @@
+=begin
+
+  Thin launcher for saga_hl_sagapanel.
+
+  Usage:
+    ;saga-hl              - start the saga-hl Saga panel
+    ;saga-hl help         - same (panel owns *hl commands)
+
+       creator: loraque (loraque@gmail.com)
+        author: loraque (loraque@gmail.com)
+          game: Gemstone
+          tags: saga, highlights
+      required: Lich >= 5.12.0
+       version: 0.1.0
+
+  changelog:
+    0.1.0 (2026-10-18)
+      initial launcher for saga_hl_sagapanel.lic
+
+=end
+
+# If the panel is already running, just print help hint.
+if Script.running?('saga_hl_sagapanel')
+  echo 'saga-hl panel already running — use *hl help / *hl status / *hl apply'
+  exit
+end
+
+Script.start('saga_hl_sagapanel')
+echo 'Starting saga_hl_sagapanel…'

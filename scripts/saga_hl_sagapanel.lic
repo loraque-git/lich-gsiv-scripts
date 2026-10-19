@@ -219,9 +219,15 @@ module SagaHl
     end
     {
       'character' => key,
-      'highlights' => (cs['customHighlights'] || []).map { |h| h.transform_keys(&:to_s) },
-      'groups' => (cs['highlightGroups'] || []).map { |g| g.transform_keys(&:to_s) }
+      'highlights' => (cs['customHighlights'] || []).map { |h| stringify_keys(h) },
+      'groups' => (cs['highlightGroups'] || []).map { |g| stringify_keys(g) }
     }
+  end
+
+  def self.stringify_keys(hash)
+    out = {}
+    (hash || {}).each { |k, v| out[k.to_s] = v }
+    out
   end
 
   def self.to_saga_import(set)
@@ -353,11 +359,10 @@ module SagaHl
     unless IMPROVERS.any? { |id, _, _| id == key }
       raise "unknown improver #{name.inspect} — try: #{IMPROVERS.map { |i, _, _| i }.join(', ')}"
     end
-    # Unimplemented improvers stay off with a note
     unimplemented = %i[gender spellprep palette group_styles]
-    if unimplemented.include?(key) && !toggles[key]
+    if unimplemented.include?(key)
       toggles[key] = false
-      raise "#{key} is not implemented in v0.1.0 yet (toggle left off)"
+      raise "#{key} is not implemented in v0.1.0 yet"
     end
     toggles[key] = !toggles[key]
     toggles[key]
