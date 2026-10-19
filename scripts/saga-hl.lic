@@ -1,28 +1,37 @@
 =begin
 
-  Starts saga_hl_sagapanel. Keep this short name so ;saga-hl works.
+  saga-hl.lic
+
+  Short-name launcher for saga_hl_sagapanel.lic so ;saga-hl works in game.
+
+  The panel itself lives in saga_hl_sagapanel.lic. Keep both files together
+  when sharing: this launcher only starts that script.
 
   Usage:
     ;saga-hl                 - Start the saga-hl Saga panel
-    ;saga_hl_sagapanel       - Same, run the panel directly
+    ;saga_hl_sagapanel       - Same, run the panel script directly
 
-  Panel commands (once running): *hl help / *hl apply / *hl package …
+  Once the panel is running, use *hl help for commands.
+
+  Saga-only. Requires Lich connected to the Saga frontend.
 
        creator: loraque (loraque@gmail.com)
         author: loraque (loraque@gmail.com)
           game: Gemstone
-          tags: saga, frontend, panel, highlights
+          tags: saga, frontend, panel, highlights, launcher
       required: Lich >= 5.12.0
-       version: 0.1.0
+       version: 0.1.1
 
   changelog:
+    0.1.1 (2026-10-19)
+      document pairing with saga_hl_sagapanel; [lich] story prefix on echoes
     0.1.0 (2026-10-18)
-      launcher for saga_hl_sagapanel
+      initial launcher for saga_hl_sagapanel
 
 =end
 
 if Script.running?('saga_hl_sagapanel')
-  echo 'saga-hl: panel already running — *hl help'
+  echo '[lich] saga-hl: panel already running - *hl help'
 else
   Script.start('saga_hl_sagapanel')
 end

@@ -1,99 +1,123 @@
 =begin
+
   saga_hl_sagapanel.lic
 
-  Saga-only panel + commands to improve Saga custom text highlights safely.
+  Saga-only panel to improve Saga custom text highlights safely while the
+  client is running. Reads prefs, never writes prefs live; always backs up,
+  then writes an Import Settings JSON you load in Saga.
 
-  Flow (always):
-    1. Read highlights from Saga prefs.json (does not write prefs while Saga runs)
-    2. Backup under saga-hl-backups
-    3. Optionally run enabled improvers, name pack, or sync-from
-    4. Write saga-highlights.json (Import Settings file)
-    5. Tell you how to Import in Saga, and how to restore if you dislike it
+  Pair with saga-hl.lic if you want the short ;saga-hl start command.
 
-  In-game:
-    ;saga-hl / ;saga_hl_sagapanel - Start the panel
-    Panel: logged-in character (fixed), Improve toggles, Improve+write / Backup / Write only,
-           Copy-from + Sync, Restore
-    *hl help                    - Commands
-    *hl status                  - Counts / paths
-    *hl char <name|instance>    - CLI only: switch working character (panel stays logged-in)
-    *hl instance <id>           - CLI only: filter/switch by instance (Prime/Test/...)
-    *hl set <improver> 0|1      - Checkbox-driven improver state
-    *hl toggle <name>           - Flip an improver on/off
-    *hl apply                   - Backup -> enabled improvers -> write import JSON
-    *hl package                 - Enable standard package, then apply
-    *hl backup                  - Snapshot only
-    *hl write                   - Write import JSON from working set (no improvers)
-    *hl syncsrc <from-key>      - Set copy-from character and load group checkboxes
-    *hl syncgrp all|N 0|1       - Toggle groups to copy (N = checkbox index)
-    *hl sync <from-key>         - Copy selected groups (skip existing) -> write import
-    *hl restore <backup-id>     - Rewrite import JSON from that backup
+  Safe flow:
+    1. Read highlights from Saga prefs.json (no live prefs writes)
+    2. Snapshot under saga-hl-backups/<char>/
+    3. Optionally run enabled improvers and/or Sync from another character
+    4. Write saga-highlights.json (home directory)
+    5. Saga -> Import Settings -> Custom highlights -> that file
+    6. Undo via the Restore dropdown (or *hl restore <backup-id>)
 
-  Name pack / profession name filtering stay on the CLI (saga-hl import-hm-names,
-  scan-names, filter-names) — not on the panel.
+  In-game start:
+    ;saga-hl                 - via saga-hl.lic launcher (optional)
+    ;saga_hl_sagapanel       - this script directly
+
+  Panel (logged-in character only):
+    Improve toggles, Improve+write / Backup / Write only,
+    Copy-from + group checkboxes + Sync, Restore
+
+  Commands:
+    *hl help                 - This command list (story window)
+    *hl status               - Counts / paths
+    *hl set <improver> 0|1   - Improver checkbox state
+    *hl toggle <name>        - Flip an improver on/off
+    *hl apply                - Backup -> ON improvers -> write import JSON
+    *hl package              - Enable standard package, then apply
+    *hl backup               - Snapshot only
+    *hl write                - Write import JSON only (no improvers)
+    *hl syncsrc <from-key>   - Set copy-from character + group list
+    *hl syncgrp all|N 0|1    - Toggle groups to copy (N = checkbox index)
+    *hl sync <from-key>      - Copy selected groups (skip existing) -> write import
+    *hl restore <backup-id>  - Rewrite import JSON from that backup
+    *hl char <name|instance> - CLI only: switch working character
+    *hl instance <id>        - CLI only: Prime / Test / ...
 
   Improve+write vs Write only:
-    Improve+write (Apply): backup, run every ON improver, then write the import file.
+    Improve+write: backup, run every ON improver, then write the import file.
     Write only: write the current working set to the import file. No improvers.
 
-  Outside the game (script source / local AI - NOT a panel action):
-    See "Local AI / maintainer" at the end of this header.
-    Improve one # BEGIN saga_hl/... block at a time; bump Version + changelog.
+  Implemented improver:
+    Dedupe exact/color - exact pattern dupes, plus casefold-same patterns when
+    RGB colors are close (distance <= 40).
 
-  Windows-first: prefs/backups/logs under %APPDATA%\saga\; import JSON under %USERPROFILE%.
+  Not on this panel (optional Python CLI under Lich5/tools/saga-highlights):
+    saga-hl import-hm-names / scan-names / filter-names
 
-  Author: loraque (loraque@gmail.com)
-  Required: Lich >= 5.12.0
-  Tags: saga, frontend, panel, highlights, import
-  Version: 0.4.4
+  Paths:
+    Linux:   ~/.config/saga/prefs.json and saga-hl-backups/
+    Windows: %APPDATA%\saga\prefs.json and saga-hl-backups\
+    Import:  ~/saga-highlights.json  or  %USERPROFILE%\saga-highlights.json
 
-  Recently changed:
+  Story window:
+    All echo lines are prefixed with [lich] for easy Saga filtering.
+    Panel dialog XML (_respond) is not prefixed.
+
+  Sharing / testing:
+    Drop this file (and optionally saga-hl.lic) into Lich scripts/.
+    Requires Saga + Lich >= 5.12.0. No Python CLI required for panel features.
+    After Improve+write / Sync / Write only, use Saga Import Settings.
+
+       creator: loraque (loraque@gmail.com)
+        author: loraque (loraque@gmail.com)
+          game: Gemstone
+          tags: saga, frontend, panel, highlights, import
+      required: Lich >= 5.12.0
+       version: 0.4.5
+
+  changelog:
+    0.4.5 (2026-10-19)
+      header cleanup for sharing: creator/author attribution, accurate feature
+        list, paths, and test notes; remove stale Name-pack panel references
     0.4.4 (2026-10-19)
-      - Remove Name pack from the panel (CLI/backend only: saga-hl import-hm-names /
-        scan-names / filter-names).
+      remove Name pack from the panel (CLI/backend only)
     0.4.3 (2026-10-19)
-      - Panel always uses the logged-in character (name + counts label only).
-        Removed top Character dropdown so Copy-from cannot steal the selection.
-      - load_set_from_prefs no longer overwrites char_key (syncsrc bug).
+      panel always uses the logged-in character (label only); remove top
+        Character dropdown so Copy-from cannot steal the selection
+      load_set_from_prefs no longer overwrites char_key (syncsrc bug)
     0.4.2 (2026-10-19)
-      - Story echoes use [lich] prefix for easy Saga filter.
-      - Dedupe exact also collapses casefold-same patterns when colors are close.
+      story echoes use [lich] prefix for easy Saga filter
+      dedupe exact also collapses casefold-same patterns when colors are close
     0.4.1 (2026-10-19)
-      - Fix Improve+write wiping a fresh Sync/Name pack: use the panel working
-        set (not prefs) so dedupe runs on the merged rules, then write import.
-      - Copy-from: multi-select group checkboxes (All/None) so Sync can copy
-        only chosen groups; orphan group ids get labeled buckets with counts.
+      fix Improve+write wiping a fresh Sync: use panel working set, not prefs
+      Copy-from: multi-select group checkboxes (All/None)
     0.4.0 (2026-10-19)
-      - Remove Instance tabs from panel (keep *hl instance as CLI only).
-      - ASCII-clean panel and story text (no middot/em-dash/{braces}).
-      - Clarify Improve+write vs Write only (both write import; Apply also runs improvers).
-      - Name pack button: HM profession roster + Saga log names via saga-hl CLI.
-      - Copy-from dropdown + Sync button (skip existing patterns into current char).
+      remove Instance tabs from panel (*hl instance remains CLI only)
+      ASCII-clean panel and story text
+      clarify Improve+write vs Write only
+      Copy-from dropdown + Sync (skip existing patterns)
     0.3.0 (2026-10-18)
-      - Redesign: Instance tabs, Character dropdown, rule counts, native widgets,
-        restore picker, coach line. Queues work on main loop.
+      redesign: character UI, rule counts, native widgets, restore picker,
+        coach line; queue work on main loop
     0.2.1 (2026-10-18)
-      - Fix *hl never matching UpstreamHook: FE sends <c>*hl and working panels
-        match /*cmd/ without \A. Strip <c> and match like *exp/*ah.
+      fix *hl UpstreamHook match: strip FE <c> prefix; match like *exp/*ah
     0.2.0 (2026-10-18)
-      - Fix dead panel clicks: queue *hl work on the script main loop.
-      - Cleaner panel: header, live toggles, Apply / Backup / Write import.
+      fix dead panel clicks: queue *hl work on the script main loop
     0.1.0 (2026-10-18)
-      - Initial panel: read prefs, backup, dedupe improver, write import JSON,
-        Import Settings + restore prompts. Windows/Linux paths.
+      initial panel: read prefs, backup, dedupe, write import JSON,
+        Import Settings + restore prompts; Windows/Linux paths
 
-  Local AI / maintainer (outside game):
-    Block map - edit only the named region; keep markers intact:
-      saga_hl/paths       OS paths, character key
-      saga_hl/model       highlight/group hashes, richness, clone, ids, merge
-      saga_hl/io          prefs read, import JSON write, JSON helpers
-      saga_hl/backup      versioned backups + restore-to-import
-      saga_hl/improve_dedupe
-      saga_hl/pipeline    apply selected / standard package / sync
-      saga_hl/messaging   Import Settings + restore user copy
-      saga_hl/panel       dialog XML + toggle state
-      saga_hl/commands    *hl / ;saga-hl routing
-    Do not change block markers. After edits: bump Version + Recently changed.
+  Maintainer note (outside game):
+    Named regions use # BEGIN saga_hl/<name> / # END saga_hl/<name> markers.
+    Prefer editing one region at a time; keep markers intact; bump version +
+    changelog after changes.
+      saga_hl/paths           OS paths, character key
+      saga_hl/model           highlight/group hashes, richness, clone, ids, merge
+      saga_hl/io              prefs read, import JSON write, JSON helpers
+      saga_hl/backup          versioned backups + restore-to-import
+      saga_hl/improve_dedupe  exact + close-color dedupe
+      saga_hl/pipeline        apply / package / sync
+      saga_hl/messaging       story echoes, Import Settings copy, coach
+      saga_hl/panel           dialog XML + toggle state
+      saga_hl/commands        *hl routing
+
 =end
 
 no_kill_all
@@ -133,10 +157,10 @@ module SagaHl
     [:group_styles, 'Empath/Cleric groups', false, false]
   ].freeze
 
+  STANDARD_PACKAGE = [:dedupe].freeze
+
   # Max RGB Euclidean distance for "close" colors (#RRGGBB).
   COLOR_CLOSE_DIST = 40.0
-
-  STANDARD_PACKAGE = [:dedupe].freeze
 
   class << self
     attr_accessor :toggles, :last_backup_id, :last_import_path, :last_status,
@@ -475,7 +499,6 @@ module SagaHl
     self.last_import_path = path
     path
   end
-
 end
 # END saga_hl/io
 
@@ -573,7 +596,6 @@ module SagaHl
   # Keeps richest / enabled rule. Does not delete far-color casefold pairs.
   def self.improve_dedupe(set)
     highlights = set['highlights'] || []
-    keep_ids = {}
     removed_exact = 0
     removed_color = 0
 
@@ -931,7 +953,6 @@ module SagaHl
       'source' => src_key
     }
   end
-
 end
 # END saga_hl/pipeline
 
