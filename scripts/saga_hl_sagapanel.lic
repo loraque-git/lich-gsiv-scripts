@@ -1886,8 +1886,17 @@ module SagaHl
 
     slice.each_with_index do |item, idx|
       kind = item['_kind'].to_s
-      kind = 'changed' if kind.empty? && item['changes']
-      kind = 'added' if kind.empty?
+      if kind.empty?
+        kind = if item['changes']
+          'changed'
+        elsif diff_filter.to_s == 'removed'
+          'removed'
+        elsif diff_filter.to_s == 'changed'
+          'changed'
+        else
+          'added'
+        end
+      end
       if kind == 'changed' || item['changes']
         bits = (item['changes'] || []).first(4).map { |ch| "#{ch['field']}:#{ch['before']}->#{ch['after']}" }.join(' ')
         line = truncate_text("~ #{item['pattern']}  #{bits}", 110)
