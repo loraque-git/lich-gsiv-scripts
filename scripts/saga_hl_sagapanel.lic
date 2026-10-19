@@ -1,0 +1,647 @@
+=begin
+  saga_hl_sagapanel.lic
+
+  Saga-only panel + commands to improve Saga custom text highlights safely.
+
+  Flow (always):
+    1. Read highlights from Saga prefs.json (does not write prefs while Saga runs)
+    2. Backup under saga-hl-backups
+    3. Apply standard package or individual improvers (panel toggles)
+    4. Write saga-highlights.json (Import Settings file)
+    5. Tell you how to Import in Saga, and how to restore if you dislike it
+
+  In-game:
+    ;saga_hl_sagapanel          - Start the panel
+    *hl help                    - Commands
+    *hl status                  - Counts / paths
+    *hl toggle <name>           - Flip an improver on/off
+    *hl apply                   - Backup → enabled improvers → write import JSON
+    *hl package                 - Enable standard package, then apply
+    *hl backup                  - Snapshot only
+    *hl write                   - Write import JSON from last working set (no improvers)
+    *hl restore <backup-id>     - Write that backup as the import JSON (then Import Settings)
+
+  Outside the game (script source / local AI — NOT a panel action):
+    See "Local AI / maintainer" at the end of this header.
+    Improve one # BEGIN saga_hl/... block at a time; bump Version + changelog.
+
+  Windows-first: prefs/backups under %APPDATA%\saga\; import JSON under %USERPROFILE%.
+
+  Author: loraque (loraque@gmail.com)
+  Required: Lich >= 5.12.0
+  Tags: saga, frontend, panel, highlights, import
+  Version: 0.1.0
+
+  Recently changed:
+    0.1.0 (2026-10-18)
+      - Initial panel: read prefs, backup, dedupe improver, write import JSON,
+        Import Settings + restore prompts. Windows/Linux paths.
+
+  Local AI / maintainer (outside game):
+    Block map — edit only the named region; keep markers intact:
+      saga_hl/paths       OS paths, character key
+      saga_hl/model       highlight/group hashes, richness, clone
+      saga_hl/io          prefs read, import JSON write, JSON helpers
+      saga_hl/backup      versioned backups + restore-to-import
+      saga_hl/improve_dedupe
+      saga_hl/pipeline    apply selected / standard package
+      saga_hl/messaging   Import Settings + restore user copy
+      saga_hl/panel       dialog XML + toggle state
+      saga_hl/commands    *hl / ;saga-hl routing
+    Do not change block markers. After edits: bump Version + Recently changed.
+=end
+
+no_kill_all
+
+require 'json'
+require 'fileutils'
+require 'time'
+
+# BEGIN saga_hl/paths
+module SagaHl
+  extend self
+  include Lich::Common if defined?(Lich::Common)
+
+  DIALOG_ID = 'SagaHlPanel'
+  ROW_HEIGHT = 18
+  PANEL_WIDTH = 560
+  BACKUP_KEEP = 40
+  IMPORT_BASENAME = 'saga-highlights.json'
+
+  IMPROVERS = [
+    [:dedupe, 'Dedupe exact', true],
+    # Placeholders for later ports (off until implemented):
+    [:gender, 'Gender pairs', false],
+    [:spellprep, 'Enemy spell prep', false],
+    [:palette, 'Palette colors', false],
+    [:group_styles, 'Empath/Cleric groups', false]
+  ].freeze
+
+  STANDARD_PACKAGE = [:dedupe].freeze
+
+  class << self
+    attr_accessor :toggles, :last_backup_id, :last_import_path, :last_status,
+                  :working, :dirty, :char_key
+  end
+
+  def self.windows?
+    ENV['OS'].to_s =~ /windows/i || File::ALT_SEPARATOR == '\\' ||
+      RUBY_PLATFORM.to_s =~ /mswin|mingw|cygwin/i
+  end
+
+  def self.user_home
+    if windows?
+      ENV['USERPROFILE'].to_s.strip.empty? ? Dir.home : ENV['USERPROFILE']
+    else
+      Dir.home
+    end
+  end
+
+  def self.saga_config_dir
+    if windows?
+      appdata = ENV['APPDATA'].to_s.strip
+      base = appdata.empty? ? File.join(user_home, 'AppData', 'Roaming') : appdata
+      File.join(base, 'saga')
+    else
+      File.join(user_home, '.config', 'saga')
+    end
+  end
+
+  def self.prefs_path
+    File.join(saga_config_dir, 'prefs.json')
+  end
+
+  def self.backup_root
+    File.join(saga_config_dir, 'saga-hl-backups')
+  end
+
+  def self.import_path
+    File.join(user_home, IMPORT_BASENAME)
+  end
+
+  def self.char_name
+    if defined?(Char) && Char.respond_to?(:name) && !Char.name.to_s.strip.empty?
+      Char.name.to_s.strip
+    elsif defined?(XMLData) && XMLData.respond_to?(:name) && !XMLData.name.to_s.strip.empty?
+      XMLData.name.to_s.strip
+    else
+      'unknown'
+    end
+  end
+
+  def self.normalize_char_key(raw)
+    s = raw.to_s.strip.downcase
+    return s if s.include?('|')
+    "#{s}|prime"
+  end
+
+  def self.detect_char_key
+    name = char_name.downcase
+    prefs = read_prefs_hash
+    keys = (prefs['characterSettings'] || {}).keys.map(&:to_s)
+    matches = keys.select { |k| k.downcase.start_with?("#{name}|") }
+    return matches.first if matches.size == 1
+    return "#{name}|prime" if matches.any? { |k| k.downcase == "#{name}|prime" }
+    return matches.first if matches.any?
+    normalize_char_key(name)
+  end
+
+  def self.char_slug(key = nil)
+    normalize_char_key(key || char_key || detect_char_key).tr('|', '-')
+  end
+end
+# END saga_hl/paths
+
+# BEGIN saga_hl/model
+module SagaHl
+  def self.hl_richness(h)
+    score = 0
+    score += 1 if h['bold']
+    score += 1 if h['italic']
+    score += 1 if h['underline']
+    score += 1 if h['notify']
+    score += 1 if h['sound'].to_s.strip != ''
+    score += 1 if h['regex']
+    score += 1 if h['groupId'].to_s.strip != ''
+    score
+  end
+
+  def self.clone_set(set)
+    {
+      'character' => set['character'],
+      'highlights' => (set['highlights'] || []).map { |h| h.dup },
+      'groups' => (set['groups'] || []).map { |g| g.dup }
+    }
+  end
+
+  def self.empty_set(character)
+    { 'character' => character, 'highlights' => [], 'groups' => [] }
+  end
+
+  def self.group_name(set, group_id)
+    return '' if group_id.to_s.empty?
+    g = (set['groups'] || []).find { |x| x['id'] == group_id }
+    g ? g['name'].to_s : group_id.to_s
+  end
+end
+# END saga_hl/model
+
+# BEGIN saga_hl/io
+module SagaHl
+  def self.read_json_file(path)
+    JSON.parse(File.read(path))
+  end
+
+  def self.write_json_file(path, data)
+    FileUtils.mkdir_p(File.dirname(path))
+    File.write(path, JSON.pretty_generate(data) + "\n")
+  end
+
+  def self.read_prefs_hash
+    path = prefs_path
+    return {} unless File.file?(path)
+    read_json_file(path)
+  rescue StandardError => e
+    self.last_status = "prefs read failed: #{e.message}"
+    {}
+  end
+
+  def self.load_set_from_prefs(key = nil)
+    key = normalize_char_key(key || detect_char_key)
+    self.char_key = key
+    prefs = read_prefs_hash
+    cs_all = prefs['characterSettings'] || {}
+    cs = cs_all[key] || cs_all[key.downcase] || {}
+    # try case-insensitive key match
+    if cs.empty?
+      hit = cs_all.keys.find { |k| k.to_s.downcase == key.downcase }
+      cs = cs_all[hit] || {}
+    end
+    {
+      'character' => key,
+      'highlights' => (cs['customHighlights'] || []).map { |h| h.transform_keys(&:to_s) },
+      'groups' => (cs['highlightGroups'] || []).map { |g| g.transform_keys(&:to_s) }
+    }
+  end
+
+  def self.to_saga_import(set)
+    key = set['character']
+    {
+      'kind' => 'saga-settings',
+      'version' => 1,
+      'exportedAt' => Time.now.utc.strftime('%Y-%m-%dT%H:%M:%S.000Z'),
+      'character' => key,
+      'categories' => ['highlights'],
+      'characterSettings' => {
+        'customHighlights' => set['highlights'],
+        'highlightGroups' => set['groups']
+      },
+      'globals' => {}
+    }
+  end
+
+  def self.write_import(set, path = nil)
+    path ||= import_path
+    write_json_file(path, to_saga_import(set))
+    self.last_import_path = path
+    path
+  end
+end
+# END saga_hl/io
+
+# BEGIN saga_hl/backup
+module SagaHl
+  def self.save_backup(set, reason: 'snapshot')
+    stamp = Time.now.strftime('%Y%m%d-%H%M%S')
+    safe = reason.to_s.gsub(/[^a-zA-Z0-9._-]+/, '-')[0, 48]
+    safe = 'snapshot' if safe.empty?
+    dir = File.join(backup_root, char_slug(set['character']), "#{stamp}_#{safe}")
+    n = 2
+    while File.exist?(dir)
+      dir = File.join(backup_root, char_slug(set['character']), "#{stamp}_#{safe}-#{n}")
+      n += 1
+    end
+    FileUtils.mkdir_p(dir)
+    import_file = File.join(dir, 'import.json')
+    write_json_file(import_file, to_saga_import(set))
+    manifest = {
+      'kind' => 'saga-hl-backup',
+      'version' => 1,
+      'character' => set['character'],
+      'reason' => reason,
+      'createdAt' => Time.now.utc.iso8601,
+      'highlightCount' => (set['highlights'] || []).size,
+      'groupCount' => (set['groups'] || []).size
+    }
+    write_json_file(File.join(dir, 'manifest.json'), manifest)
+    self.last_backup_id = File.basename(dir)
+    last_backup_id
+  end
+
+  def self.list_backups(key = nil)
+    root = File.join(backup_root, char_slug(key))
+    return [] unless File.directory?(root)
+    Dir.children(root).sort.reverse.filter_map do |name|
+      man = File.join(root, name, 'manifest.json')
+      next unless File.file?(man)
+      begin
+        m = read_json_file(man)
+        { 'id' => name, 'reason' => m['reason'], 'highlightCount' => m['highlightCount'] }
+      rescue StandardError
+        { 'id' => name, 'reason' => '', 'highlightCount' => nil }
+      end
+    end
+  end
+
+  def self.backup_import_path(backup_id, key = nil)
+    File.join(backup_root, char_slug(key), backup_id, 'import.json')
+  end
+
+  def self.restore_backup_to_import(backup_id, key = nil)
+    src = backup_import_path(backup_id, key)
+    raise "backup not found: #{backup_id}" unless File.file?(src)
+    data = read_json_file(src)
+    path = write_import(
+      {
+        'character' => (data['character'] || key || char_key),
+        'highlights' => (((data['characterSettings'] || {})['customHighlights']) || []),
+        'groups' => (((data['characterSettings'] || {})['highlightGroups']) || [])
+      }
+    )
+    path
+  end
+end
+# END saga_hl/backup
+
+# BEGIN saga_hl/improve_dedupe
+module SagaHl
+  # Exact pattern duplicates only. Keeps richest / enabled rule.
+  # Local AI: extend carefully; do not delete near-dupes here.
+  def self.improve_dedupe(set)
+    by = Hash.new { |h, k| h[k] = [] }
+    (set['highlights'] || []).each { |h| by[h['pattern'].to_s] << h }
+    keep_ids = {}
+    removed = 0
+    by.each_value do |items|
+      if items.size == 1
+        keep_ids[items[0]['id']] = true
+        next
+      end
+      ranked = items.sort_by { |h| [hl_richness(h), h['enabled'] ? 1 : 0] }.reverse
+      keep_ids[ranked[0]['id']] = true
+      removed += items.size - 1
+    end
+    set['highlights'] = (set['highlights'] || []).select { |h| keep_ids[h['id']] }
+    { 'removed' => removed }
+  end
+end
+# END saga_hl/improve_dedupe
+
+# BEGIN saga_hl/pipeline
+module SagaHl
+  def self.ensure_toggles!
+    self.toggles ||= {}
+    IMPROVERS.each do |id, _label, default_on|
+      toggles[id] = default_on unless toggles.key?(id)
+    end
+  end
+
+  def self.toggle!(name)
+    ensure_toggles!
+    key = name.to_s.downcase.tr(' ', '_').to_sym
+    key = :dedupe if key == :dedupe_exact
+    unless IMPROVERS.any? { |id, _, _| id == key }
+      raise "unknown improver #{name.inspect} — try: #{IMPROVERS.map { |i, _, _| i }.join(', ')}"
+    end
+    # Unimplemented improvers stay off with a note
+    unimplemented = %i[gender spellprep palette group_styles]
+    if unimplemented.include?(key) && !toggles[key]
+      toggles[key] = false
+      raise "#{key} is not implemented in v0.1.0 yet (toggle left off)"
+    end
+    toggles[key] = !toggles[key]
+    toggles[key]
+  end
+
+  def self.enable_standard_package!
+    ensure_toggles!
+    IMPROVERS.each { |id, _, _| toggles[id] = false }
+    STANDARD_PACKAGE.each { |id| toggles[id] = true }
+  end
+
+  def self.run_improver(id, set)
+    case id
+    when :dedupe
+      improve_dedupe(set)
+    else
+      { 'skipped' => true, 'reason' => 'not implemented' }
+    end
+  end
+
+  def self.apply_pipeline(mode: :selected)
+    ensure_toggles!
+    enable_standard_package! if mode == :package
+
+    before = load_set_from_prefs
+    self.working = clone_set(before)
+    bak = save_backup(before, reason: mode == :package ? 'before-package' : 'before-apply')
+
+    results = {}
+    IMPROVERS.each do |id, label, _|
+      next unless toggles[id]
+      results[id.to_s] = run_improver(id, working).merge('label' => label)
+    end
+
+    path = write_import(working)
+    self.last_status = "applied · backup #{bak} · #{(working['highlights'] || []).size} rules → #{path}"
+    self.dirty = true
+    {
+      'backup' => bak,
+      'importPath' => path,
+      'count' => (working['highlights'] || []).size,
+      'beforeCount' => (before['highlights'] || []).size,
+      'results' => results
+    }
+  end
+end
+# END saga_hl/pipeline
+
+# BEGIN saga_hl/messaging
+module SagaHl
+  def self.import_restore_lines(info)
+    path = info['importPath'] || last_import_path || import_path
+    bak = info['backup'] || last_backup_id
+    [
+      '--- saga-hl: next steps ---',
+      "1. Import file written: #{path}",
+      '2. In Saga: Menu → Import Settings → Custom highlights → choose that file.',
+      '3. Review highlights in-game. Saga owns live colors after import.',
+      "4. If you dislike the result: *hl restore #{bak}",
+      "   (rewrites #{IMPORT_BASENAME} from the pre-change backup, then Import Settings again)",
+      '5. Do not edit prefs.json by hand while Saga is open.',
+      '---------------------------'
+    ]
+  end
+
+  def self.echo_import_restore(info)
+    import_restore_lines(info).each { |line| echo line }
+  end
+
+  def self.status_lines
+    ensure_toggles!
+    set = working || load_set_from_prefs
+    self.char_key ||= set['character']
+    lines = [
+      "saga-hl status  char=#{char_key}  rules=#{(set['highlights'] || []).size}  groups=#{(set['groups'] || []).size}",
+      "  prefs:  #{prefs_path}",
+      "  import: #{last_import_path || import_path}",
+      "  backups: #{File.join(backup_root, char_slug)}",
+      "  last backup: #{last_backup_id || '(none)'}"
+    ]
+    IMPROVERS.each do |id, label, _|
+      on = toggles[id] ? 'ON ' : 'off'
+      lines << "  [#{on}] #{id} — #{label}"
+    end
+    lines << "  note: #{last_status}" if last_status.to_s != ''
+    lines
+  end
+end
+# END saga_hl/messaging
+
+# BEGIN saga_hl/panel
+module SagaHl
+  def self.sanitize_xml(value)
+    value.to_s.gsub('&', '&amp;').gsub('<', '&lt;').gsub('>', '&gt;').gsub("'", '&apos;').gsub('"', '&quot;')
+  end
+
+  def self.open_dialog_xml
+    "<closeDialog id='#{DIALOG_ID}'/><openDialog type='dynamic' id='#{DIALOG_ID}' title='saga-hl' target='#{DIALOG_ID}' scroll='manual' location='main' resident='true'><dialogData id='#{DIALOG_ID}'></dialogData></openDialog>"
+  end
+
+  def self.build_dialog
+    ensure_toggles!
+    set = working || (begin
+      load_set_from_prefs
+    rescue StandardError
+      empty_set(detect_char_key)
+    end)
+    self.char_key ||= set['character']
+    rows = []
+    rows << "saga-hl  #{char_key}  ·  #{(set['highlights'] || []).size} rules"
+    rows << "prefs: #{File.basename(File.dirname(prefs_path))}/prefs.json"
+    IMPROVERS.each do |id, label, _|
+      mark = toggles[id] ? '[ON]' : '[ ]'
+      rows << "#{mark} #{label}   (*hl toggle #{id})"
+    end
+    rows << "----"
+    rows << "Apply selected   (*hl apply)"
+    rows << "Standard package (*hl package)  = #{STANDARD_PACKAGE.join('+')}"
+    rows << "Backup only      (*hl backup)"
+    rows << "Restore backup   (*hl restore <id>)"
+    rows << "----"
+    rows << "After Apply: Saga → Import Settings → #{IMPORT_BASENAME}"
+    rows << (last_status.to_s.empty? ? 'Ready.' : last_status.to_s)
+
+    out = String.new("<dialogData id='#{DIALOG_ID}' clear='t'>")
+    rows.each_with_index do |text, i|
+      top = i * ROW_HEIGHT
+      val = sanitize_xml(text)
+      # Clickable action rows use <link>; status uses <label>
+      if text.start_with?('Apply selected')
+        out << "<link id='hl_r#{i}' value='#{val}' cmd='*hl apply' justify='left' left='2' top='#{top}' width='#{PANEL_WIDTH}' height='#{ROW_HEIGHT}' />"
+      elsif text.start_with?('Standard package')
+        out << "<link id='hl_r#{i}' value='#{val}' cmd='*hl package' justify='left' top='#{top}' left='2' width='#{PANEL_WIDTH}' height='#{ROW_HEIGHT}' />"
+      elsif text.start_with?('Backup only')
+        out << "<link id='hl_r#{i}' value='#{val}' cmd='*hl backup' justify='left' top='#{top}' left='2' width='#{PANEL_WIDTH}' height='#{ROW_HEIGHT}' />"
+      elsif text =~ /\A\[/
+        id = IMPROVERS.find { |_i, lab, _| text.include?(lab) }&.first
+        cmd = id ? "*hl toggle #{id}" : '*hl status'
+        out << "<link id='hl_r#{i}' value='#{val}' cmd='#{cmd}' justify='left' left='2' top='#{top}' width='#{PANEL_WIDTH}' height='#{ROW_HEIGHT}' />"
+      else
+        out << "<label id='hl_r#{i}' value='#{val}' justify='left' left='2' top='#{top}' width='#{PANEL_WIDTH}' height='#{ROW_HEIGHT}' />"
+      end
+    end
+    out << '</dialogData>'
+    out
+  end
+
+  def self.refresh_panel!
+    _respond(build_dialog)
+  end
+end
+# END saga_hl/panel
+
+# BEGIN saga_hl/commands
+module SagaHl
+  def self.handle_command(raw)
+    cmd = raw.to_s.strip.sub(/\A;?saga[_-]?hl\s+/i, '').sub(/\A\*hl\s+/i, '')
+    cmd = 'help' if cmd.empty? || cmd =~ /\Ahelp\z/i
+
+    case cmd
+    when /\Ahelp\z/i
+      [
+        'saga-hl commands:',
+        '  *hl status | *hl toggle <improver> | *hl apply | *hl package',
+        '  *hl backup | *hl write | *hl restore <backup-id>',
+        '  Improvers: ' + IMPROVERS.map { |i, _, _| i.to_s }.join(', '),
+        '  Script source updates: outside the game only (see script header).'
+      ].each { |l| respond l }
+      :handled
+    when /\Astatus\z/i
+      status_lines.each { |l| echo l }
+      refresh_panel!
+      :handled
+    when /\Atoggle\s+(\S+)\z/i
+      begin
+        on = toggle!(Regexp.last_match(1))
+        echo "saga-hl: #{Regexp.last_match(1)} → #{on ? 'ON' : 'off'}"
+      rescue StandardError => e
+        echo "saga-hl: #{e.message}"
+      end
+      refresh_panel!
+      :handled
+    when /\Aapply\z/i
+      begin
+        info = apply_pipeline(mode: :selected)
+        echo "saga-hl: #{last_status}"
+        echo_import_restore(info)
+      rescue StandardError => e
+        echo "saga-hl apply failed: #{e.message}"
+      end
+      refresh_panel!
+      :handled
+    when /\Apackage\z/i
+      begin
+        info = apply_pipeline(mode: :package)
+        echo "saga-hl: #{last_status}"
+        echo_import_restore(info)
+      rescue StandardError => e
+        echo "saga-hl package failed: #{e.message}"
+      end
+      refresh_panel!
+      :handled
+    when /\Abackup\z/i
+      begin
+        set = load_set_from_prefs
+        bak = save_backup(set, reason: 'manual')
+        self.last_status = "backup #{bak} (#{(set['highlights'] || []).size} rules)"
+        echo "saga-hl: #{last_status}"
+      rescue StandardError => e
+        echo "saga-hl backup failed: #{e.message}"
+      end
+      refresh_panel!
+      :handled
+    when /\Awrite\z/i
+      begin
+        set = working || load_set_from_prefs
+        path = write_import(set)
+        self.last_status = "wrote #{path} (#{(set['highlights'] || []).size} rules)"
+        echo "saga-hl: #{last_status}"
+        echo_import_restore('importPath' => path, 'backup' => last_backup_id || '(make a backup first)')
+      rescue StandardError => e
+        echo "saga-hl write failed: #{e.message}"
+      end
+      refresh_panel!
+      :handled
+    when /\Arestore\s+(\S+)\z/i
+      begin
+        bid = Regexp.last_match(1)
+        path = restore_backup_to_import(bid)
+        self.last_status = "restored backup #{bid} → #{path}"
+        echo "saga-hl: #{last_status}"
+        echo 'Now: Saga → Import Settings → Custom highlights → that file.'
+      rescue StandardError => e
+        echo "saga-hl restore failed: #{e.message}"
+      end
+      refresh_panel!
+      :handled
+    else
+      echo "saga-hl: unknown command #{cmd.inspect} — *hl help"
+      :handled
+    end
+  end
+end
+# END saga_hl/commands
+
+# --- boot ---
+SagaHl.ensure_toggles!
+SagaHl.dirty = false
+begin
+  SagaHl.working = SagaHl.load_set_from_prefs
+  SagaHl.last_status = "loaded #{(SagaHl.working['highlights'] || []).size} rules from prefs"
+rescue StandardError => e
+  SagaHl.last_status = "load failed: #{e.message}"
+  SagaHl.working = SagaHl.empty_set(SagaHl.detect_char_key)
+end
+
+hl_upstream_hook_id = "#{Script.current.name}_upstream"
+UpstreamHook.remove(hl_upstream_hook_id) rescue nil
+UpstreamHook.add(hl_upstream_hook_id, proc do |command|
+  c = command.to_s.strip
+  if c =~ /\A\*hl\b/i || c =~ /\A;?saga[_-]?hl\b/i
+    SagaHl.handle_command(c)
+    nil
+  else
+    command
+  end
+end)
+
+_respond(SagaHl.open_dialog_xml)
+pause 0.2
+_respond(SagaHl.build_dialog)
+
+before_dying do
+  UpstreamHook.remove(hl_upstream_hook_id) rescue nil
+  _respond("<closeDialog id='#{SagaHl::DIALOG_ID}'/>")
+end
+
+echo "saga-hl panel active. *hl help — Windows/Linux paths. Apply writes #{SagaHl::IMPORT_BASENAME}; then Import Settings."
+SagaHl.status_lines.each { |l| echo l }
+
+loop do
+  if SagaHl.dirty
+    SagaHl.dirty = false
+    _respond(SagaHl.build_dialog)
+  end
+  pause 0.5
+end
