@@ -820,8 +820,8 @@ module SagaHl
       pr_by[k] = h
     end
 
-    ex_groups = (existing['groups'] || []).map { |g| g['name'].to_s }.reject(&:empty?).to_set
-    pr_groups = (proposed['groups'] || []).map { |g| g['name'].to_s }.reject(&:empty?).to_set
+    ex_groups = (existing['groups'] || []).map { |g| g['name'].to_s }.reject(&:empty?).uniq
+    pr_groups = (proposed['groups'] || []).map { |g| g['name'].to_s }.reject(&:empty?).uniq
 
     report = {
       'character' => (proposed['character'] || existing['character']).to_s,
@@ -831,8 +831,8 @@ module SagaHl
       'removed' => [],
       'changed' => [],
       'unchanged' => 0,
-      'groupsAdded' => (pr_groups - ex_groups).to_a.sort,
-      'groupsRemoved' => (ex_groups - pr_groups).to_a.sort
+      'groupsAdded' => (pr_groups - ex_groups).sort,
+      'groupsRemoved' => (ex_groups - pr_groups).sort
     }
 
     all_keys = (ex_by.keys + pr_by.keys).uniq
@@ -1885,24 +1885,14 @@ module SagaHl
     y += BTN_HEIGHT + 4
 
     slice.each_with_index do |item, idx|
-      kind = item['_kind'] || diff_filter.to_s
-      kind = 'changed' if kind == 'all' && item['changes']
-      kind = 'added' if kind == 'all' && item['color'] && !item['changes'] && diff_filter == 'all' && (report['added'] || []).include?(item)
-      # Prefer explicit marker
-      marker = case
-               when item['changes'] then '~'
-               when (report['removed'] || []).any? { |r| r.equal?(item) || (r['pattern'] == item['pattern'] && r['color'] == item['color'] && !item.key?('changes')) && kind != 'added' && (diff_filter == 'removed' || item['_kind'] == 'removed')
-                 then '-'
-               when item['_kind'] == 'removed' then '-'
-               when item['_kind'] == 'added' then '+'
-               when item['_kind'] == 'changed' then '~'
-               when item['changes'] then '~'
-               else '+'
-               end
-      if item['changes']
-        bits = item['changes'].first(4).map { |ch| "#{ch['field']}:#{ch['before']}->#{ch['after']}" }.join(' ')
+      kind = item['_kind'].to_s
+      kind = 'changed' if kind.empty? && item['changes']
+      kind = 'added' if kind.empty?
+      if kind == 'changed' || item['changes']
+        bits = (item['changes'] || []).first(4).map { |ch| "#{ch['field']}:#{ch['before']}->#{ch['after']}" }.join(' ')
         line = truncate_text("~ #{item['pattern']}  #{bits}", 110)
       else
+        marker = kind == 'removed' ? '-' : '+'
         en = item['enabled'] == false ? 'off' : 'on'
         g = item['group'] || '-'
         line = truncate_text("#{marker} [#{ascii_label(g)}] #{en} #{item['color']}  #{item['pattern']}", 110)
@@ -2230,6 +2220,15 @@ module SagaHl
         msgs << "saga-hl sel failed: #{e.message}"
       end
       self.dirty = true
+    when /\Adelmatch\z/i
+      begin
+        n = delete_matching!
+        self.last_status = "deleted #{n} matching rule(s)"
+        msgs << "saga-hl: #{last_status}"
+      rescue StandardError => e
+        msgs << "saga-hl delmatch failed: #{e.message}"
+      end
+      self.dirty = true
     when /\Adel(?:\s+(\S+))?\z/i
       begin
         id = Regexp.last_match(1)
@@ -2238,15 +2237,6 @@ module SagaHl
         msgs << "saga-hl: #{last_status}"
       rescue StandardError => e
         msgs << "saga-hl del failed: #{e.message}"
-      end
-      self.dirty = true
-    when /\Adelmatch\z/i
-      begin
-        n = delete_matching!
-        self.last_status = "deleted #{n} matching rule(s)"
-        msgs << "saga-hl: #{last_status}"
-      rescue StandardError => e
-        msgs << "saga-hl delmatch failed: #{e.message}"
       end
       self.dirty = true
     when /\Aenablematch\s+(\S+)\z/i
@@ -2361,6 +2351,15 @@ module SagaHl
       self.last_status = "backup selected #{bak_selected}"
       msgs << "saga-hl: #{last_status}"
       self.dirty = true
+    when /\Abak\s+load-starter\z/i
+      begin
+        load_starter_into_working!
+        self.last_status = "loaded starter into working (#{(working['highlights'] || []).size} rules)"
+        msgs << "saga-hl: #{last_status}"
+      rescue StandardError => e
+        msgs << "saga-hl bak load-starter failed: #{e.message}"
+      end
+      self.dirty = true
     when /\Abak\s+load\s+(\S+)\z/i
       begin
         bid = Regexp.last_match(1)
@@ -2404,15 +2403,6 @@ module SagaHl
         msgs << "saga-hl: #{last_status}"
       rescue StandardError => e
         msgs << "saga-hl bak starter failed: #{e.message}"
-      end
-      self.dirty = true
-    when /\Abak\s+load-starter\z/i
-      begin
-        load_starter_into_working!
-        self.last_status = "loaded starter into working (#{(working['highlights'] || []).size} rules)"
-        msgs << "saga-hl: #{last_status}"
-      rescue StandardError => e
-        msgs << "saga-hl bak load-starter failed: #{e.message}"
       end
       self.dirty = true
     when /\Achar\s+(\S+)\z/i
