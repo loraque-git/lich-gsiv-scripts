@@ -468,7 +468,8 @@ module SagaHl
     "<closeDialog id='#{DIALOG_ID}'/><openDialog type='dynamic' id='#{DIALOG_ID}' title='saga-hl' target='#{DIALOG_ID}' scroll='manual' location='main' resident='true'><dialogData id='#{DIALOG_ID}'></dialogData></openDialog>"
   end
 
-  def self.build_dialog
+  # Returns [text, cmd_or_nil] rows. cmd nil => <label>; otherwise <link>.
+  def self.panel_rows
     ensure_toggles!
     set = working || (begin
       load_set_from_prefs
@@ -476,39 +477,31 @@ module SagaHl
       empty_set(detect_char_key)
     end)
     self.char_key ||= set['character']
+    n = (set['highlights'] || []).size
     rows = []
-    rows << "saga-hl  #{char_key}  ·  #{(set['highlights'] || []).size} rules"
-    rows << "prefs: #{File.basename(File.dirname(prefs_path))}/prefs.json"
-    IMPROVERS.each do |id, label, _|
-      implemented = STANDARD_PACKAGE.include?(id) || id == :dedupe
-      mark = toggles[id] ? '[ON]' : '[ ]'
-      suffix = implemented ? "(*hl toggle #{id})" : '(coming soon)'
-      rows << "#{mark} #{label}   #{suffix}"
+    rows << ["saga-hl  ·  #{char_key}  ·  #{n} rules", nil]
+    implemented_improvers.each do |id, label, _, _|
+      mark = toggles[id] ? '[ON]' : '[  ]'
+      rows << ["#{mark}  #{label}", "*hl toggle #{id}"]
     end
-    rows << "----"
-    rows << "Apply selected   (*hl apply)"
-    rows << "Standard package (*hl package)  = #{STANDARD_PACKAGE.join('+')}"
-    rows << "Backup only      (*hl backup)"
-    rows << "Restore backup   (*hl restore <id>)"
-    rows << "----"
-    rows << "After Apply: Saga → Import Settings → #{IMPORT_BASENAME}"
-    rows << (last_status.to_s.empty? ? 'Ready.' : last_status.to_s)
+    rows << ['----', nil]
+    rows << ['Apply', '*hl apply']
+    rows << ['Backup', '*hl backup']
+    rows << ['Write import', '*hl write']
+    rows << ['----', nil]
+    rows << ["Import Settings → #{IMPORT_BASENAME}", nil]
+    status = last_status.to_s.empty? ? 'Ready.' : last_status.to_s
+    rows << [status, nil]
+    rows
+  end
 
+  def self.build_dialog
     out = String.new("<dialogData id='#{DIALOG_ID}' clear='t'>")
-    rows.each_with_index do |text, i|
+    panel_rows.each_with_index do |(text, cmd), i|
       top = i * ROW_HEIGHT
       val = sanitize_xml(text)
-      # Clickable action rows use <link>; status uses <label>
-      if text.start_with?('Apply selected')
-        out << "<link id='hl_r#{i}' value='#{val}' cmd='*hl apply' justify='left' left='2' top='#{top}' width='#{PANEL_WIDTH}' height='#{ROW_HEIGHT}' />"
-      elsif text.start_with?('Standard package')
-        out << "<link id='hl_r#{i}' value='#{val}' cmd='*hl package' justify='left' top='#{top}' left='2' width='#{PANEL_WIDTH}' height='#{ROW_HEIGHT}' />"
-      elsif text.start_with?('Backup only')
-        out << "<link id='hl_r#{i}' value='#{val}' cmd='*hl backup' justify='left' top='#{top}' left='2' width='#{PANEL_WIDTH}' height='#{ROW_HEIGHT}' />"
-      elsif text =~ /\A\[/ && text !~ /coming soon/
-        id = IMPROVERS.find { |_i, lab, _| text.include?(lab) }&.first
-        cmd = id ? "*hl toggle #{id}" : '*hl status'
-        out << "<link id='hl_r#{i}' value='#{val}' cmd='#{cmd}' justify='left' left='2' top='#{top}' width='#{PANEL_WIDTH}' height='#{ROW_HEIGHT}' />"
+      if cmd
+        out << "<link id='hl_r#{i}' value='#{val}' cmd='#{sanitize_xml(cmd)}' justify='left' left='2' top='#{top}' width='#{PANEL_WIDTH}' height='#{ROW_HEIGHT}' />"
       else
         out << "<label id='hl_r#{i}' value='#{val}' justify='left' left='2' top='#{top}' width='#{PANEL_WIDTH}' height='#{ROW_HEIGHT}' />"
       end
@@ -516,111 +509,107 @@ module SagaHl
     out << '</dialogData>'
     out
   end
-
-  def self.refresh_panel!
-    _respond(build_dialog)
-  end
 end
 # END saga_hl/panel
 
 # BEGIN saga_hl/commands
 module SagaHl
+  # Pure work + message list. No echo/_respond here — boot loop does that.
+  # Sets dirty when the panel should redraw.
   def self.handle_command(raw)
     cmd = raw.to_s.strip.sub(/\A;?saga[_-]?hl\s+/i, '').sub(/\A\*hl\s+/i, '')
     cmd = 'help' if cmd.empty? || cmd =~ /\Ahelp\z/i
+    msgs = []
 
     case cmd
     when /\Ahelp\z/i
-      [
-        'saga-hl commands:',
-        '  *hl status | *hl toggle <improver> | *hl apply | *hl package',
+      msgs.concat([
+        'saga-hl:',
+        '  click Apply / Backup / Write import in the panel',
+        '  *hl status | *hl toggle <name> | *hl apply | *hl package',
         '  *hl backup | *hl write | *hl restore <backup-id>',
-        '  Improvers: ' + IMPROVERS.map { |i, _, _| i.to_s }.join(', '),
-        '  Script source updates: outside the game only (see script header).'
-      ].each { |l| respond l }
-      :handled
+        "  live improvers: #{implemented_improvers.map { |i, _, _, _| i }.join(', ')}"
+      ])
     when /\Astatus\z/i
-      status_lines.each { |l| echo l }
-      refresh_panel!
-      :handled
+      msgs.concat(status_lines)
+      self.dirty = true
     when /\Atoggle\s+(\S+)\z/i
       begin
-        on = toggle!(Regexp.last_match(1))
-        echo "saga-hl: #{Regexp.last_match(1)} → #{on ? 'ON' : 'off'}"
+        name = Regexp.last_match(1)
+        on = toggle!(name)
+        msgs << "saga-hl: #{name} → #{on ? 'ON' : 'off'}"
       rescue StandardError => e
-        echo "saga-hl: #{e.message}"
+        msgs << "saga-hl: #{e.message}"
       end
-      refresh_panel!
-      :handled
+      self.dirty = true
     when /\Aapply\z/i
       begin
         info = apply_pipeline(mode: :selected)
-        echo "saga-hl: #{last_status}"
-        echo_import_restore(info)
+        msgs << "saga-hl: #{last_status}"
+        msgs.concat(import_restore_lines(info))
       rescue StandardError => e
-        echo "saga-hl apply failed: #{e.message}"
+        msgs << "saga-hl apply failed: #{e.message}"
       end
-      refresh_panel!
-      :handled
+      self.dirty = true
     when /\Apackage\z/i
       begin
         info = apply_pipeline(mode: :package)
-        echo "saga-hl: #{last_status}"
-        echo_import_restore(info)
+        msgs << "saga-hl: #{last_status}"
+        msgs.concat(import_restore_lines(info))
       rescue StandardError => e
-        echo "saga-hl package failed: #{e.message}"
+        msgs << "saga-hl package failed: #{e.message}"
       end
-      refresh_panel!
-      :handled
+      self.dirty = true
     when /\Abackup\z/i
       begin
         set = load_set_from_prefs
         bak = save_backup(set, reason: 'manual')
         self.last_status = "backup #{bak} (#{(set['highlights'] || []).size} rules)"
-        echo "saga-hl: #{last_status}"
+        msgs << "saga-hl: #{last_status}"
       rescue StandardError => e
-        echo "saga-hl backup failed: #{e.message}"
+        msgs << "saga-hl backup failed: #{e.message}"
       end
-      refresh_panel!
-      :handled
+      self.dirty = true
     when /\Awrite\z/i
       begin
         set = working || load_set_from_prefs
         path = write_import(set)
-        self.last_status = "wrote #{path} (#{(set['highlights'] || []).size} rules)"
-        echo "saga-hl: #{last_status}"
-        echo_import_restore('importPath' => path, 'backup' => last_backup_id || '(make a backup first)')
+        self.last_status = "wrote #{File.basename(path)} (#{(set['highlights'] || []).size} rules)"
+        msgs << "saga-hl: #{last_status}"
+        msgs.concat(import_restore_lines('importPath' => path, 'backup' => last_backup_id || '(backup first)'))
       rescue StandardError => e
-        echo "saga-hl write failed: #{e.message}"
+        msgs << "saga-hl write failed: #{e.message}"
       end
-      refresh_panel!
-      :handled
+      self.dirty = true
     when /\Arestore\s+(\S+)\z/i
       begin
         bid = Regexp.last_match(1)
         path = restore_backup_to_import(bid)
-        self.last_status = "restored backup #{bid} → #{path}"
-        echo "saga-hl: #{last_status}"
-        echo 'Now: Saga → Import Settings → Custom highlights → that file.'
+        self.last_status = "restored #{bid}"
+        msgs << "saga-hl: #{last_status} → #{path}"
+        msgs << 'Saga → Import Settings → Custom highlights → that file.'
       rescue StandardError => e
-        echo "saga-hl restore failed: #{e.message}"
+        msgs << "saga-hl restore failed: #{e.message}"
       end
-      refresh_panel!
-      :handled
+      self.dirty = true
     else
-      echo "saga-hl: unknown command #{cmd.inspect} — *hl help"
-      :handled
+      msgs << "saga-hl: unknown #{cmd.inspect} — *hl help"
     end
+    msgs
   end
 end
 # END saga_hl/commands
 
 # --- boot ---
+# UpstreamHook only queues. File I/O + echo/_respond run on this script's
+# main loop (same pattern as exp_sagapanel's heavy *exp refresh / importlogs).
+# If the hook raises, Lich removes it — so keep the hook trivial.
 SagaHl.ensure_toggles!
 SagaHl.dirty = false
+SagaHl.pending_cmd = nil
 begin
   SagaHl.working = SagaHl.load_set_from_prefs
-  SagaHl.last_status = "loaded #{(SagaHl.working['highlights'] || []).size} rules from prefs"
+  SagaHl.last_status = "loaded #{(SagaHl.working['highlights'] || []).size} rules"
 rescue StandardError => e
   SagaHl.last_status = "load failed: #{e.message}"
   SagaHl.working = SagaHl.empty_set(SagaHl.detect_char_key)
@@ -631,7 +620,7 @@ UpstreamHook.remove(hl_upstream_hook_id) rescue nil
 UpstreamHook.add(hl_upstream_hook_id, proc do |command|
   c = command.to_s.strip
   if c =~ /\A\*hl\b/i || c =~ /\A;?saga[_-]?hl\b/i
-    SagaHl.handle_command(c)
+    SagaHl.pending_cmd = c
     nil
   else
     command
@@ -647,13 +636,22 @@ before_dying do
   _respond("<closeDialog id='#{SagaHl::DIALOG_ID}'/>")
 end
 
-echo "saga-hl panel active. *hl help — Windows/Linux paths. Apply writes #{SagaHl::IMPORT_BASENAME}; then Import Settings."
+echo "saga-hl panel active. Click Apply / Backup / Write import, or *hl help."
 SagaHl.status_lines.each { |l| echo l }
 
 loop do
+  if SagaHl.pending_cmd
+    raw = SagaHl.pending_cmd
+    SagaHl.pending_cmd = nil
+    begin
+      SagaHl.handle_command(raw).each { |line| echo line }
+    rescue StandardError => e
+      echo "saga-hl error: #{e.message}"
+    end
+  end
   if SagaHl.dirty
     SagaHl.dirty = false
     _respond(SagaHl.build_dialog)
   end
-  pause 0.5
+  pause 0.2
 end
