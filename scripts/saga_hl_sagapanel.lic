@@ -44,9 +44,12 @@
   Author: loraque (loraque@gmail.com)
   Required: Lich >= 5.12.0
   Tags: saga, frontend, panel, highlights, import
-  Version: 0.4.1
+  Version: 0.4.2
 
   Recently changed:
+    0.4.2 (2026-10-19)
+      - Story echoes use [lich] prefix for easy Saga filter.
+      - Dedupe exact also collapses casefold-same patterns when colors are close.
     0.4.1 (2026-10-19)
       - Fix Improve+write wiping a fresh Sync/Name pack: use the panel working
         set (not prefs) so dedupe runs on the merged rules, then write import.
@@ -117,12 +120,15 @@ module SagaHl
 
   # id, label, default_on, implemented
   IMPROVERS = [
-    [:dedupe, 'Dedupe exact', true, true],
+    [:dedupe, 'Dedupe exact/color', true, true],
     [:gender, 'Gender pairs', false, false],
     [:spellprep, 'Enemy spell prep', false, false],
     [:palette, 'Palette colors', false, false],
     [:group_styles, 'Empath/Cleric groups', false, false]
   ].freeze
+
+  # Max RGB Euclidean distance for "close" colors (#RRGGBB).
+  COLOR_CLOSE_DIST = 40.0
 
   STANDARD_PACKAGE = [:dedupe].freeze
 
@@ -577,24 +583,81 @@ end
 
 # BEGIN saga_hl/improve_dedupe
 module SagaHl
-  # Exact pattern duplicates only. Keeps richest / enabled rule.
-  # Local AI: extend carefully; do not delete near-dupes here.
+  def self.parse_hex_color(color)
+    s = color.to_s.strip
+    return nil unless s =~ /\A#?([0-9a-fA-F]{6})\z/
+    hex = Regexp.last_match(1)
+    [hex[0, 2].to_i(16), hex[2, 4].to_i(16), hex[4, 6].to_i(16)]
+  end
+
+  def self.color_distance(a, b)
+    ca = parse_hex_color(a)
+    cb = parse_hex_color(b)
+    return nil unless ca && cb
+    Math.sqrt(ca.zip(cb).sum { |x, y| (x - y)**2 })
+  end
+
+  def self.colors_close?(a, b, max_dist: COLOR_CLOSE_DIST)
+    d = color_distance(a, b)
+    return false if d.nil?
+    d <= max_dist
+  end
+
+  def self.rank_highlights(items)
+    items.sort_by { |h| [hl_richness(h), h['enabled'] ? 1 : 0] }.reverse
+  end
+
+  # Exact pattern duplicates, plus casefold-same patterns when colors are close.
+  # Keeps richest / enabled rule. Does not delete far-color casefold pairs.
   def self.improve_dedupe(set)
-    by = Hash.new { |h, k| h[k] = [] }
-    (set['highlights'] || []).each { |h| by[h['pattern'].to_s] << h }
+    highlights = set['highlights'] || []
     keep_ids = {}
-    removed = 0
-    by.each_value do |items|
+    removed_exact = 0
+    removed_color = 0
+
+    by_exact = Hash.new { |h, k| h[k] = [] }
+    highlights.each { |h| by_exact[h['pattern'].to_s] << h }
+
+    survivors = []
+    by_exact.each_value do |items|
       if items.size == 1
-        keep_ids[items[0]['id']] = true
+        survivors << items[0]
         next
       end
-      ranked = items.sort_by { |h| [hl_richness(h), h['enabled'] ? 1 : 0] }.reverse
-      keep_ids[ranked[0]['id']] = true
-      removed += items.size - 1
+      ranked = rank_highlights(items)
+      survivors << ranked[0]
+      removed_exact += items.size - 1
     end
-    set['highlights'] = (set['highlights'] || []).select { |h| keep_ids[h['id']] }
-    { 'removed' => removed }
+
+    by_fold = Hash.new { |h, k| h[k] = [] }
+    survivors.each { |h| by_fold[h['pattern'].to_s.downcase.strip] << h }
+
+    final = []
+    by_fold.each_value do |items|
+      if items.size == 1
+        final << items[0]
+        next
+      end
+      ranked = rank_highlights(items)
+      keeper = ranked[0]
+      final << keeper
+      ranked[1..].each do |dup|
+        if colors_close?(keeper['color'], dup['color'])
+          removed_color += 1
+        else
+          final << dup
+        end
+      end
+    end
+
+    keep_ids = {}
+    final.each { |h| keep_ids[h['id']] = true }
+    set['highlights'] = highlights.select { |h| keep_ids[h['id']] }
+    {
+      'removed' => removed_exact + removed_color,
+      'removedExact' => removed_exact,
+      'removedCloseColor' => removed_color
+    }
   end
 end
 # END saga_hl/improve_dedupe
@@ -721,7 +784,12 @@ module SagaHl
     dedupe_note = ''
     if results['dedupe']
       rem = results['dedupe']['removed'].to_i
-      dedupe_note = rem.positive? ? " (deduped -#{rem})" : ' (dedupe 0)'
+      close = results['dedupe']['removedCloseColor'].to_i
+      dedupe_note = if rem.positive?
+        close.positive? ? " (deduped -#{rem}, close-color -#{close})" : " (deduped -#{rem})"
+      else
+        ' (dedupe 0)'
+      end
     end
     self.last_status = "Improve+write done - backup #{bak} - #{(working['highlights'] || []).size} rules#{dedupe_note}"
     self.dirty = true
