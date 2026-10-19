@@ -1063,16 +1063,18 @@ module SagaHl
   def self.select_rule!(token)
     ensure_working!
     token = token.to_s.strip
-    if token =~ /\A\d+\z/
+    # Prefer exact id match (ids may be numeric). Fall back to page index.
+    h = find_highlight(working, token)
+    if h
+      self.selected_id = h['id']
+    elsif token =~ /\A\d+\z/
       info = browse_page_slice
       idx = token.to_i
       h = info['items'][idx]
       raise "no rule at index #{idx} on this page" unless h
       self.selected_id = h['id']
     else
-      h = find_highlight(working, token)
-      raise "rule not found: #{token}" unless h
-      self.selected_id = h['id']
+      raise "rule not found: #{token}"
     end
     selected_id
   end
