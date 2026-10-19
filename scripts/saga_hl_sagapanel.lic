@@ -6,61 +6,72 @@
   Flow (always):
     1. Read highlights from Saga prefs.json (does not write prefs while Saga runs)
     2. Backup under saga-hl-backups
-    3. Apply standard package or individual improvers (panel toggles)
+    3. Optionally run enabled improvers, name pack, or sync-from
     4. Write saga-highlights.json (Import Settings file)
     5. Tell you how to Import in Saga, and how to restore if you dislike it
 
   In-game:
     ;saga-hl / ;saga_hl_sagapanel - Start the panel
-    Panel: Instance tabs · Character dropdown · Improve · Apply/Backup/Write · Restore
+    Panel: Character dropdown, Improve toggles, Improve+write / Backup / Write only,
+           Name pack, Copy-from + Sync, Restore
     *hl help                    - Commands
     *hl status                  - Counts / paths
     *hl char <name|instance>    - Switch working character
-    *hl instance <id>           - Prime / Test / …
+    *hl instance <id>           - CLI only: filter/switch by instance (Prime/Test/...)
     *hl set <improver> 0|1      - Checkbox-driven improver state
     *hl toggle <name>           - Flip an improver on/off
-    *hl apply                   - Backup → enabled improvers → write import JSON
+    *hl apply                   - Backup -> enabled improvers -> write import JSON
     *hl package                 - Enable standard package, then apply
     *hl backup                  - Snapshot only
     *hl write                   - Write import JSON from working set (no improvers)
+    *hl namepack                - HM roster + Saga log names (skip existing) -> write import
+    *hl sync <from-key>         - Copy missing rules from another character -> write import
     *hl restore <backup-id>     - Rewrite import JSON from that backup
 
-  Outside the game (script source / local AI — NOT a panel action):
+  Improve+write vs Write only:
+    Improve+write (Apply): backup, run every ON improver, then write the import file.
+    Write only: write the current working set to the import file. No improvers.
+
+  Outside the game (script source / local AI - NOT a panel action):
     See "Local AI / maintainer" at the end of this header.
     Improve one # BEGIN saga_hl/... block at a time; bump Version + changelog.
 
-  Windows-first: prefs/backups under %APPDATA%\saga\; import JSON under %USERPROFILE%.
+  Windows-first: prefs/backups/logs under %APPDATA%\saga\; import JSON under %USERPROFILE%.
+  Name pack uses saga-hl CLI (import-hm-names + scan-names); logs are Saga config/logs.
 
   Author: loraque (loraque@gmail.com)
   Required: Lich >= 5.12.0
   Tags: saga, frontend, panel, highlights, import
-  Version: 0.3.0
+  Version: 0.4.0
 
   Recently changed:
+    0.4.0 (2026-10-19)
+      - Remove Instance tabs from panel (keep *hl instance as CLI only).
+      - ASCII-clean panel and story text (no middot/em-dash/{braces}).
+      - Clarify Improve+write vs Write only (both write import; Apply also runs improvers).
+      - Name pack button: HM profession roster + Saga log names via saga-hl CLI.
+      - Copy-from dropdown + Sync button (skip existing patterns into current char).
     0.3.0 (2026-10-18)
-      - Redesign: Instance tabs (Prime vs Test/other), Character dropdown,
-        rule counts, native checkBox / cmdButton / dropDownBox, restore
-        picker, coach line for next step. Still queues work on main loop.
+      - Redesign: Instance tabs, Character dropdown, rule counts, native widgets,
+        restore picker, coach line. Queues work on main loop.
     0.2.1 (2026-10-18)
-      - Fix *hl never matching UpstreamHook: FE sends <c>*hl … and working
-        panels match /\*cmd/ without \A. Strip <c> and match like *exp/*ah.
+      - Fix *hl never matching UpstreamHook: FE sends <c>*hl and working panels
+        match /*cmd/ without \A. Strip <c> and match like *exp/*ah.
     0.2.0 (2026-10-18)
-      - Fix dead panel clicks: queue *hl work on the script main loop
-        (UpstreamHook only sets a flag; echo/_respond stay top-level).
+      - Fix dead panel clicks: queue *hl work on the script main loop.
       - Cleaner panel: header, live toggles, Apply / Backup / Write import.
-        Hide unimplemented improvers until they ship.
     0.1.0 (2026-10-18)
       - Initial panel: read prefs, backup, dedupe improver, write import JSON,
         Import Settings + restore prompts. Windows/Linux paths.
 
   Local AI / maintainer (outside game):
-    Block map — edit only the named region; keep markers intact:
+    Block map - edit only the named region; keep markers intact:
       saga_hl/paths       OS paths, character key
-      saga_hl/model       highlight/group hashes, richness, clone
+      saga_hl/model       highlight/group hashes, richness, clone, ids, merge
       saga_hl/io          prefs read, import JSON write, JSON helpers
       saga_hl/backup      versioned backups + restore-to-import
       saga_hl/improve_dedupe
-      saga_hl/pipeline    apply selected / standard package
+      saga_hl/pipeline    apply selected / standard package / namepack / sync
       saga_hl/messaging   Import Settings + restore user copy
       saga_hl/panel       dialog XML + toggle state
       saga_hl/commands    *hl / ;saga-hl routing
@@ -72,6 +83,7 @@ no_kill_all
 require 'json'
 require 'fileutils'
 require 'time'
+require 'open3'
 
 # BEGIN saga_hl/paths
 module SagaHl
@@ -82,7 +94,7 @@ module SagaHl
   ROW_HEIGHT = 18
   DROP_HEIGHT = 24
   BTN_HEIGHT = 22
-  PANEL_WIDTH = 360
+  PANEL_WIDTH = 380
   BACKUP_KEEP = 40
   RESTORE_PICK_LIMIT = 8
   IMPORT_BASENAME = 'saga-highlights.json'
@@ -109,7 +121,7 @@ module SagaHl
   class << self
     attr_accessor :toggles, :last_backup_id, :last_import_path, :last_status,
                   :working, :dirty, :char_key, :pending_cmd, :instance_filter,
-                  :last_action
+                  :last_action, :sync_source, :_id_seq
   end
 
   def self.windows?
@@ -143,14 +155,43 @@ module SagaHl
     File.join(saga_config_dir, 'saga-hl-backups')
   end
 
+  def self.logs_root
+    File.join(saga_config_dir, 'logs')
+  end
+
   def self.import_path
     File.join(user_home, IMPORT_BASENAME)
+  end
+
+  def self.lich_dir
+    if defined?(LICH_DIR) && LICH_DIR.to_s != ''
+      LICH_DIR.to_s
+    elsif ENV['LICH_DIR'].to_s != ''
+      ENV['LICH_DIR']
+    else
+      File.join(user_home, 'Lich5')
+    end
+  end
+
+  def self.find_saga_hl_bin
+    candidates = []
+    candidates << File.join(lich_dir, 'tools', 'saga-highlights', 'saga-hl')
+    candidates << File.join(user_home, '.local', 'bin', 'saga-hl')
+    candidates << File.join(user_home, 'Lich5', 'tools', 'saga-highlights', 'saga-hl')
+    which = begin
+      out, = Open3.capture2('which', 'saga-hl')
+      out.to_s.strip
+    rescue StandardError
+      ''
+    end
+    candidates << which unless which.empty?
+    candidates.find { |p| p.to_s != '' && File.file?(p) && File.executable?(p) }
   end
 
   def self.char_name
     if defined?(Char) && Char.respond_to?(:name) && !Char.name.to_s.strip.empty?
       Char.name.to_s.strip
-    elsif defined?(XMLData) && XMLData.respond_to?(:name) && !XMLData.name.to_s.strip.empty?
+    elsif defined?(XMLData) && XMLData.respond_to?(:name) && !XMLData.name.to_s.empty?
       XMLData.name.to_s.strip
     else
       'unknown'
@@ -191,6 +232,13 @@ module SagaHl
 
   def self.pretty_instance(inst)
     INSTANCE_TITLES[inst.to_s.downcase] || inst.to_s.split(/[-_]/).map { |p| p[0].upcase + p[1..] }.join(' ')
+  end
+
+  def self.pretty_char_label(key, with_count: false)
+    name, inst = split_char_key(key)
+    base = "#{pretty_char_name(key)} (#{pretty_instance(inst)})"
+    return base unless with_count
+    "#{base} #{rule_count_for(key)}"
   end
 
   def self.list_character_keys
@@ -247,6 +295,11 @@ module SagaHl
     score
   end
 
+  def self.new_id(prefix)
+    self._id_seq = (_id_seq || 0) + 1
+    "#{prefix}#{(Time.now.to_f * 1000).to_i}-#{_id_seq}"
+  end
+
   def self.clone_set(set)
     {
       'character' => set['character'],
@@ -263,6 +316,84 @@ module SagaHl
     return '' if group_id.to_s.empty?
     g = (set['groups'] || []).find { |x| x['id'] == group_id }
     g ? g['name'].to_s : group_id.to_s
+  end
+
+  # Merge source into target by exact pattern. mode: skip | replace | clear
+  def self.merge_sets!(target, source, mode: 'skip', copy_groups: true)
+    mode = mode.to_s.downcase
+    removed = 0
+    if mode == 'clear'
+      removed = (target['highlights'] || []).size
+      target['highlights'] = []
+    end
+
+    target['groups'] ||= []
+    target['highlights'] ||= []
+    src_groups = {}
+    (source['groups'] || []).each { |g| src_groups[g['id']] = g }
+    tgt_by_name = {}
+    target['groups'].each { |g| tgt_by_name[g['name'].to_s.downcase] = g }
+
+    if copy_groups
+      (source['groups'] || []).each do |g|
+        key = g['name'].to_s.downcase
+        next if key.empty? || tgt_by_name.key?(key)
+        ng = g.dup
+        ng['id'] = new_id('hlg1-')
+        target['groups'] << ng
+        tgt_by_name[key] = ng
+      end
+    end
+
+    by_pattern = {}
+    target['highlights'].each { |h| by_pattern[h['pattern'].to_s.downcase] = h }
+    added = updated = skipped = 0
+
+    (source['highlights'] || []).each do |h|
+      pkey = h['pattern'].to_s.downcase
+      group_id = nil
+      if h['groupId'] && src_groups[h['groupId']]
+        gname = src_groups[h['groupId']]['name'].to_s.downcase
+        group_id = tgt_by_name[gname]['id'] if tgt_by_name[gname]
+      end
+
+      if by_pattern.key?(pkey)
+        if mode == 'skip'
+          skipped += 1
+          next
+        end
+        if mode == 'replace'
+          existing = by_pattern[pkey]
+          %w[color scope wholeWord caseSensitive highlightType enabled bold italic underline notify sound regex].each do |f|
+            existing[f] = h[f] if h.key?(f)
+          end
+          existing['groupId'] = group_id if group_id
+          updated += 1
+          next
+        end
+        skipped += 1
+        next
+      end
+
+      new_h = h.dup
+      new_h['id'] = new_id('hl1-')
+      new_h['groupId'] = group_id
+      target['highlights'] << new_h
+      by_pattern[pkey] = new_h
+      added += 1
+    end
+
+    { 'mode' => mode, 'added' => added, 'updated' => updated, 'removed' => removed, 'skipped' => skipped }
+  end
+
+  def self.set_from_import_json(data, key = nil)
+    key ||= data['character'] || char_key || detect_char_key
+    cs = data['characterSettings'] || {}
+    {
+      'character' => key,
+      'highlights' => (cs['customHighlights'] || []).map { |h| stringify_keys(h) },
+      'groups' => (cs['highlightGroups'] || []).map { |g| stringify_keys(g) }
+    }
   end
 end
 # END saga_hl/model
@@ -293,7 +424,6 @@ module SagaHl
     prefs = read_prefs_hash
     cs_all = prefs['characterSettings'] || {}
     cs = cs_all[key] || cs_all[key.downcase] || {}
-    # try case-insensitive key match
     if cs.empty?
       hit = cs_all.keys.find { |k| k.to_s.downcase == key.downcase }
       cs = cs_all[hit] || {}
@@ -332,6 +462,13 @@ module SagaHl
     write_json_file(path, to_saga_import(set))
     self.last_import_path = path
     path
+  end
+
+  def self.run_saga_hl(args)
+    bin = find_saga_hl_bin
+    raise 'saga-hl CLI not found (install tools/saga-highlights or put saga-hl on PATH)' unless bin
+    out, status = Open3.capture2e(bin, *args)
+    [out.to_s, status.success?]
   end
 end
 # END saga_hl/io
@@ -447,7 +584,7 @@ module SagaHl
     key = :dedupe if key == :dedupe_exact
     row = improver_row(key)
     unless row
-      raise "unknown improver #{name.inspect} — try: #{implemented_improvers.map { |i, _, _, _| i }.join(', ')}"
+      raise "unknown improver #{name.inspect} - try: #{implemented_improvers.map { |i, _, _, _| i }.join(', ')}"
     end
     unless row[3]
       toggles[key] = false
@@ -462,9 +599,7 @@ module SagaHl
     key = name.to_s.downcase.tr(' ', '_').to_sym
     key = :dedupe if key == :dedupe_exact
     row = improver_row(key)
-    unless row
-      raise "unknown improver #{name.inspect}"
-    end
+    raise "unknown improver #{name.inspect}" unless row
     unless row[3]
       toggles[key] = false
       raise "#{key} is not implemented yet"
@@ -480,7 +615,7 @@ module SagaHl
     self.instance_filter = inst
     self.working = load_set_from_prefs(key)
     n = (working['highlights'] || []).size
-    self.last_status = "selected #{pretty_char_name(key)} · #{pretty_instance(inst)} · #{n} rules"
+    self.last_status = "selected #{pretty_char_label(key)} - #{n} rules"
     self.last_action = :char
     self.dirty = true
     key
@@ -494,14 +629,13 @@ module SagaHl
     if keys.empty?
       self.last_status = "no characters on #{pretty_instance(inst)}"
     elsif char_key && split_char_key(char_key)[1] == inst
-      self.last_status = "instance #{pretty_instance(inst)}"
+      self.last_status = "instance #{pretty_instance(inst)} (CLI)"
     else
-      # Prefer the logged-in name on that instance, else the richest ruleset.
       want = char_name.downcase
       pick = keys.find { |k| split_char_key(k)[0] == want }
       pick ||= keys.max_by { |k| rule_count_for(k) }
       select_character!(pick) if pick
-      self.last_status = "instance #{pretty_instance(inst)}"
+      self.last_status = "instance #{pretty_instance(inst)} (CLI)"
     end
     self.last_action = :instance
     self.dirty = true
@@ -539,7 +673,7 @@ module SagaHl
     end
 
     path = write_import(working)
-    self.last_status = "applied · backup #{bak} · #{(working['highlights'] || []).size} rules"
+    self.last_status = "Improve+write done - backup #{bak} - #{(working['highlights'] || []).size} rules"
     self.dirty = true
     {
       'backup' => bak,
@@ -547,6 +681,102 @@ module SagaHl
       'count' => (working['highlights'] || []).size,
       'beforeCount' => (before['highlights'] || []).size,
       'results' => results
+    }
+  end
+
+  def self.sync_from!(source_raw)
+    src_key = normalize_char_key(source_raw)
+    tgt_key = normalize_char_key(char_key || detect_char_key)
+    raise 'pick a different character to copy from' if src_key == tgt_key
+
+    source = load_set_from_prefs(src_key)
+    before = load_set_from_prefs(tgt_key)
+    self.working = clone_set(before)
+    bak = save_backup(before, reason: 'before-sync')
+    report = merge_sets!(working, source, mode: 'skip', copy_groups: true)
+    path = write_import(working)
+    self.sync_source = src_key
+    self.last_status = "synced from #{pretty_char_label(src_key)}: +#{report['added']} skipped #{report['skipped']}"
+    self.dirty = true
+    {
+      'backup' => bak,
+      'importPath' => path,
+      'count' => (working['highlights'] || []).size,
+      'beforeCount' => (before['highlights'] || []).size,
+      'report' => report,
+      'source' => src_key
+    }
+  end
+
+  def self.name_pack!
+    key = normalize_char_key(char_key || detect_char_key)
+    before = load_set_from_prefs(key)
+    self.working = clone_set(before)
+    bak = save_backup(before, reason: 'before-name-pack')
+    notes = []
+    tmp = File.join(Dir.tmpdir, "saga-hl-namepack-#{Process.pid}.json")
+    out_path = import_path
+    hm_ok = false
+
+    begin
+      out, ok = run_saga_hl([
+        'import-hm-names', '--char', key, '--mode', 'skip', '--write-import', tmp
+      ])
+      if ok && File.file?(tmp)
+        hm_ok = true
+        notes << 'HM roster merged'
+      else
+        notes << "HM roster skipped: #{out.to_s.lines.last.to_s.strip[0, 120]}"
+      end
+    rescue StandardError => e
+      notes << "HM roster skipped: #{e.message}"
+    end
+
+    scan_args = ['scan-names', '--char', key, '--promote', '--write-import', out_path]
+    scan_args[1, 0] = ['--from-export', tmp] if hm_ok
+    # insert after command name: scan-names --from-export tmp --char ...
+    if hm_ok
+      scan_args = ['scan-names', '--from-export', tmp, '--char', key, '--promote', '--write-import', out_path]
+    end
+
+    begin
+      out, ok = run_saga_hl(scan_args)
+      if ok && File.file?(out_path)
+        notes << 'log names promoted'
+      else
+        # If scan failed but HM wrote tmp, promote tmp to import path
+        if hm_ok && File.file?(tmp)
+          FileUtils.cp(tmp, out_path)
+          self.last_import_path = out_path
+          notes << "log scan failed (kept HM): #{out.to_s.lines.last.to_s.strip[0, 100]}"
+        else
+          raise "name pack failed: #{out.to_s.lines.last.to_s.strip[0, 160]}"
+        end
+      end
+    rescue StandardError => e
+      if hm_ok && File.file?(tmp)
+        FileUtils.cp(tmp, out_path)
+        self.last_import_path = out_path
+        notes << "log scan error (kept HM): #{e.message}"
+      else
+        raise e
+      end
+    end
+
+    if File.file?(out_path)
+      data = read_json_file(out_path)
+      self.working = set_from_import_json(data, key)
+    end
+    FileUtils.rm_f(tmp) rescue nil
+
+    self.last_status = "name pack: #{notes.join('; ')} - #{(working['highlights'] || []).size} rules"
+    self.dirty = true
+    {
+      'backup' => bak,
+      'importPath' => out_path,
+      'count' => (working['highlights'] || []).size,
+      'beforeCount' => (before['highlights'] || []).size,
+      'notes' => notes
     }
   end
 end
@@ -560,7 +790,7 @@ module SagaHl
     [
       '--- saga-hl: next steps ---',
       "1. Wrote #{path}",
-      '2. Saga → Import Settings → Custom highlights → that file',
+      '2. Saga -> Import Settings -> Custom highlights -> that file',
       "3. Undo: pick a backup in the panel (or *hl restore #{bak})",
       '---------------------------'
     ]
@@ -570,33 +800,35 @@ module SagaHl
     set = working || empty_set(char_key || detect_char_key)
     n = (set['highlights'] || []).size
     case last_action
-    when :apply, :package, :write
-      "Next: Saga → Import Settings → #{IMPORT_BASENAME}"
+    when :apply, :package
+      "Next: Saga -> Import Settings -> #{IMPORT_BASENAME} (improvers already ran)"
+    when :write
+      "Next: Saga -> Import Settings -> #{IMPORT_BASENAME} (no improvers ran)"
+    when :namepack, :sync
+      "Next: Saga -> Import Settings -> #{IMPORT_BASENAME}"
     when :backup
-      'Snapshot saved. Apply when you want a new import file.'
+      'Snapshot saved. Improve+write when you want a new import file.'
     when :restore
       'Backup copied to import file. Import Settings to load it.'
     when :char, :instance
-      n.zero? ? 'This character has no custom highlights yet.' : "Editing #{pretty_char_name(char_key)} · #{n} rules"
+      n.zero? ? 'This character has no custom highlights yet.' : "Editing #{pretty_char_label(char_key)} - #{n} rules"
     else
       if last_backup_id.to_s.empty?
-        'Tip: Backup first — safe snapshot before you change anything.'
+        'Tip: Backup first - safe snapshot before you change anything.'
       elsif n.zero?
-        'Empty set — pick another character or import from the web tool.'
+        'Empty set - try Name pack, or Sync from another character.'
       else
-        'Ready. Apply runs enabled improvers → writes import JSON.'
+        'Ready. Improve+write = improvers then file. Write only = file only.'
       end
     end
   end
 
   def self.status_lines
     ensure_toggles!
-    ensure_instance_filter!
     set = working || load_set_from_prefs
     self.char_key ||= set['character']
-    name, inst = split_char_key(char_key)
     lines = [
-      "saga-hl  #{pretty_char_name(char_key)}  ·  #{pretty_instance(inst)}  ·  #{(set['highlights'] || []).size} rules",
+      "saga-hl  #{pretty_char_label(char_key)}  #{(set['highlights'] || []).size} rules",
       "  key: #{char_key}",
       "  import: #{last_import_path || import_path}",
       "  last backup: #{last_backup_id || '(none)'}"
@@ -618,7 +850,7 @@ module SagaHl
     value.to_s.gsub('&', '&amp;').gsub('<', '&lt;').gsub('>', '&gt;').gsub("'", '&apos;').gsub('"', '&quot;')
   end
 
-  # dropDownBox splits content_* on commas — never put commas in labels/values.
+  # dropDownBox splits content_* on commas - never put commas in labels/values.
   def self.dropdown_safe(text)
     text.to_s.tr(',', ' ').gsub(/\s+/, ' ').strip
   end
@@ -634,14 +866,12 @@ module SagaHl
 
   def self.build_dialog
     ensure_toggles!
-    ensure_instance_filter!
     set = working || (begin
       load_set_from_prefs
     rescue StandardError
       empty_set(detect_char_key)
     end)
     self.char_key ||= set['character']
-    name, inst = split_char_key(char_key)
     rules = (set['highlights'] || []).size
     groups = (set['groups'] || []).size
 
@@ -649,33 +879,16 @@ module SagaHl
     y = 0
     w = PANEL_WIDTH
 
-    # Title
     out << widget('label', id: 'hl_title', value: 'saga-hl', left: 2, top: y, width: w, height: ROW_HEIGHT)
     y += ROW_HEIGHT + 2
 
-    # Instance tabs — Prime first, then everything else (Test / specials)
-    out << widget('label', id: 'hl_inst_lbl', value: 'Instance', left: 2, top: y, width: 64, height: ROW_HEIGHT)
-    x = 70
-    instance_order.each_with_index do |iid, idx|
-      title = pretty_instance(iid)
-      mark = (iid == instance_filter) ? "{#{title}}" : title
-      out << widget('link', id: "hl_inst_#{idx}", value: mark, cmd: "*hl instance #{iid}",
-                            left: x, top: y, width: 78, height: ROW_HEIGHT)
-      x += 80
-    end
-    y += ROW_HEIGHT + 4
-
-    # Character dropdown (filtered to selected instance)
-    keys = characters_by_instance[instance_filter] || []
-    keys = list_character_keys if keys.empty?
-    labels = keys.map do |k|
-      n = rule_count_for(k)
-      dropdown_safe("#{pretty_char_name(k)} · #{n}")
-    end
+    # Character dropdown (all instances; instance switch is CLI-only)
+    keys = list_character_keys
+    labels = keys.map { |k| dropdown_safe(pretty_char_label(k, with_count: true)) }
     values = keys.map { |k| dropdown_safe(k) }
     selected_label = begin
       i = keys.index { |k| k.downcase == char_key.to_s.downcase } || 0
-      labels[i] || labels[0] || dropdown_safe(pretty_char_name(char_key))
+      labels[i] || labels[0] || dropdown_safe(pretty_char_label(char_key))
     end
     out << widget('label', id: 'hl_char_lbl', value: 'Character', left: 2, top: y + 2, width: 64, height: DROP_HEIGHT)
     out << widget('dropDownBox',
@@ -687,14 +900,13 @@ module SagaHl
                   left: 70, top: y, width: w - 72, height: DROP_HEIGHT)
     y += DROP_HEIGHT + 2
 
-    # Stats — name and instance split, no raw key in the main chrome
     out << widget('label', id: 'hl_stats',
-                  value: "#{pretty_char_name(char_key)}  ·  #{pretty_instance(inst)}  ·  #{rules} rules  ·  #{groups} groups",
+                  value: "#{pretty_char_label(char_key)}  #{rules} rules  #{groups} groups",
                   left: 2, top: y, width: w, height: ROW_HEIGHT)
     y += ROW_HEIGHT + 6
 
     # Improvers
-    out << widget('label', id: 'hl_imp_hdr', value: '— Improve —', left: 2, top: y, width: w, height: ROW_HEIGHT)
+    out << widget('label', id: 'hl_imp_hdr', value: 'Improve', left: 2, top: y, width: w, height: ROW_HEIGHT)
     y += ROW_HEIGHT
     implemented_improvers.each do |id, label, _, _|
       checked = toggles[id] ? '1' : '0'
@@ -708,29 +920,70 @@ module SagaHl
                     left: 8, top: y, width: w - 10, height: ROW_HEIGHT)
       y += ROW_HEIGHT
     end
-    # Coming-soon as quiet labels (discoverable, not clickable noise)
     soon = IMPROVERS.reject { |_, _, _, impl| impl }.map { |_, lab, _, _| lab }
     unless soon.empty?
-      out << widget('label', id: 'hl_soon', value: "Soon: #{soon.join(' · ')}",
+      out << widget('label', id: 'hl_soon', value: "Soon: #{soon.join(', ')}",
                     left: 8, top: y, width: w - 10, height: ROW_HEIGHT)
       y += ROW_HEIGHT
     end
     y += 4
 
-    # Actions
-    out << widget('label', id: 'hl_act_hdr', value: '— Do —', left: 2, top: y, width: w, height: ROW_HEIGHT)
+    # Actions - clarify Improve+write vs Write only
+    out << widget('label', id: 'hl_act_hdr', value: 'Do', left: 2, top: y, width: w, height: ROW_HEIGHT)
     y += ROW_HEIGHT
-    btn_w = 108
-    out << widget('cmdButton', id: 'hl_apply', value: 'Apply', cmd: '*hl apply',
+    out << widget('label', id: 'hl_act_hint',
+                  value: 'Improve+write runs ON improvers then writes import. Write only skips improvers.',
+                  left: 2, top: y, width: w, height: ROW_HEIGHT)
+    y += ROW_HEIGHT
+    btn_w = 118
+    out << widget('cmdButton', id: 'hl_apply', value: 'Improve+write', cmd: '*hl apply',
                   left: 2, top: y, width: btn_w, height: BTN_HEIGHT)
     out << widget('cmdButton', id: 'hl_backup', value: 'Backup', cmd: '*hl backup',
-                  left: 2 + btn_w + 6, top: y, width: btn_w, height: BTN_HEIGHT)
-    out << widget('cmdButton', id: 'hl_write', value: 'Write import', cmd: '*hl write',
-                  left: 2 + (btn_w + 6) * 2, top: y, width: btn_w, height: BTN_HEIGHT)
+                  left: 2 + btn_w + 6, top: y, width: 90, height: BTN_HEIGHT)
+    out << widget('cmdButton', id: 'hl_write', value: 'Write only', cmd: '*hl write',
+                  left: 2 + btn_w + 6 + 90 + 6, top: y, width: 100, height: BTN_HEIGHT)
     y += BTN_HEIGHT + 6
 
+    # Names + copy-from sync
+    out << widget('label', id: 'hl_names_hdr', value: 'Names and copy', left: 2, top: y, width: w, height: ROW_HEIGHT)
+    y += ROW_HEIGHT
+    out << widget('cmdButton', id: 'hl_namepack', value: 'Name pack', cmd: '*hl namepack',
+                  left: 2, top: y, width: 110, height: BTN_HEIGHT)
+    out << widget('label', id: 'hl_name_hint',
+                  value: 'HM roster + log names (skip existing)',
+                  left: 118, top: y + 2, width: w - 120, height: ROW_HEIGHT)
+    y += BTN_HEIGHT + 4
+
+    others = keys.reject { |k| k.downcase == char_key.to_s.downcase }
+    if others.empty?
+      out << widget('label', id: 'hl_nosync', value: 'No other characters to copy from.',
+                    left: 8, top: y, width: w - 10, height: ROW_HEIGHT)
+      y += ROW_HEIGHT
+    else
+      flabels = others.map { |k| dropdown_safe(pretty_char_label(k, with_count: true)) }
+      fvalues = others.map { |k| dropdown_safe(k) }
+      want = sync_source.to_s
+      fi = others.index { |k| k.downcase == want.downcase } || 0
+      out << widget('label', id: 'hl_from_lbl', value: 'Copy from', left: 2, top: y + 2, width: 64, height: DROP_HEIGHT)
+      out << widget('dropDownBox',
+                    id: 'hl_from',
+                    value: flabels[fi] || flabels[0],
+                    content_text: flabels.join(','),
+                    content_value: fvalues.join(','),
+                    cmd: '*hl syncsrc %hl_from%',
+                    left: 70, top: y, width: w - 180, height: DROP_HEIGHT)
+      out << widget('cmdButton', id: 'hl_sync', value: 'Sync', cmd: '*hl sync %hl_from%',
+                    left: w - 100, top: y, width: 98, height: BTN_HEIGHT)
+      y += DROP_HEIGHT + 2
+      out << widget('label', id: 'hl_sync_hint',
+                    value: 'Sync adds missing rules from that character into the current one.',
+                    left: 2, top: y, width: w, height: ROW_HEIGHT)
+      y += ROW_HEIGHT
+    end
+    y += 4
+
     # Restore picker
-    out << widget('label', id: 'hl_undo_hdr', value: '— Undo —', left: 2, top: y, width: w, height: ROW_HEIGHT)
+    out << widget('label', id: 'hl_undo_hdr', value: 'Undo', left: 2, top: y, width: w, height: ROW_HEIGHT)
     y += ROW_HEIGHT
     backups = begin
       list_backups(char_key).first(RESTORE_PICK_LIMIT)
@@ -744,7 +997,6 @@ module SagaHl
     else
       blabels = backups.map do |b|
         id = b['id'].to_s
-        # 20261018-092205_write-import-web → 10-18 write-import
         short = id.sub(/\A(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2})_/) { "#{Regexp.last_match(2)}-#{Regexp.last_match(3)} " }
         short = short.split('_').first(2).join(' ')
         n = b['highlightCount']
@@ -762,8 +1014,7 @@ module SagaHl
     end
     y += 6
 
-    # Coach + status
-    out << widget('label', id: 'hl_sep', value: '——————————————', left: 2, top: y, width: w, height: ROW_HEIGHT)
+    out << widget('label', id: 'hl_sep', value: '---', left: 2, top: y, width: w, height: ROW_HEIGHT)
     y += ROW_HEIGHT
     out << widget('label', id: 'hl_coach', value: coach_line, left: 2, top: y, width: w, height: ROW_HEIGHT)
     y += ROW_HEIGHT
@@ -778,7 +1029,7 @@ end
 
 # BEGIN saga_hl/commands
 module SagaHl
-  # Pure work + message list. No echo/_respond here — boot loop does that.
+  # Pure work + message list. No echo/_respond here - boot loop does that.
   # Sets dirty when the panel should redraw.
   def self.handle_command(raw)
     cmd = raw.to_s.strip.sub(/\A<c>/i, '')
@@ -790,11 +1041,15 @@ module SagaHl
     when /\Ahelp\z/i
       msgs.concat([
         'saga-hl panel:',
-        '  Instance tabs · Character dropdown · Improve checkboxes',
-        '  Apply / Backup / Write import · Restore dropdown',
-        '  *hl status | *hl char <name|instance> | *hl instance <id>',
+        '  Character dropdown, Improve checkboxes, Improve+write / Backup / Write only',
+        '  Name pack (HM + logs), Copy-from + Sync, Restore dropdown',
+        '  Improve+write: backup, run ON improvers, write import JSON',
+        '  Write only: write current set to import JSON (no improvers)',
+        '  *hl status | *hl char <name|instance>',
+        '  *hl instance <id>   (CLI only; not on the panel)',
         '  *hl set <improver> 0|1 | *hl toggle <improver>',
-        '  *hl apply | *hl package | *hl backup | *hl write | *hl restore <id>',
+        '  *hl apply | *hl package | *hl backup | *hl write',
+        '  *hl namepack | *hl sync <from-key> | *hl restore <id>',
         "  live improvers: #{implemented_improvers.map { |i, _, _, _| i }.join(', ')}"
       ])
     when /\Astatus\z/i
@@ -819,10 +1074,10 @@ module SagaHl
     when /\Aset\s+(\S+)\s+(\S+)\z/i
       begin
         name = Regexp.last_match(1)
-        raw = Regexp.last_match(2).downcase
-        on = %w[1 true on yes].include?(raw)
+        rawv = Regexp.last_match(2).downcase
+        on = %w[1 true on yes].include?(rawv)
         set_improver!(name, on)
-        msgs << "saga-hl: #{name} → #{on ? 'ON' : 'off'}"
+        msgs << "saga-hl: #{name} -> #{on ? 'ON' : 'off'}"
       rescue StandardError => e
         msgs << "saga-hl: #{e.message}"
       end
@@ -831,7 +1086,7 @@ module SagaHl
       begin
         name = Regexp.last_match(1)
         on = toggle!(name)
-        msgs << "saga-hl: #{name} → #{on ? 'ON' : 'off'}"
+        msgs << "saga-hl: #{name} -> #{on ? 'ON' : 'off'}"
       rescue StandardError => e
         msgs << "saga-hl: #{e.message}"
       end
@@ -872,11 +1127,45 @@ module SagaHl
         set = working || load_set_from_prefs
         path = write_import(set)
         self.last_action = :write
-        self.last_status = "wrote #{File.basename(path)} (#{(set['highlights'] || []).size} rules)"
+        self.last_status = "Write only: #{File.basename(path)} (#{(set['highlights'] || []).size} rules, no improvers)"
         msgs << "saga-hl: #{last_status}"
         msgs.concat(import_restore_lines('importPath' => path, 'backup' => last_backup_id || '(backup first)'))
       rescue StandardError => e
         msgs << "saga-hl write failed: #{e.message}"
+      end
+      self.dirty = true
+    when /\Asyncsrc\s+(\S+)\z/i
+      begin
+        self.sync_source = normalize_char_key(Regexp.last_match(1))
+        self.last_status = "copy-from set to #{pretty_char_label(sync_source)}"
+        msgs << "saga-hl: #{last_status}"
+      rescue StandardError => e
+        msgs << "saga-hl syncsrc failed: #{e.message}"
+      end
+      self.dirty = true
+    when /\Async(?:\s+(\S+))?\z/i
+      begin
+        src = Regexp.last_match(1)
+        src = sync_source if src.to_s.strip.empty?
+        raise 'pick Copy from, then Sync (or *hl sync <char|instance>)' if src.to_s.strip.empty?
+        info = sync_from!(src)
+        self.last_action = :sync
+        msgs << "saga-hl: #{last_status}"
+        msgs.concat(import_restore_lines(info))
+      rescue StandardError => e
+        msgs << "saga-hl sync failed: #{e.message}"
+      end
+      self.dirty = true
+    when /\Anamepack\z/i
+      begin
+        msgs << 'saga-hl: running name pack (HM + logs) - may take a moment...'
+        info = name_pack!
+        self.last_action = :namepack
+        msgs << "saga-hl: #{last_status}"
+        (info['notes'] || []).each { |n| msgs << "  #{n}" }
+        msgs.concat(import_restore_lines(info))
+      rescue StandardError => e
+        msgs << "saga-hl namepack failed: #{e.message}"
       end
       self.dirty = true
     when /\Arestore\s+(\S+)\z/i
@@ -885,14 +1174,14 @@ module SagaHl
         path = restore_backup_to_import(bid)
         self.last_action = :restore
         self.last_status = "restored #{bid}"
-        msgs << "saga-hl: #{last_status} → #{path}"
-        msgs << 'Saga → Import Settings → Custom highlights → that file.'
+        msgs << "saga-hl: #{last_status} -> #{path}"
+        msgs << 'Saga -> Import Settings -> Custom highlights -> that file.'
       rescue StandardError => e
         msgs << "saga-hl restore failed: #{e.message}"
       end
       self.dirty = true
     else
-      msgs << "saga-hl: unknown #{cmd.inspect} — *hl help"
+      msgs << "saga-hl: unknown #{cmd.inspect} - *hl help"
     end
     msgs
   end
@@ -902,17 +1191,17 @@ end
 # --- boot ---
 # UpstreamHook only queues. File I/O + echo/_respond run on this script's
 # main loop (same pattern as exp_sagapanel's heavy *exp refresh / importlogs).
-# If the hook raises, Lich removes it — so keep the hook trivial.
+# If the hook raises, Lich removes it - so keep the hook trivial.
 SagaHl.ensure_toggles!
 SagaHl.dirty = false
 SagaHl.pending_cmd = nil
 SagaHl.last_action = nil
+SagaHl.sync_source = nil
 begin
   SagaHl.working = SagaHl.load_set_from_prefs
   SagaHl.char_key ||= SagaHl.working['character']
   SagaHl.ensure_instance_filter!
-  name, inst = SagaHl.split_char_key(SagaHl.char_key)
-  SagaHl.last_status = "loaded #{SagaHl.pretty_char_name(SagaHl.char_key)} · #{SagaHl.pretty_instance(inst)} · #{(SagaHl.working['highlights'] || []).size} rules"
+  SagaHl.last_status = "loaded #{SagaHl.pretty_char_label(SagaHl.char_key)} - #{(SagaHl.working['highlights'] || []).size} rules"
 rescue StandardError => e
   SagaHl.last_status = "load failed: #{e.message}"
   SagaHl.working = SagaHl.empty_set(SagaHl.detect_char_key)
@@ -942,7 +1231,7 @@ before_dying do
   _respond("<closeDialog id='#{SagaHl::DIALOG_ID}'/>")
 end
 
-echo "saga-hl panel active. Click Apply / Backup / Write import, or *hl help."
+echo "saga-hl panel active. Improve+write / Write only / Name pack / Sync, or *hl help."
 SagaHl.status_lines.each { |l| echo l }
 
 loop do
