@@ -42,9 +42,14 @@
   Author: loraque (loraque@gmail.com)
   Required: Lich >= 5.12.0
   Tags: saga, frontend, panel, highlights, import
-  Version: 0.4.0
+  Version: 0.4.1
 
   Recently changed:
+    0.4.1 (2026-10-19)
+      - Fix Improve+write wiping a fresh Sync/Name pack: use the panel working
+        set (not prefs) so dedupe runs on the merged rules, then write import.
+      - Copy-from: multi-select group checkboxes (All/None) so Sync can copy
+        only chosen groups; orphan group ids get labeled buckets with counts.
     0.4.0 (2026-10-19)
       - Remove Instance tabs from panel (keep *hl instance as CLI only).
       - ASCII-clean panel and story text (no middot/em-dash/{braces}).
@@ -122,8 +127,13 @@ module SagaHl
   class << self
     attr_accessor :toggles, :last_backup_id, :last_import_path, :last_status,
                   :working, :dirty, :char_key, :pending_cmd, :instance_filter,
-                  :last_action, :sync_source, :_id_seq
+                  :last_action, :sync_source, :sync_group_sel, :sync_group_meta,
+                  :_id_seq
   end
+
+  # Synthetic ids for sync group filter
+  SYNC_NONE = '__none__'.freeze
+  SYNC_ORPHAN_PREFIX = '__orphan__:'.freeze
 
   def self.windows?
     ENV['OS'].to_s =~ /windows/i || File::ALT_SEPARATOR == '\\' ||
@@ -244,6 +254,27 @@ module SagaHl
     base = "#{pretty_char_name(key)} (#{pretty_instance(inst)})"
     return base unless with_count
     "#{base} #{rule_count_for(key)}"
+  end
+
+  # Panel / story labels: keep ASCII (group names may contain em dashes).
+  def self.ascii_label(text)
+    text.to_s
+        .gsub(/[—–]/, '-')
+        .gsub(/[·•]/, ' ')
+        .gsub(/[“”]/, '"')
+        .gsub(/[‘’]/, "'")
+        .gsub(/\s+/, ' ')
+        .strip
+  end
+
+  # Working set is panel source of truth until character switch / reload.
+  def self.working_for(key = nil)
+    key = normalize_char_key(key || char_key || detect_char_key)
+    if working && working['character'].to_s.downcase == key.downcase
+      clone_set(working)
+    else
+      load_set_from_prefs(key)
+    end
   end
 
   def self.list_character_keys
