@@ -159,10 +159,11 @@ module SagaHl
   ROW_HEIGHT = 18
   DROP_HEIGHT = 24
   BTN_HEIGHT = 22
-  PANEL_WIDTH = 1000
+  PANEL_WIDTH = 560
   BACKUP_KEEP = 40
   BROWSE_PAGE_SIZE = 18
-  DIFF_PAGE_SIZE = 12
+  DIFF_PAGE_SIZE = 10
+  RESTORE_PICK_LIMIT = 8
   BACKUP_PAGE_SIZE = 10
   IMPORT_BASENAME = 'saga-highlights.json'
   STARTER_DIRNAME = 'saga-hl-starter'
@@ -1619,7 +1620,7 @@ module SagaHl
   end
 
   def self.open_dialog_xml
-    "<closeDialog id='#{DIALOG_ID}'/><openDialog type='dynamic' id='#{DIALOG_ID}' title='saga-hl workspace' target='#{DIALOG_ID}' scroll='manual' location='main' resident='false'><dialogData id='#{DIALOG_ID}'></dialogData></openDialog>"
+    "<closeDialog id='#{DIALOG_ID}'/><openDialog type='dynamic' id='#{DIALOG_ID}' title='saga-hl' target='#{DIALOG_ID}' scroll='manual' location='main' resident='false'><dialogData id='#{DIALOG_ID}'></dialogData></openDialog>"
   end
 
   def self.widget(tag, attrs)
@@ -1627,371 +1628,38 @@ module SagaHl
     "<#{tag} #{parts.join(' ')} />"
   end
 
-  def self.mode_button(out, y, w, id, label, mode_name, x)
-    active = mode.to_s == mode_name
-    value = active ? "[#{label}]" : label
-    out << widget('cmdButton', id: id, value: value, cmd: "*hl mode #{mode_name}",
-                  left: x, top: y, width: 110, height: BTN_HEIGHT)
-  end
-
-  def self.build_shell_header(out, y, w, set)
+  def self.build_dialog
+    ensure_toggles!
+    ensure_ui_defaults!
+    self.char_key ||= detect_char_key
+    set = if working && working['character'].to_s.downcase == char_key.to_s.downcase
+      working
+    else
+      begin
+        load_set_from_prefs(char_key)
+      rescue StandardError
+        empty_set(char_key)
+      end
+    end
     rules = (set['highlights'] || []).size
     groups = (set['groups'] || []).size
-    out << widget('label', id: 'hl_title', value: 'saga-hl', left: 2, top: y, width: 70, height: ROW_HEIGHT)
-    out << widget('label', id: 'hl_char_name',
-                  value: pretty_char_label(char_key),
-                  left: 74, top: y, width: 260, height: ROW_HEIGHT)
-    out << widget('label', id: 'hl_stats',
-                  value: "#{rules} rules  #{groups} groups",
-                  left: 340, top: y, width: 220, height: ROW_HEIGHT)
+    keys = list_character_keys
+
+    out = String.new("<dialogData id='#{DIALOG_ID}' clear='t'>")
+    y = 0
+    w = PANEL_WIDTH
+
+    # Header
+    out << widget('label', id: 'hl_title', value: 'saga-hl', left: 2, top: y, width: 64, height: ROW_HEIGHT)
+    out << widget('label', id: 'hl_char_name', value: pretty_char_label(char_key),
+                  left: 70, top: y, width: 220, height: ROW_HEIGHT)
+    out << widget('label', id: 'hl_stats', value: "#{rules} rules  #{groups} groups",
+                  left: 300, top: y, width: 160, height: ROW_HEIGHT)
     out << widget('closeButton', id: 'hl_close', value: 'Close', cmd: '*hl close',
-                  left: w - 90, top: y, width: 88, height: BTN_HEIGHT)
+                  left: w - 86, top: y, width: 84, height: BTN_HEIGHT)
     y += BTN_HEIGHT + 4
 
-    mode_button(out, y, w, 'hl_mode_browse', 'Browse', 'browse', 2)
-    mode_button(out, y, w, 'hl_mode_diff', 'Diff', 'diff', 118)
-    mode_button(out, y, w, 'hl_mode_backups', 'Backups', 'backups', 234)
-    mode_button(out, y, w, 'hl_mode_tools', 'Tools', 'tools', 350)
-    y += BTN_HEIGHT + 6
-    y
-  end
-
-  def self.build_footer(out, y, w)
-    out << widget('label', id: 'hl_sep', value: '---', left: 2, top: y, width: w, height: ROW_HEIGHT)
-    y += ROW_HEIGHT
-    out << widget('label', id: 'hl_coach', value: coach_line, left: 2, top: y, width: w - 4, height: ROW_HEIGHT)
-    y += ROW_HEIGHT
-    note = last_status.to_s.empty? ? 'Ready.' : last_status.to_s
-    out << widget('label', id: 'hl_note', value: note, left: 2, top: y, width: w - 4, height: ROW_HEIGHT)
-    y
-  end
-
-  def self.build_browse(out, y, w, set)
-    ensure_ui_defaults!
-    # Filter row
-    out << widget('label', id: 'hl_filt_lbl', value: 'Filter', left: 2, top: y + 2, width: 48, height: DROP_HEIGHT)
-    out << widget('editBox', id: 'hl_filter', value: browse_filter.to_s,
-                  cmd: '*hl filter %hl_filter%', maxChars: '120', enterButton: 'hl_filt_btn',
-                  left: 52, top: y, width: 280, height: DROP_HEIGHT)
-    out << widget('cmdButton', id: 'hl_filt_btn', value: 'Filter', cmd: '*hl filter %hl_filter%',
-                  left: 338, top: y, width: 70, height: BTN_HEIGHT)
-
-    type_labels = %w[all name general]
-    ti = type_labels.index(browse_type.to_s) || 0
-    out << widget('dropDownBox', id: 'hl_type',
-                  value: type_labels[ti],
-                  content_text: type_labels.join(','),
-                  content_value: type_labels.join(','),
-                  cmd: '*hl type %hl_type%',
-                  left: 420, top: y, width: 110, height: DROP_HEIGHT)
-
-    groups = set['groups'] || []
-    glabels = ['all', '(no group)'] + groups.map { |g| dropdown_safe(ascii_label(g['name'])) }
-    gvalues = ['all', NO_GROUP] + groups.map { |g| dropdown_safe(g['id']) }
-    gi = gvalues.index(browse_group.to_s)
-    gi = 0 if gi.nil?
-    out << widget('dropDownBox', id: 'hl_groupf',
-                  value: glabels[gi],
-                  content_text: glabels.join(','),
-                  content_value: gvalues.join(','),
-                  cmd: '*hl groupf %hl_groupf%',
-                  left: 540, top: y, width: 220, height: DROP_HEIGHT)
-
-    sorts = %w[pattern color group type]
-    si = sorts.index(browse_sort.to_s) || 0
-    out << widget('dropDownBox', id: 'hl_sort',
-                  value: sorts[si],
-                  content_text: sorts.join(','),
-                  content_value: sorts.join(','),
-                  cmd: '*hl sort %hl_sort%',
-                  left: 770, top: y, width: 110, height: DROP_HEIGHT)
-    y += DROP_HEIGHT + 4
-
-    info = browse_page_slice
-    total = info['total']
-    start = info['start']
-    stop = total.zero? ? 0 : [start + info['items'].size, total].min
-    out << widget('cmdButton', id: 'hl_prev', value: 'Prev', cmd: '*hl page -1',
-                  left: 2, top: y, width: 60, height: BTN_HEIGHT)
-    out << widget('cmdButton', id: 'hl_next', value: 'Next', cmd: '*hl page +1',
-                  left: 68, top: y, width: 60, height: BTN_HEIGHT)
-    out << widget('label', id: 'hl_range',
-                  value: total.zero? ? '0 of 0' : "#{start + 1}-#{stop} of #{total}",
-                  left: 140, top: y + 2, width: 160, height: ROW_HEIGHT)
-    out << widget('cmdButton', id: 'hl_en_match', value: 'Enable match', cmd: '*hl enablematch 1',
-                  left: 320, top: y, width: 120, height: BTN_HEIGHT)
-    out << widget('cmdButton', id: 'hl_dis_match', value: 'Disable match', cmd: '*hl enablematch 0',
-                  left: 448, top: y, width: 120, height: BTN_HEIGHT)
-    out << widget('cmdButton', id: 'hl_del_match', value: 'Delete match', cmd: '*hl delmatch',
-                  left: 576, top: y, width: 120, height: BTN_HEIGHT)
-    y += BTN_HEIGHT + 4
-
-    # Rows
-    info['items'].each_with_index do |h, idx|
-      checked = (h.key?('enabled') ? truthy_flag(h, 'enabled') : true) ? '1' : '0'
-      wid = "hl_en_#{idx}"
-      out << widget('checkBox',
-                    id: wid,
-                    text: '',
-                    checked: checked,
-                    checked_value: '1',
-                    unchecked_value: '0',
-                    cmd: "*hl enable #{h['id']} %#{wid}%",
-                    left: 2, top: y, width: 28, height: ROW_HEIGHT)
-      gname = ascii_label(group_name(set, h['groupId']))
-      gname = '-' if gname.empty?
-      typ = h['highlightType'].to_s.empty? ? 'general' : h['highlightType'].to_s
-      row = truncate_text("#{h['color']}  [#{gname}]  #{typ}  #{h['pattern']}", 90)
-      sel_mark = (selected_id.to_s == h['id'].to_s) ? '>' : ' '
-      out << widget('label', id: "hl_row_#{idx}", value: "#{sel_mark}#{row}",
-                    left: 34, top: y, width: w - 160, height: ROW_HEIGHT)
-      out << widget('link', id: "hl_sel_#{idx}", value: 'Sel', cmd: "*hl sel #{h['id']}",
-                    left: w - 120, top: y, width: 40, height: ROW_HEIGHT)
-      out << widget('link', id: "hl_del_#{idx}", value: 'Del', cmd: "*hl del #{h['id']}",
-                    left: w - 70, top: y, width: 40, height: ROW_HEIGHT)
-      y += ROW_HEIGHT
-    end
-    y += 4
-
-    # Detail strip
-    sel = selected_highlight
-    out << widget('label', id: 'hl_det_hdr', value: 'Selected', left: 2, top: y, width: w, height: ROW_HEIGHT)
-    y += ROW_HEIGHT
-    if sel.nil?
-      out << widget('label', id: 'hl_det_none', value: 'Select a rule with Sel (or *hl sel <id>).',
-                    left: 8, top: y, width: w - 10, height: ROW_HEIGHT)
-      y += ROW_HEIGHT
-    else
-      FLAG_NAMES.each_with_index do |fname, i|
-        checked = truthy_flag(sel, fname) ? '1' : '0'
-        wid = "hl_flag_#{fname}"
-        x = 8 + (i % 4) * 180
-        yy = y + (i / 4) * ROW_HEIGHT
-        out << widget('checkBox',
-                      id: wid,
-                      text: fname,
-                      checked: checked,
-                      checked_value: '1',
-                      unchecked_value: '0',
-                      cmd: "*hl flag #{fname} %#{wid}%",
-                      left: x, top: yy, width: 170, height: ROW_HEIGHT)
-      end
-      y += ROW_HEIGHT * 2 + 2
-
-      colors = colors_for_dropdown(set)
-      clabels = colors.map { |c| dropdown_safe(c) }
-      cval = sel['color'].to_s.downcase
-      cval = colors[0] unless colors.include?(cval)
-      out << widget('label', id: 'hl_col_lbl', value: 'Color', left: 2, top: y + 2, width: 48, height: DROP_HEIGHT)
-      out << widget('dropDownBox', id: 'hl_color',
-                    value: dropdown_safe(cval),
-                    content_text: clabels.join(','),
-                    content_value: clabels.join(','),
-                    cmd: '*hl color %hl_color%',
-                    left: 52, top: y, width: 140, height: DROP_HEIGHT)
-
-      out << widget('label', id: 'hl_pat_lbl', value: 'Pattern', left: 210, top: y + 2, width: 56, height: DROP_HEIGHT)
-      out << widget('editBox', id: 'hl_pattern', value: sel['pattern'].to_s,
-                    cmd: '*hl pattern %hl_pattern%', maxChars: '200', enterButton: 'hl_pat_set',
-                    left: 270, top: y, width: 420, height: DROP_HEIGHT)
-      out << widget('cmdButton', id: 'hl_pat_set', value: 'Set', cmd: '*hl pattern %hl_pattern%',
-                    left: 698, top: y, width: 50, height: BTN_HEIGHT)
-
-      g2labels = ['(no group)'] + groups.map { |g| dropdown_safe(ascii_label(g['name'])) }
-      g2values = [NO_GROUP] + groups.map { |g| dropdown_safe(ascii_label(g['name'])) }
-      cur_g = ascii_label(group_name(set, sel['groupId']))
-      cur_g = '(no group)' if cur_g.empty?
-      gi2 = g2labels.index(dropdown_safe(cur_g)) || 0
-      out << widget('dropDownBox', id: 'hl_group',
-                    value: g2labels[gi2],
-                    content_text: g2labels.join(','),
-                    content_value: g2values.join(','),
-                    cmd: '*hl group %hl_group%',
-                    left: 760, top: y, width: 220, height: DROP_HEIGHT)
-      y += DROP_HEIGHT + 4
-    end
-    y
-  end
-
-  def self.build_diff(out, y, w, _set)
-    ensure_ui_defaults!
-    report = diff_cache || refresh_diff!
-    blabel = diff_baseline.to_s == 'live' || diff_baseline.to_s.empty? ? 'live' : "bak:#{diff_baseline}"
-    out << widget('label', id: 'hl_diff_sum', value: diff_summary_line(report, baseline_label: blabel),
-                  left: 2, top: y, width: w - 4, height: ROW_HEIGHT)
-    y += ROW_HEIGHT + 2
-
-    if (report['groupsAdded'] || []).any?
-      out << widget('label', id: 'hl_ga', value: "groups added: #{report['groupsAdded'].map { |g| ascii_label(g) }.join(', ')}",
-                    left: 2, top: y, width: w - 4, height: ROW_HEIGHT)
-      y += ROW_HEIGHT
-    end
-    if (report['groupsRemoved'] || []).any?
-      out << widget('label', id: 'hl_gr', value: "groups removed: #{report['groupsRemoved'].map { |g| ascii_label(g) }.join(', ')}",
-                    left: 2, top: y, width: w - 4, height: ROW_HEIGHT)
-      y += ROW_HEIGHT
-    end
-
-    out << widget('cmdButton', id: 'hl_diff_ref', value: 'Refresh', cmd: '*hl diff',
-                  left: 2, top: y, width: 80, height: BTN_HEIGHT)
-    out << widget('cmdButton', id: 'hl_diff_live', value: 'Vs live', cmd: '*hl diff live',
-                  left: 90, top: y, width: 80, height: BTN_HEIGHT)
-    out << widget('cmdButton', id: 'hl_discard', value: 'Discard working', cmd: '*hl discard',
-                  left: 178, top: y, width: 130, height: BTN_HEIGHT)
-    out << widget('cmdButton', id: 'hl_diff_write', value: 'Write only', cmd: '*hl write',
-                  left: 316, top: y, width: 100, height: BTN_HEIGHT)
-    out << widget('cmdButton', id: 'hl_diff_apply', value: 'Improve+write', cmd: '*hl apply',
-                  left: 424, top: y, width: 120, height: BTN_HEIGHT)
-
-    shows = %w[all added removed changed]
-    svi = shows.index(diff_filter.to_s) || 0
-    out << widget('dropDownBox', id: 'hl_diffshow',
-                  value: shows[svi],
-                  content_text: shows.join(','),
-                  content_value: shows.join(','),
-                  cmd: '*hl diffshow %hl_diffshow%',
-                  left: 560, top: y, width: 120, height: DROP_HEIGHT)
-
-    backups = begin
-      list_backups(char_key).first(20)
-    rescue StandardError
-      []
-    end
-    unless backups.empty?
-      blabels = ['(pick backup baseline)'] + backups.map do |b|
-        dropdown_safe("#{b['id'].to_s[0, 15]} #{b['label']}")
-      end
-      bvalues = ['_'] + backups.map { |b| dropdown_safe(b['id']) }
-      out << widget('dropDownBox', id: 'hl_diffbak',
-                    value: blabels[0],
-                    content_text: blabels.join(','),
-                    content_value: bvalues.join(','),
-                    cmd: '*hl diff backup %hl_diffbak%',
-                    left: 690, top: y, width: 290, height: DROP_HEIGHT)
-    end
-    y += DROP_HEIGHT + 4
-
-    items = diff_items(report)
-    total = items.size
-    pages = total.zero? ? 1 : ((total + DIFF_PAGE_SIZE - 1) / DIFF_PAGE_SIZE)
-    self.diff_page = [[diff_page.to_i, 0].max, pages - 1].min
-    start = diff_page * DIFF_PAGE_SIZE
-    slice = items[start, DIFF_PAGE_SIZE] || []
-    stop = total.zero? ? 0 : [start + slice.size, total].min
-
-    out << widget('cmdButton', id: 'hl_dprev', value: 'Prev', cmd: '*hl page -1',
-                  left: 2, top: y, width: 60, height: BTN_HEIGHT)
-    out << widget('cmdButton', id: 'hl_dnext', value: 'Next', cmd: '*hl page +1',
-                  left: 68, top: y, width: 60, height: BTN_HEIGHT)
-    out << widget('label', id: 'hl_drange',
-                  value: total.zero? ? '0 deltas' : "#{start + 1}-#{stop} of #{total}",
-                  left: 140, top: y + 2, width: 200, height: ROW_HEIGHT)
-    y += BTN_HEIGHT + 4
-
-    slice.each_with_index do |item, idx|
-      kind = item['_kind'].to_s
-      if kind.empty?
-        kind = if item['changes']
-          'changed'
-        elsif diff_filter.to_s == 'removed'
-          'removed'
-        elsif diff_filter.to_s == 'changed'
-          'changed'
-        else
-          'added'
-        end
-      end
-      if kind == 'changed' || item['changes']
-        bits = (item['changes'] || []).first(4).map { |ch| "#{ch['field']}:#{ch['before']}->#{ch['after']}" }.join(' ')
-        line = truncate_text("~ #{item['pattern']}  #{bits}", 110)
-      else
-        marker = kind == 'removed' ? '-' : '+'
-        en = item['enabled'] == false ? 'off' : 'on'
-        g = item['group'] || '-'
-        line = truncate_text("#{marker} [#{ascii_label(g)}] #{en} #{item['color']}  #{item['pattern']}", 110)
-      end
-      out << widget('label', id: "hl_drow_#{idx}", value: line, left: 2, top: y, width: w - 4, height: ROW_HEIGHT)
-      y += ROW_HEIGHT
-    end
-    y
-  end
-
-  def self.build_backups(out, y, w, _set)
-    ensure_ui_defaults!
-    starter = read_starter(char_key)
-    starter_txt = if starter
-      "Starter: #{ascii_label(starter['label'] || starter['backupId'])}"
-    else
-      'Starter: (none)'
-    end
-    out << widget('label', id: 'hl_starter', value: starter_txt, left: 2, top: y, width: w - 200, height: ROW_HEIGHT)
-    out << widget('cmdButton', id: 'hl_load_starter', value: 'Load starter', cmd: '*hl bak load-starter',
-                  left: w - 130, top: y, width: 128, height: BTN_HEIGHT)
-    y += BTN_HEIGHT + 4
-
-    backups = begin
-      list_backups(char_key)
-    rescue StandardError
-      []
-    end
-    total = backups.size
-    pages = total.zero? ? 1 : ((total + BACKUP_PAGE_SIZE - 1) / BACKUP_PAGE_SIZE)
-    self.bak_page = [[bak_page.to_i, 0].max, pages - 1].min
-    start = bak_page * BACKUP_PAGE_SIZE
-    slice = backups[start, BACKUP_PAGE_SIZE] || []
-    stop = total.zero? ? 0 : [start + slice.size, total].min
-
-    out << widget('cmdButton', id: 'hl_bprev', value: 'Prev', cmd: '*hl page -1',
-                  left: 2, top: y, width: 60, height: BTN_HEIGHT)
-    out << widget('cmdButton', id: 'hl_bnext', value: 'Next', cmd: '*hl page +1',
-                  left: 68, top: y, width: 60, height: BTN_HEIGHT)
-    out << widget('label', id: 'hl_brange',
-                  value: total.zero? ? 'No backups' : "#{start + 1}-#{stop} of #{total}",
-                  left: 140, top: y + 2, width: 220, height: ROW_HEIGHT)
-    y += BTN_HEIGHT + 4
-
-    slice.each_with_index do |b, idx|
-      mark = (bak_selected.to_s == b['id'].to_s) ? '>' : ' '
-      lab = ascii_label(b['label'].to_s.empty? ? b['reason'] : b['label'])
-      line = truncate_text("#{mark}#{b['id']}  #{lab}  n=#{b['highlightCount']}", 100)
-      out << widget('label', id: "hl_bak_#{idx}", value: line, left: 2, top: y, width: w - 90, height: ROW_HEIGHT)
-      out << widget('link', id: "hl_baks_#{idx}", value: 'Select', cmd: "*hl bak select #{b['id']}",
-                    left: w - 80, top: y, width: 70, height: ROW_HEIGHT)
-      y += ROW_HEIGHT
-    end
-    y += 4
-
-    sel = bak_selected.to_s
-    out << widget('label', id: 'hl_bsel', value: sel.empty? ? 'Selected: (none)' : "Selected: #{sel}",
-                  left: 2, top: y, width: w - 4, height: ROW_HEIGHT)
-    y += ROW_HEIGHT + 2
-
-    out << widget('cmdButton', id: 'hl_brest', value: 'Restore->import', cmd: '*hl restore %hl_bakid%',
-                  left: 2, top: y, width: 140, height: BTN_HEIGHT)
-    out << widget('cmdButton', id: 'hl_bload', value: 'Load into working', cmd: '*hl bak load %hl_bakid%',
-                  left: 150, top: y, width: 150, height: BTN_HEIGHT)
-    out << widget('cmdButton', id: 'hl_bcmp', value: 'Compare vs working', cmd: '*hl diff backup %hl_bakid%',
-                  left: 308, top: y, width: 160, height: BTN_HEIGHT)
-    out << widget('cmdButton', id: 'hl_bstarter', value: 'Set starter', cmd: '*hl bak starter %hl_bakid%',
-                  left: 476, top: y, width: 110, height: BTN_HEIGHT)
-    # Hidden-ish id carrier via editBox defaulting to selected
-    out << widget('editBox', id: 'hl_bakid', value: sel, cmd: '*hl bak select %hl_bakid%',
-                  maxChars: '80', left: 600, top: y, width: 200, height: DROP_HEIGHT)
-    y += DROP_HEIGHT + 4
-
-    out << widget('label', id: 'hl_ren_lbl', value: 'Rename label', left: 2, top: y + 2, width: 100, height: DROP_HEIGHT)
-    out << widget('editBox', id: 'hl_bakren', value: bak_rename.to_s,
-                  cmd: '*hl bak rename %hl_bakid% %hl_bakren%', maxChars: '60', enterButton: 'hl_renbtn',
-                  left: 110, top: y, width: 300, height: DROP_HEIGHT)
-    out << widget('cmdButton', id: 'hl_renbtn', value: 'Rename',
-                  cmd: '*hl bak rename %hl_bakid% %hl_bakren%',
-                  left: 420, top: y, width: 90, height: BTN_HEIGHT)
-    y += DROP_HEIGHT + 4
-    y
-  end
-
-  def self.build_tools(out, y, w, _set)
-    ensure_toggles!
+    # Improvers
     out << widget('label', id: 'hl_imp_hdr', value: 'Improve', left: 2, top: y, width: w, height: ROW_HEIGHT)
     y += ROW_HEIGHT
     implemented_improvers.each do |id, label, _, _|
@@ -2003,7 +1671,7 @@ module SagaHl
                     checked_value: '1',
                     unchecked_value: '0',
                     cmd: "*hl set #{id} %hl_imp_#{id}%",
-                    left: 8, top: y, width: 280, height: ROW_HEIGHT)
+                    left: 8, top: y, width: w - 10, height: ROW_HEIGHT)
       y += ROW_HEIGHT
     end
     soon = IMPROVERS.reject { |_, _, _, impl| impl }.map { |_, lab, _, _| lab }
@@ -2014,23 +1682,25 @@ module SagaHl
     end
     y += 4
 
+    # Actions
+    out << widget('label', id: 'hl_act_hdr', value: 'Do', left: 2, top: y, width: w, height: ROW_HEIGHT)
+    y += ROW_HEIGHT
     out << widget('label', id: 'hl_act_hint',
                   value: 'Improve+write runs ON improvers then writes import. Write only skips improvers.',
                   left: 2, top: y, width: w, height: ROW_HEIGHT)
     y += ROW_HEIGHT
+    btn_w = 118
     out << widget('cmdButton', id: 'hl_apply', value: 'Improve+write', cmd: '*hl apply',
-                  left: 2, top: y, width: 130, height: BTN_HEIGHT)
+                  left: 2, top: y, width: btn_w, height: BTN_HEIGHT)
     out << widget('cmdButton', id: 'hl_backup', value: 'Backup', cmd: '*hl backup',
-                  left: 140, top: y, width: 90, height: BTN_HEIGHT)
+                  left: 2 + btn_w + 6, top: y, width: 90, height: BTN_HEIGHT)
     out << widget('cmdButton', id: 'hl_write', value: 'Write only', cmd: '*hl write',
-                  left: 238, top: y, width: 100, height: BTN_HEIGHT)
-    out << widget('cmdButton', id: 'hl_to_diff', value: 'Open Diff', cmd: '*hl mode diff',
-                  left: 348, top: y, width: 100, height: BTN_HEIGHT)
-    y += BTN_HEIGHT + 8
+                  left: 2 + btn_w + 6 + 90 + 6, top: y, width: 100, height: BTN_HEIGHT)
+    y += BTN_HEIGHT + 6
 
+    # Copy-from
     out << widget('label', id: 'hl_copy_hdr', value: 'Copy from another character', left: 2, top: y, width: w, height: ROW_HEIGHT)
     y += ROW_HEIGHT
-    keys = list_character_keys
     others = keys.reject { |k| k.downcase == char_key.to_s.downcase }
     if others.empty?
       out << widget('label', id: 'hl_nosync', value: 'No other characters to copy from.',
@@ -2047,18 +1717,19 @@ module SagaHl
         fvalues = ['_'] + fvalues
         fi = 0
       end
+      out << widget('label', id: 'hl_from_lbl', value: 'Copy from', left: 2, top: y + 2, width: 64, height: DROP_HEIGHT)
       out << widget('dropDownBox',
                     id: 'hl_from',
                     value: flabels[fi] || flabels[0],
                     content_text: flabels.join(','),
                     content_value: fvalues.join(','),
                     cmd: '*hl syncsrc %hl_from%',
-                    left: 2, top: y, width: 360, height: DROP_HEIGHT)
+                    left: 70, top: y, width: w - 180, height: DROP_HEIGHT)
       out << widget('cmdButton', id: 'hl_sync', value: 'Sync', cmd: '*hl sync %hl_from%',
-                    left: 370, top: y, width: 90, height: BTN_HEIGHT)
+                    left: w - 100, top: y, width: 98, height: BTN_HEIGHT)
       y += DROP_HEIGHT + 2
       out << widget('label', id: 'hl_sync_hint',
-                    value: 'Check groups below, then Sync. Open Diff after Sync to review.',
+                    value: 'Check groups below, then Sync. Changes summary updates after Sync.',
                     left: 2, top: y, width: w, height: ROW_HEIGHT)
       y += ROW_HEIGHT
 
@@ -2070,15 +1741,12 @@ module SagaHl
                       left: 170, top: y, width: 40, height: ROW_HEIGHT)
         sel_n = sync_group_sel.count { |_, v| v } rescue 0
         out << widget('label', id: 'hl_grp_count', value: "#{sel_n}/#{sync_group_meta.size} selected",
-                      left: 220, top: y, width: 200, height: ROW_HEIGHT)
+                      left: 220, top: y, width: w - 222, height: ROW_HEIGHT)
         y += ROW_HEIGHT
-        # Two columns for large group lists
         sync_group_meta.each_with_index do |m, idx|
           checked = (sync_group_sel || {})[m['id']] ? '1' : '0'
           wid = "hl_sg_#{idx}"
           text = dropdown_safe("#{m['label']} (#{m['count']})")
-          col = idx.even? ? 8 : (w / 2)
-          row_y = y + (idx / 2) * ROW_HEIGHT
           out << widget('checkBox',
                         id: wid,
                         text: text,
@@ -2086,40 +1754,139 @@ module SagaHl
                         checked_value: '1',
                         unchecked_value: '0',
                         cmd: "*hl syncgrp #{idx} %#{wid}%",
-                        left: col, top: row_y, width: (w / 2) - 16, height: ROW_HEIGHT)
+                        left: 8, top: y, width: w - 10, height: ROW_HEIGHT)
+          y += ROW_HEIGHT
         end
-        y += ((sync_group_meta.size + 1) / 2) * ROW_HEIGHT
       end
     end
-    y
-  end
+    y += 6
 
-  def self.build_dialog
-    ensure_toggles!
-    ensure_ui_defaults!
-    self.char_key ||= detect_char_key
-    set = if working && working['character'].to_s.downcase == char_key.to_s.downcase
-      working
+    # Changes summary (working vs live prefs)
+    out << widget('label', id: 'hl_chg_hdr', value: 'Changes (working vs live prefs)', left: 2, top: y, width: w - 200, height: ROW_HEIGHT)
+    out << widget('cmdButton', id: 'hl_diff_ref', value: 'Refresh', cmd: '*hl diff',
+                  left: w - 190, top: y, width: 80, height: BTN_HEIGHT)
+    out << widget('cmdButton', id: 'hl_discard', value: 'Discard', cmd: '*hl discard',
+                  left: w - 100, top: y, width: 90, height: BTN_HEIGHT)
+    y += BTN_HEIGHT + 2
+
+    begin
+      report = diff_cache || refresh_diff!
+      out << widget('label', id: 'hl_diff_sum', value: diff_summary_line(report),
+                    left: 2, top: y, width: w - 4, height: ROW_HEIGHT)
+      y += ROW_HEIGHT
+      if (report['groupsAdded'] || []).any?
+        out << widget('label', id: 'hl_ga',
+                      value: truncate_text("groups +: #{report['groupsAdded'].map { |g| ascii_label(g) }.join(', ')}", 90),
+                      left: 2, top: y, width: w - 4, height: ROW_HEIGHT)
+        y += ROW_HEIGHT
+      end
+      if (report['groupsRemoved'] || []).any?
+        out << widget('label', id: 'hl_gr',
+                      value: truncate_text("groups -: #{report['groupsRemoved'].map { |g| ascii_label(g) }.join(', ')}", 90),
+                      left: 2, top: y, width: w - 4, height: ROW_HEIGHT)
+        y += ROW_HEIGHT
+      end
+
+      shows = %w[all added removed changed]
+      svi = shows.index(diff_filter.to_s) || 0
+      out << widget('dropDownBox', id: 'hl_diffshow',
+                    value: shows[svi],
+                    content_text: shows.join(','),
+                    content_value: shows.join(','),
+                    cmd: '*hl diffshow %hl_diffshow%',
+                    left: 2, top: y, width: 120, height: DROP_HEIGHT)
+      items = diff_items(report)
+      total = items.size
+      pages = total.zero? ? 1 : ((total + DIFF_PAGE_SIZE - 1) / DIFF_PAGE_SIZE)
+      self.diff_page = [[diff_page.to_i, 0].max, pages - 1].min
+      start = diff_page * DIFF_PAGE_SIZE
+      slice = items[start, DIFF_PAGE_SIZE] || []
+      stop = total.zero? ? 0 : [start + slice.size, total].min
+      out << widget('cmdButton', id: 'hl_dprev', value: 'Prev', cmd: '*hl page -1',
+                    left: 130, top: y, width: 60, height: BTN_HEIGHT)
+      out << widget('cmdButton', id: 'hl_dnext', value: 'Next', cmd: '*hl page +1',
+                    left: 196, top: y, width: 60, height: BTN_HEIGHT)
+      out << widget('label', id: 'hl_drange',
+                    value: total.zero? ? 'no deltas' : "#{start + 1}-#{stop} of #{total}",
+                    left: 266, top: y + 2, width: 160, height: ROW_HEIGHT)
+      y += DROP_HEIGHT + 4
+
+      if slice.empty?
+        out << widget('label', id: 'hl_diff_none', value: 'No changes vs live prefs.',
+                      left: 8, top: y, width: w - 10, height: ROW_HEIGHT)
+        y += ROW_HEIGHT
+      else
+        slice.each_with_index do |item, idx|
+          kind = item['_kind'].to_s
+          if kind.empty?
+            kind = if item['changes']
+              'changed'
+            elsif diff_filter.to_s == 'removed'
+              'removed'
+            else
+              'added'
+            end
+          end
+          if kind == 'changed' || item['changes']
+            bits = (item['changes'] || []).first(3).map { |ch| "#{ch['field']}:#{ch['before']}->#{ch['after']}" }.join(' ')
+            line = truncate_text("~ #{item['pattern']}  #{bits}", 92)
+          else
+            marker = kind == 'removed' ? '-' : '+'
+            en = item['enabled'] == false ? 'off' : 'on'
+            g = item['group'] || '-'
+            line = truncate_text("#{marker} [#{ascii_label(g)}] #{en} #{item['color']}  #{item['pattern']}", 92)
+          end
+          out << widget('label', id: "hl_drow_#{idx}", value: line, left: 4, top: y, width: w - 8, height: ROW_HEIGHT)
+          y += ROW_HEIGHT
+        end
+      end
+    rescue StandardError => e
+      out << widget('label', id: 'hl_diff_err', value: "Diff error: #{e.message}",
+                    left: 2, top: y, width: w - 4, height: ROW_HEIGHT)
+      y += ROW_HEIGHT
+    end
+    y += 6
+
+    # Restore
+    out << widget('label', id: 'hl_undo_hdr', value: 'Undo (restore backup to import file)', left: 2, top: y, width: w, height: ROW_HEIGHT)
+    y += ROW_HEIGHT
+    backups = begin
+      list_backups(char_key).first(RESTORE_PICK_LIMIT)
+    rescue StandardError
+      []
+    end
+    if backups.empty?
+      out << widget('label', id: 'hl_nobak', value: 'No backups yet for this character.',
+                    left: 8, top: y, width: w - 10, height: ROW_HEIGHT)
+      y += ROW_HEIGHT
     else
-      begin
-        load_set_from_prefs(char_key)
-      rescue StandardError
-        empty_set(char_key)
+      blabels = backups.map do |b|
+        id = b['id'].to_s
+        short = id.sub(/\A(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2})_/) { "#{Regexp.last_match(2)}-#{Regexp.last_match(3)} " }
+        short = short.split('_').first(2).join(' ')
+        lab = ascii_label(b['label'].to_s)
+        n = b['highlightCount']
+        dropdown_safe(n ? "#{short} #{lab} (#{n})" : short)
       end
+      bvalues = backups.map { |b| dropdown_safe(b['id']) }
+      out << widget('dropDownBox',
+                    id: 'hl_restore',
+                    value: blabels[0],
+                    content_text: blabels.join(','),
+                    content_value: bvalues.join(','),
+                    cmd: '*hl restore %hl_restore%',
+                    left: 2, top: y, width: w - 4, height: DROP_HEIGHT)
+      y += DROP_HEIGHT
     end
+    y += 6
 
-    out = String.new("<dialogData id='#{DIALOG_ID}' clear='t'>")
-    y = 0
-    w = PANEL_WIDTH
+    out << widget('label', id: 'hl_sep', value: '---', left: 2, top: y, width: w, height: ROW_HEIGHT)
+    y += ROW_HEIGHT
+    out << widget('label', id: 'hl_coach', value: coach_line, left: 2, top: y, width: w - 4, height: ROW_HEIGHT)
+    y += ROW_HEIGHT
+    note = last_status.to_s.empty? ? 'Ready.' : last_status.to_s
+    out << widget('label', id: 'hl_note', value: note, left: 2, top: y, width: w - 4, height: ROW_HEIGHT)
 
-    y = build_shell_header(out, y, w, set)
-    y = case mode.to_s
-        when 'diff' then build_diff(out, y, w, set)
-        when 'backups' then build_backups(out, y, w, set)
-        when 'tools' then build_tools(out, y, w, set)
-        else build_browse(out, y, w, set)
-        end
-    build_footer(out, y + 4, w)
     out << '</dialogData>'
     out
   end
