@@ -587,7 +587,7 @@ module SagaHl
     s = color.to_s.strip
     return nil unless s =~ /\A#?([0-9a-fA-F]{6})\z/
     hex = Regexp.last_match(1)
-    [hex[0, 2].to_i(16), hex[2, 4].to_i(16), hex[4, 6].to_i(16)]
+    [hex[0, 2].to_i(16), hex[2, 2].to_i(16), hex[4, 2].to_i(16)]
   end
 
   def self.color_distance(a, b)
@@ -784,9 +784,10 @@ module SagaHl
     dedupe_note = ''
     if results['dedupe']
       rem = results['dedupe']['removed'].to_i
+      exact = results['dedupe']['removedExact'].to_i
       close = results['dedupe']['removedCloseColor'].to_i
       dedupe_note = if rem.positive?
-        close.positive? ? " (deduped -#{rem}, close-color -#{close})" : " (deduped -#{rem})"
+        " (deduped -#{rem}: exact -#{exact} close-color -#{close})"
       else
         ' (dedupe 0)'
       end
@@ -1044,6 +1045,14 @@ end
 
 # BEGIN saga_hl/messaging
 module SagaHl
+  # Story-window lines: always prefix [lich] so Saga filters catch our noise.
+  # Do not use this for dialog XML (_respond).
+  def self.story_echo(line)
+    text = line.to_s
+    text = text.sub(/\A\[lich\]\s*/i, '')
+    echo "[lich] #{text}"
+  end
+
   def self.import_restore_lines(info)
     path = info['importPath'] || last_import_path || import_path
     bak = info['backup'] || last_backup_id
@@ -1555,17 +1564,17 @@ before_dying do
   _respond("<closeDialog id='#{SagaHl::DIALOG_ID}'/>")
 end
 
-echo "saga-hl panel active. Improve+write / Write only / Name pack / Sync, or *hl help."
-SagaHl.status_lines.each { |l| echo l }
+SagaHl.story_echo('saga-hl panel active. Improve+write / Write only / Name pack / Sync, or *hl help.')
+SagaHl.status_lines.each { |l| SagaHl.story_echo(l) }
 
 loop do
   if SagaHl.pending_cmd
     raw = SagaHl.pending_cmd
     SagaHl.pending_cmd = nil
     begin
-      SagaHl.handle_command(raw).each { |line| echo line }
+      SagaHl.handle_command(raw).each { |line| SagaHl.story_echo(line) }
     rescue StandardError => e
-      echo "saga-hl error: #{e.message}"
+      SagaHl.story_echo("saga-hl error: #{e.message}")
     end
   end
   if SagaHl.dirty
