@@ -2,43 +2,54 @@
 
   saga_hl_sagapanel.lic
 
-  Saga-only panel to improve Saga custom text highlights safely while the
-  client is running. Reads prefs, never writes prefs live; always backs up,
-  then writes an Import Settings JSON you load in Saga.
+  Saga-only floating workspace to improve Saga custom text highlights safely
+  while the client is running. Reads prefs, never writes prefs live; always
+  backs up, then writes an Import Settings JSON you load in Saga.
 
   Pair with saga-hl.lic if you want the short ;saga-hl start command.
 
   Safe flow:
     1. Read highlights from Saga prefs.json (no live prefs writes)
-    2. Snapshot under saga-hl-backups/<char>/
-    3. Optionally run enabled improvers and/or Sync from another character
-    4. Write saga-highlights.json (home directory)
-    5. Saga -> Import Settings -> Custom highlights -> that file
-    6. Undo via the Restore dropdown (or *hl restore <backup-id>)
+    2. Edit the in-memory working set (Browse / Diff / Backups / Tools)
+    3. Snapshot under saga-hl-backups/<char>/
+    4. Optionally run enabled improvers and/or Sync from another character
+    5. Write saga-highlights.json (home directory)
+    6. Saga -> Import Settings -> Custom highlights -> that file
+    7. Undo via Backups mode (or *hl restore <backup-id>)
 
   In-game start:
     ;saga-hl                 - via saga-hl.lic launcher (optional)
     ;saga_hl_sagapanel       - this script directly
 
-  Panel (logged-in character only):
-    Improve toggles, Improve+write / Backup / Write only,
-    Copy-from + group checkboxes + Sync, Restore
+  Workspace (logged-in character only):
+    Modes: Browse | Diff | Backups | Tools
+    Close button / *hl close stops the workspace
 
   Commands:
     *hl help                 - This command list (story window)
     *hl status               - Counts / paths
-    *hl set <improver> 0|1   - Improver checkbox state
-    *hl toggle <name>        - Flip an improver on/off
-    *hl apply                - Backup -> ON improvers -> write import JSON
-    *hl package              - Enable standard package, then apply
-    *hl backup               - Snapshot only
-    *hl write                - Write import JSON only (no improvers)
-    *hl syncsrc <from-key>   - Set copy-from character + group list
-    *hl syncgrp all|N 0|1    - Toggle groups to copy (N = checkbox index)
-    *hl sync <from-key>      - Copy selected groups (skip existing) -> write import
-    *hl restore <backup-id>  - Rewrite import JSON from that backup
-    *hl char <name|instance> - CLI only: switch working character
-    *hl instance <id>        - CLI only: Prime / Test / ...
+    *hl close                - Close workspace and stop script
+    *hl mode browse|diff|backups|tools
+    *hl filter <text>        - Browse filter
+    *hl page <n>             - Browse/diff/backup page
+    *hl sel <id|idx>         - Select rule
+    *hl del | *hl delmatch   - Delete selected / filtered
+    *hl enable <id> 0|1      - Enable/disable rule
+    *hl flag <name> 0|1      - Flag on selected
+    *hl color <hex>          - Color on selected
+    *hl pattern <text>       - Pattern on selected
+    *hl group <name>         - Group on selected
+    *hl diff | *hl diff backup <id>
+    *hl diffshow all|added|removed|changed
+    *hl discard              - Reload working from prefs
+    *hl bak rename <id> <label...>
+    *hl bak starter <id> | *hl bak load-starter
+    *hl bak load <id> | *hl bak select <id>
+    *hl set <improver> 0|1 | *hl toggle <name>
+    *hl apply | *hl package | *hl backup | *hl write
+    *hl syncsrc <from-key> | *hl syncgrp all|N 0|1 | *hl sync <from-key>
+    *hl restore <backup-id>
+    *hl char <name|instance> | *hl instance <id>   (CLI only)
 
   Improve+write vs Write only:
     Improve+write: backup, run every ON improver, then write the import file.
@@ -54,6 +65,7 @@
   Paths:
     Linux:   ~/.config/saga/prefs.json and saga-hl-backups/
     Windows: %APPDATA%\saga\prefs.json and saga-hl-backups\
+    Starter: <saga-config>/saga-hl-starter/<char-slug>.json
     Import:  ~/saga-highlights.json  or  %USERPROFILE%\saga-highlights.json
 
   Story window:
@@ -68,11 +80,20 @@
        creator: loraque (loraque@gmail.com)
         author: loraque (loraque@gmail.com)
           game: Gemstone
-          tags: saga, frontend, panel, highlights, import
+          tags: saga, frontend, panel, highlights, import, workspace
       required: Lich >= 5.12.0
-       version: 0.4.5
+       version: 0.5.0
 
   changelog:
+    0.5.0 (2026-10-19)
+      floating workspace redesign (resident=false): Browse / Diff / Backups /
+        Tools modes; Close / *hl close exits cleanly
+      Browse: filter/type/group/sort, paginated rows, detail flags/color/
+        pattern/group, bulk enable/disable/delete match
+      Diff: Ruby port of compare_sets vs live prefs or backup baseline
+      Backups: paginated list, rename, starter set/load, load into working,
+        compare vs working
+      Tools: improvers + Improve+write / Write only / Backup / Sync
     0.4.5 (2026-10-19)
       header cleanup for sharing: creator/author attribution, accurate feature
         list, paths, and test notes; remove stale Name-pack panel references
@@ -108,14 +129,16 @@
     Named regions use # BEGIN saga_hl/<name> / # END saga_hl/<name> markers.
     Prefer editing one region at a time; keep markers intact; bump version +
     changelog after changes.
-      saga_hl/paths           OS paths, character key
+      saga_hl/paths           OS paths, character key, starter dir
       saga_hl/model           highlight/group hashes, richness, clone, ids, merge
       saga_hl/io              prefs read, import JSON write, JSON helpers
-      saga_hl/backup          versioned backups + restore-to-import
+      saga_hl/backup          versioned backups, rename, starter, restore
+      saga_hl/compare         working vs live/backup diff
       saga_hl/improve_dedupe  exact + close-color dedupe
+      saga_hl/editor          browse filter/sort/page/select/mutate
       saga_hl/pipeline        apply / package / sync
       saga_hl/messaging       story echoes, Import Settings copy, coach
-      saga_hl/panel           dialog XML + toggle state
+      saga_hl/panel           dialog XML + mode layouts
       saga_hl/commands        *hl routing
 
 =end
@@ -135,10 +158,13 @@ module SagaHl
   ROW_HEIGHT = 18
   DROP_HEIGHT = 24
   BTN_HEIGHT = 22
-  PANEL_WIDTH = 380
+  PANEL_WIDTH = 1000
   BACKUP_KEEP = 40
-  RESTORE_PICK_LIMIT = 8
+  BROWSE_PAGE_SIZE = 18
+  DIFF_PAGE_SIZE = 12
+  BACKUP_PAGE_SIZE = 10
   IMPORT_BASENAME = 'saga-highlights.json'
+  STARTER_DIRNAME = 'saga-hl-starter'
 
   INSTANCE_TITLES = {
     'prime' => 'Prime',
@@ -158,20 +184,38 @@ module SagaHl
   ].freeze
 
   STANDARD_PACKAGE = [:dedupe].freeze
+  MODES = %w[browse diff backups tools].freeze
 
   # Max RGB Euclidean distance for "close" colors (#RRGGBB).
   COLOR_CLOSE_DIST = 40.0
+
+  DEFAULT_COLORS = %w[
+    #33ff08 #ffffff #00ffff #ff66ff #ff9000 #ffd700 #ffa500
+    #c0c0ff #66ccff #ff6a6a #aaaaaa #32cd32 #ff6600 #ffad5f
+  ].freeze
+
+  FLAG_NAMES = %w[bold italic underline notify wholeWord caseSensitive regex].freeze
+
+  COMPARE_FIELDS = %w[
+    color scope wholeWord caseSensitive highlightType enabled
+    regex bold italic underline notify sound
+  ].freeze
 
   class << self
     attr_accessor :toggles, :last_backup_id, :last_import_path, :last_status,
                   :working, :dirty, :char_key, :pending_cmd, :instance_filter,
                   :last_action, :sync_source, :sync_group_sel, :sync_group_meta,
-                  :_id_seq
+                  :_id_seq, :quit, :mode,
+                  :browse_filter, :browse_type, :browse_group, :browse_sort,
+                  :browse_page, :selected_id,
+                  :diff_baseline, :diff_filter, :diff_page, :diff_cache,
+                  :bak_page, :bak_selected, :bak_rename
   end
 
   # Synthetic ids for sync group filter
   SYNC_NONE = '__none__'.freeze
   SYNC_ORPHAN_PREFIX = '__orphan__:'.freeze
+  NO_GROUP = '__nogroup__'.freeze
 
   def self.windows?
     ENV['OS'].to_s =~ /windows/i || File::ALT_SEPARATOR == '\\' ||
@@ -206,6 +250,18 @@ module SagaHl
 
   def self.logs_root
     File.join(saga_config_dir, 'logs')
+  end
+
+  def self.starter_root
+    File.join(saga_config_dir, STARTER_DIRNAME)
+  end
+
+  def self.starter_pointer_path(key = nil)
+    File.join(starter_root, "#{char_slug(key)}.json")
+  end
+
+  def self.starter_import_path(key = nil)
+    File.join(starter_root, char_slug(key), 'import.json')
   end
 
   def self.import_path
@@ -286,6 +342,14 @@ module SagaHl
     end
   end
 
+  def self.ensure_working!
+    self.char_key ||= detect_char_key
+    unless working && working['character'].to_s.downcase == char_key.to_s.downcase
+      self.working = load_set_from_prefs(char_key)
+    end
+    working
+  end
+
   def self.list_character_keys
     (read_prefs_hash['characterSettings'] || {}).keys.map(&:to_s).sort_by(&:downcase)
   end
@@ -322,6 +386,21 @@ module SagaHl
       self.instance_filter = inst
     end
     instance_filter
+  end
+
+  def self.ensure_ui_defaults!
+    self.mode = 'browse' if mode.to_s.empty?
+    self.browse_filter ||= ''
+    self.browse_type ||= 'all'
+    self.browse_group ||= 'all'
+    self.browse_sort ||= 'pattern'
+    self.browse_page = 0 if browse_page.nil?
+    self.diff_baseline ||= 'live'
+    self.diff_filter ||= 'all'
+    self.diff_page = 0 if diff_page.nil?
+    self.bak_page = 0 if bak_page.nil?
+    self.bak_rename ||= ''
+    self.quit = false if quit.nil?
   end
 end
 # END saga_hl/paths
@@ -361,6 +440,22 @@ module SagaHl
     return '' if group_id.to_s.empty?
     g = (set['groups'] || []).find { |x| x['id'] == group_id }
     g ? g['name'].to_s : group_id.to_s
+  end
+
+  def self.find_highlight(set, id)
+    (set['highlights'] || []).find { |h| h['id'].to_s == id.to_s }
+  end
+
+  def self.find_group_by_name(set, name)
+    want = name.to_s.downcase
+    (set['groups'] || []).find { |g| g['name'].to_s.downcase == want }
+  end
+
+  def self.truthy_flag(h, name)
+    v = h[name]
+    return false if v.nil?
+    return !!v if [true, false].include?(v)
+    %w[1 true yes on].include?(v.to_s.downcase)
   end
 
   # Merge source into target by exact pattern. mode: skip | replace | clear
@@ -471,6 +566,16 @@ module SagaHl
     }
   end
 
+  def self.load_set_from_import_json(path, character = nil)
+    data = read_json_file(path)
+    cs = data['characterSettings'] || {}
+    {
+      'character' => (data['character'] || character || char_key),
+      'highlights' => (cs['customHighlights'] || []).map { |h| stringify_keys(h) },
+      'groups' => (cs['highlightGroups'] || []).map { |g| stringify_keys(g) }
+    }
+  end
+
   def self.stringify_keys(hash)
     out = {}
     (hash || {}).each { |k, v| out[k.to_s] = v }
@@ -522,6 +627,7 @@ module SagaHl
       'version' => 1,
       'character' => set['character'],
       'reason' => reason,
+      'label' => reason,
       'createdAt' => Time.now.utc.iso8601,
       'highlightCount' => (set['highlights'] || []).size,
       'groupCount' => (set['groups'] || []).size
@@ -539,15 +645,26 @@ module SagaHl
       next unless File.file?(man)
       begin
         m = read_json_file(man)
-        { 'id' => name, 'reason' => m['reason'], 'highlightCount' => m['highlightCount'] }
+        {
+          'id' => name,
+          'reason' => m['reason'].to_s,
+          'label' => (m['label'] || m['reason']).to_s,
+          'highlightCount' => m['highlightCount'],
+          'groupCount' => m['groupCount'],
+          'createdAt' => m['createdAt'].to_s
+        }
       rescue StandardError
-        { 'id' => name, 'reason' => '', 'highlightCount' => nil }
+        { 'id' => name, 'reason' => '', 'label' => '', 'highlightCount' => nil, 'groupCount' => nil, 'createdAt' => '' }
       end
     end
   end
 
+  def self.backup_dir(backup_id, key = nil)
+    File.join(backup_root, char_slug(key), backup_id)
+  end
+
   def self.backup_import_path(backup_id, key = nil)
-    File.join(backup_root, char_slug(key), backup_id, 'import.json')
+    File.join(backup_dir(backup_id, key), 'import.json')
   end
 
   def self.restore_backup_to_import(backup_id, key = nil)
@@ -563,8 +680,246 @@ module SagaHl
     )
     path
   end
+
+  def self.load_backup_set(backup_id, key = nil)
+    src = backup_import_path(backup_id, key)
+    raise "backup not found: #{backup_id}" unless File.file?(src)
+    load_set_from_import_json(src, key || char_key)
+  end
+
+  # Rename directory keeping YYYYMMDD-HHMMSS_ prefix when present; update manifest.
+  def self.rename_backup!(backup_id, new_label, key = nil)
+    key = normalize_char_key(key || char_key || detect_char_key)
+    old_dir = backup_dir(backup_id, key)
+    raise "backup not found: #{backup_id}" unless File.directory?(old_dir)
+
+    label = ascii_label(new_label).gsub(/[^a-zA-Z0-9._ -]+/, ' ').squeeze(' ').strip
+    raise 'label empty' if label.empty?
+    safe = label.gsub(/[^a-zA-Z0-9._-]+/, '-')[0, 48]
+    safe = 'renamed' if safe.empty?
+
+    stamp = if backup_id =~ /\A(\d{8}-\d{6})_/
+      Regexp.last_match(1)
+    else
+      Time.now.strftime('%Y%m%d-%H%M%S')
+    end
+    new_id = "#{stamp}_#{safe}"
+    new_dir = backup_dir(new_id, key)
+    n = 2
+    while File.exist?(new_dir) && new_id != backup_id
+      new_id = "#{stamp}_#{safe}-#{n}"
+      new_dir = backup_dir(new_id, key)
+      n += 1
+    end
+
+    FileUtils.mv(old_dir, new_dir) unless old_dir == new_dir
+    man_path = File.join(new_dir, 'manifest.json')
+    if File.file?(man_path)
+      m = read_json_file(man_path)
+      m['label'] = label
+      m['reason'] = label
+      write_json_file(man_path, m)
+    end
+    self.bak_selected = new_id if bak_selected.to_s == backup_id
+    new_id
+  end
+
+  def self.read_starter(key = nil)
+    path = starter_pointer_path(key)
+    return nil unless File.file?(path)
+    read_json_file(path)
+  rescue StandardError
+    nil
+  end
+
+  def self.set_starter!(backup_id, key = nil)
+    key = normalize_char_key(key || char_key || detect_char_key)
+    src = backup_import_path(backup_id, key)
+    raise "backup not found: #{backup_id}" unless File.file?(src)
+    backs = list_backups(key)
+    info = backs.find { |b| b['id'] == backup_id } || { 'id' => backup_id, 'label' => backup_id }
+    dest_dir = File.join(starter_root, char_slug(key))
+    FileUtils.mkdir_p(dest_dir)
+    dest_import = File.join(dest_dir, 'import.json')
+    FileUtils.cp(src, dest_import)
+    pointer = {
+      'kind' => 'saga-hl-starter',
+      'version' => 1,
+      'character' => key,
+      'backupId' => backup_id,
+      'label' => (info['label'].to_s.empty? ? backup_id : info['label']),
+      'setAt' => Time.now.utc.iso8601,
+      'importPath' => dest_import
+    }
+    write_json_file(starter_pointer_path(key), pointer)
+    pointer
+  end
+
+  def self.load_starter_into_working!(key = nil)
+    key = normalize_char_key(key || char_key || detect_char_key)
+    ptr = read_starter(key)
+    raise 'no starter set for this character' unless ptr
+    path = ptr['importPath'].to_s
+    path = starter_import_path(key) if path.empty? || !File.file?(path)
+    raise 'starter import.json missing' unless File.file?(path)
+    set = load_set_from_import_json(path, key)
+    set['character'] = key
+    self.working = set
+    self.diff_cache = nil
+    self.dirty = true
+    set
+  end
 end
 # END saga_hl/backup
+
+# BEGIN saga_hl/compare
+module SagaHl
+  def self.norm_pattern_key(pattern)
+    pattern.to_s.downcase.strip
+  end
+
+  def self.compare_field_val(h, name)
+    case name
+    when 'regex', 'bold', 'italic', 'underline', 'notify', 'wholeWord', 'caseSensitive', 'enabled'
+      truthy_flag(h, name)
+    when 'sound'
+      s = h['sound'].to_s.strip
+      s.empty? ? nil : s
+    else
+      h[name]
+    end
+  end
+
+  def self.summarize_hl(h, gname)
+    {
+      'pattern' => h['pattern'].to_s,
+      'color' => h['color'].to_s,
+      'group' => gname.to_s.empty? ? nil : gname,
+      'highlightType' => h['highlightType'].to_s.empty? ? 'general' : h['highlightType'].to_s,
+      'scope' => h['scope'].to_s,
+      'regex' => truthy_flag(h, 'regex'),
+      'enabled' => h.key?('enabled') ? truthy_flag(h, 'enabled') : true,
+      'wholeWord' => truthy_flag(h, 'wholeWord'),
+      'caseSensitive' => truthy_flag(h, 'caseSensitive'),
+      'id' => h['id'].to_s
+    }
+  end
+
+  # Compare existing (baseline) vs proposed (working). Match by casefold pattern.
+  def self.compare_sets(existing, proposed)
+    ex_by = {}
+    (existing['highlights'] || []).each do |h|
+      k = norm_pattern_key(h['pattern'])
+      next if k.empty?
+      ex_by[k] = h
+    end
+    pr_by = {}
+    (proposed['highlights'] || []).each do |h|
+      k = norm_pattern_key(h['pattern'])
+      next if k.empty?
+      pr_by[k] = h
+    end
+
+    ex_groups = (existing['groups'] || []).map { |g| g['name'].to_s }.reject(&:empty?).to_set
+    pr_groups = (proposed['groups'] || []).map { |g| g['name'].to_s }.reject(&:empty?).to_set
+
+    report = {
+      'character' => (proposed['character'] || existing['character']).to_s,
+      'existingCount' => (existing['highlights'] || []).size,
+      'proposedCount' => (proposed['highlights'] || []).size,
+      'added' => [],
+      'removed' => [],
+      'changed' => [],
+      'unchanged' => 0,
+      'groupsAdded' => (pr_groups - ex_groups).to_a.sort,
+      'groupsRemoved' => (ex_groups - pr_groups).to_a.sort
+    }
+
+    all_keys = (ex_by.keys + pr_by.keys).uniq
+    all_keys.sort_by! { |k| (ex_by[k] || pr_by[k])['pattern'].to_s.downcase }
+
+    all_keys.each do |key|
+      ex = ex_by[key]
+      pr = pr_by[key]
+      if ex && !pr
+        report['removed'] << summarize_hl(ex, group_name(existing, ex['groupId']))
+        next
+      end
+      if pr && !ex
+        report['added'] << summarize_hl(pr, group_name(proposed, pr['groupId']))
+        next
+      end
+      ex_g = group_name(existing, ex['groupId'])
+      pr_g = group_name(proposed, pr['groupId'])
+      changes = []
+      COMPARE_FIELDS.each do |fname|
+        before = compare_field_val(ex, fname)
+        after = compare_field_val(pr, fname)
+        next if before == after
+        changes << { 'field' => fname, 'before' => before, 'after' => after }
+      end
+      if ex_g != pr_g
+        changes << { 'field' => 'group', 'before' => (ex_g.empty? ? nil : ex_g), 'after' => (pr_g.empty? ? nil : pr_g) }
+      end
+      if ex['pattern'].to_s != pr['pattern'].to_s
+        changes << { 'field' => 'pattern', 'before' => ex['pattern'], 'after' => pr['pattern'] }
+      end
+      if changes.empty?
+        report['unchanged'] += 1
+      else
+        report['changed'] << {
+          'pattern' => pr['pattern'].to_s,
+          'beforeGroup' => (ex_g.empty? ? nil : ex_g),
+          'afterGroup' => (pr_g.empty? ? nil : pr_g),
+          'changes' => changes,
+          'id' => pr['id'].to_s
+        }
+      end
+    end
+    report
+  end
+
+  def self.diff_summary_line(report, baseline_label: 'live')
+    a = (report['added'] || []).size
+    r = (report['removed'] || []).size
+    c = (report['changed'] || []).size
+    u = report['unchanged'].to_i
+    "#{baseline_label} #{report['existingCount']} -> working #{report['proposedCount']} (+#{a} / -#{r} / ~#{c} / =#{u})"
+  end
+
+  def self.baseline_set
+    ensure_ui_defaults!
+    if diff_baseline.to_s == 'live' || diff_baseline.to_s.empty?
+      load_set_from_prefs(char_key)
+    else
+      load_backup_set(diff_baseline, char_key)
+    end
+  end
+
+  def self.refresh_diff!
+    ensure_working!
+    ensure_ui_defaults!
+    existing = baseline_set
+    proposed = working
+    self.diff_cache = compare_sets(existing, proposed)
+    diff_cache
+  end
+
+  def self.diff_items(report = nil)
+    ensure_ui_defaults!
+    report ||= (diff_cache || refresh_diff!)
+    case diff_filter.to_s
+    when 'added' then report['added'] || []
+    when 'removed' then report['removed'] || []
+    when 'changed' then report['changed'] || []
+    else
+      (report['added'] || []).map { |x| x.merge('_kind' => 'added') } +
+        (report['removed'] || []).map { |x| x.merge('_kind' => 'removed') } +
+        (report['changed'] || []).map { |x| x.merge('_kind' => 'changed') }
+    end
+  end
+end
+# END saga_hl/compare
 
 # BEGIN saga_hl/improve_dedupe
 module SagaHl
@@ -646,6 +1001,214 @@ module SagaHl
 end
 # END saga_hl/improve_dedupe
 
+# BEGIN saga_hl/editor
+module SagaHl
+  def self.current_set
+    ensure_working!
+  end
+
+  def self.filtered_highlights
+    ensure_ui_defaults!
+    set = current_set
+    items = (set['highlights'] || []).dup
+    filt = browse_filter.to_s.downcase
+    unless filt.empty?
+      items.select! { |h| h['pattern'].to_s.downcase.include?(filt) }
+    end
+    typ = browse_type.to_s.downcase
+    unless typ.empty? || typ == 'all'
+      items.select! do |h|
+        t = h['highlightType'].to_s
+        t = 'general' if t.empty?
+        t.downcase == typ
+      end
+    end
+    grp = browse_group.to_s
+    unless grp.empty? || grp == 'all'
+      if grp == NO_GROUP
+        items.select! { |h| h['groupId'].to_s.empty? }
+      else
+        items.select! { |h| h['groupId'].to_s == grp }
+      end
+    end
+    case browse_sort.to_s.downcase
+    when 'color'
+      items.sort_by! { |h| [h['color'].to_s.downcase, h['pattern'].to_s.downcase] }
+    when 'group'
+      items.sort_by! { |h| [group_name(set, h['groupId']).downcase, h['pattern'].to_s.downcase] }
+    when 'type'
+      items.sort_by! { |h| [(h['highlightType'].to_s.empty? ? 'general' : h['highlightType'].to_s).downcase, h['pattern'].to_s.downcase] }
+    else
+      items.sort_by! { |h| h['pattern'].to_s.downcase }
+    end
+    items
+  end
+
+  def self.browse_page_slice
+    items = filtered_highlights
+    total = items.size
+    pages = total.zero? ? 1 : ((total + BROWSE_PAGE_SIZE - 1) / BROWSE_PAGE_SIZE)
+    self.browse_page = [[browse_page.to_i, 0].max, pages - 1].min
+    start = browse_page * BROWSE_PAGE_SIZE
+    slice = items[start, BROWSE_PAGE_SIZE] || []
+    { 'items' => slice, 'total' => total, 'pages' => pages, 'start' => start, 'page' => browse_page }
+  end
+
+  def self.selected_highlight
+    ensure_working!
+    return nil if selected_id.to_s.empty?
+    find_highlight(working, selected_id)
+  end
+
+  def self.select_rule!(token)
+    ensure_working!
+    token = token.to_s.strip
+    if token =~ /\A\d+\z/
+      info = browse_page_slice
+      idx = token.to_i
+      h = info['items'][idx]
+      raise "no rule at index #{idx} on this page" unless h
+      self.selected_id = h['id']
+    else
+      h = find_highlight(working, token)
+      raise "rule not found: #{token}" unless h
+      self.selected_id = h['id']
+    end
+    selected_id
+  end
+
+  def self.set_rule_enabled!(id, on)
+    ensure_working!
+    h = find_highlight(working, id)
+    raise "rule not found: #{id}" unless h
+    h['enabled'] = !!on
+    self.diff_cache = nil
+    self.dirty = true
+    h
+  end
+
+  def self.delete_rule!(id = nil)
+    ensure_working!
+    id = selected_id if id.to_s.empty?
+    raise 'no rule selected' if id.to_s.empty?
+    before = (working['highlights'] || []).size
+    working['highlights'] = (working['highlights'] || []).reject { |h| h['id'].to_s == id.to_s }
+    self.selected_id = nil if selected_id.to_s == id.to_s
+    self.diff_cache = nil
+    self.dirty = true
+    before - (working['highlights'] || []).size
+  end
+
+  def self.delete_matching!
+    ensure_working!
+    ids = filtered_highlights.map { |h| h['id'].to_s }
+    raise 'no matching rules' if ids.empty?
+    working['highlights'] = (working['highlights'] || []).reject { |h| ids.include?(h['id'].to_s) }
+    self.selected_id = nil if selected_id && ids.include?(selected_id.to_s)
+    self.diff_cache = nil
+    self.dirty = true
+    ids.size
+  end
+
+  def self.bulk_enable_matching!(on)
+    ensure_working!
+    items = filtered_highlights
+    raise 'no matching rules' if items.empty?
+    items.each { |h| h['enabled'] = !!on }
+    self.diff_cache = nil
+    self.dirty = true
+    items.size
+  end
+
+  def self.set_flag!(name, on, id = nil)
+    ensure_working!
+    name = name.to_s
+    raise "unknown flag #{name}" unless FLAG_NAMES.include?(name)
+    id = selected_id if id.to_s.empty?
+    raise 'no rule selected' if id.to_s.empty?
+    h = find_highlight(working, id)
+    raise "rule not found: #{id}" unless h
+    h[name] = !!on
+    self.diff_cache = nil
+    self.dirty = true
+    h
+  end
+
+  def self.set_color!(hex, id = nil)
+    ensure_working!
+    s = hex.to_s.strip
+    s = "##{s}" unless s.start_with?('#')
+    raise "bad color #{hex.inspect}" unless s =~ /\A#[0-9a-fA-F]{6}\z/
+    id = selected_id if id.to_s.empty?
+    raise 'no rule selected' if id.to_s.empty?
+    h = find_highlight(working, id)
+    raise "rule not found: #{id}" unless h
+    h['color'] = s.downcase
+    self.diff_cache = nil
+    self.dirty = true
+    h
+  end
+
+  def self.set_pattern!(text, id = nil)
+    ensure_working!
+    text = text.to_s
+    raise 'pattern empty' if text.strip.empty?
+    id = selected_id if id.to_s.empty?
+    raise 'no rule selected' if id.to_s.empty?
+    h = find_highlight(working, id)
+    raise "rule not found: #{id}" unless h
+    h['pattern'] = text
+    self.diff_cache = nil
+    self.dirty = true
+    h
+  end
+
+  def self.set_group!(name, id = nil)
+    ensure_working!
+    id = selected_id if id.to_s.empty?
+    raise 'no rule selected' if id.to_s.empty?
+    h = find_highlight(working, id)
+    raise "rule not found: #{id}" unless h
+    name = name.to_s
+    if name.empty? || name == NO_GROUP || name.downcase == '(no group)'
+      h['groupId'] = nil
+    else
+      g = find_group_by_name(working, name)
+      unless g
+        g = { 'id' => new_id('hlg1-'), 'name' => name, 'enabled' => true, 'collapsed' => false }
+        working['groups'] << g
+      end
+      h['groupId'] = g['id']
+    end
+    self.diff_cache = nil
+    self.dirty = true
+    h
+  end
+
+  def self.discard_working!
+    self.char_key ||= detect_char_key
+    self.working = load_set_from_prefs(char_key)
+    self.selected_id = nil
+    self.diff_cache = nil
+    self.dirty = true
+    self.last_action = :discard
+    working
+  end
+
+  def self.colors_for_dropdown(set = nil)
+    set ||= current_set
+    used = (set['highlights'] || []).map { |h| h['color'].to_s.downcase }.select { |c| c =~ /\A#[0-9a-f]{6}\z/ }
+    (DEFAULT_COLORS + used).uniq
+  end
+
+  def self.truncate_text(text, max = 48)
+    s = ascii_label(text)
+    return s if s.length <= max
+    "#{s[0, max - 3]}..."
+  end
+end
+# END saga_hl/editor
+
 # BEGIN saga_hl/pipeline
 module SagaHl
   def self.ensure_toggles!
@@ -699,7 +1262,8 @@ module SagaHl
     _n, inst = split_char_key(key)
     self.instance_filter = inst
     self.working = load_set_from_prefs(key)
-    # Drop copy-from selection when the target character changes.
+    self.selected_id = nil
+    self.diff_cache = nil
     if sync_source && normalize_char_key(sync_source) == key
       self.sync_source = nil
       self.sync_group_sel = nil
@@ -765,6 +1329,7 @@ module SagaHl
     end
 
     path = write_import(working)
+    self.diff_cache = nil
     dedupe_note = ''
     if results['dedupe']
       rem = results['dedupe']['removed'].to_i
@@ -860,7 +1425,6 @@ module SagaHl
       (sync_group_meta || []).each { |m| sync_group_sel[m['id']] = !!on }
       return sync_group_sel
     end
-    # Panel checkboxes pass a meta index; CLI may pass a raw bucket id.
     id = if token =~ /\A\d+\z/
       m = (sync_group_meta || [])[token.to_i]
       raise "unknown sync group index #{token}" unless m
@@ -893,7 +1457,6 @@ module SagaHl
       true
     end
 
-    # Keep group defs that are selected known groups, or create stubs for orphans.
     groups = []
     (source_set['groups'] || []).each do |g|
       groups << g.dup if selected[g['id'].to_s]
@@ -942,6 +1505,7 @@ module SagaHl
     bak = save_backup(before, reason: 'before-sync')
     report = merge_sets!(working, source, mode: 'skip', copy_groups: true)
     path = write_import(working)
+    self.diff_cache = nil
     self.last_status = "synced from #{pretty_char_label(src_key)} (#{selected_n}/#{total_g} groups): +#{report['added']} skipped #{report['skipped']}"
     self.dirty = true
     {
@@ -973,12 +1537,13 @@ module SagaHl
       '--- saga-hl: next steps ---',
       "1. Wrote #{path}",
       '2. Saga -> Import Settings -> Custom highlights -> that file',
-      "3. Undo: pick a backup in the panel (or *hl restore #{bak})",
+      "3. Undo: Backups mode or *hl restore #{bak}",
       '---------------------------'
     ]
   end
 
   def self.coach_line
+    ensure_ui_defaults!
     set = working || empty_set(char_key || detect_char_key)
     n = (set['highlights'] || []).size
     case last_action
@@ -987,11 +1552,13 @@ module SagaHl
     when :write
       "Next: Saga -> Import Settings -> #{IMPORT_BASENAME} (no improvers ran)"
     when :sync
-      'Synced into working set. Improve+write will dedupe these, then Import Settings.'
+      'Synced into working set. Open Diff, or Improve+write to dedupe, then Import Settings.'
     when :backup
       'Snapshot saved. Improve+write when you want a new import file.'
     when :restore
       'Backup copied to import file. Import Settings to load it.'
+    when :discard
+      'Working set reloaded from live prefs.'
     when :char, :instance
       n.zero? ? 'This character has no custom highlights yet.' : "Editing #{pretty_char_label(char_key)} - #{n} rules"
     else
@@ -1000,17 +1567,27 @@ module SagaHl
       elsif n.zero?
         'Empty set - Sync from another character, or use saga-hl CLI for names.'
       else
-        'Ready. Improve+write = improvers then file. Write only = file only.'
+        case mode.to_s
+        when 'browse'
+          'Browse edits working only. Diff -> Write/Improve+write -> Import Settings.'
+        when 'diff'
+          'Diff is working vs baseline. Discard reloads prefs. Write exports import JSON.'
+        when 'backups'
+          'Rename / Set starter / Load into working. Restore writes import JSON only.'
+        else
+          'Ready. Improve+write = improvers then file. Write only = file only.'
+        end
       end
     end
   end
 
   def self.status_lines
     ensure_toggles!
+    ensure_ui_defaults!
     self.char_key ||= detect_char_key
     set = working_for(char_key)
     lines = [
-      "saga-hl  #{pretty_char_label(char_key)}  #{(set['highlights'] || []).size} rules",
+      "saga-hl  #{pretty_char_label(char_key)}  #{(set['highlights'] || []).size} rules  mode=#{mode}",
       "  key: #{char_key}",
       "  import: #{last_import_path || import_path}",
       "  last backup: #{last_backup_id || '(none)'}"
@@ -1038,7 +1615,7 @@ module SagaHl
   end
 
   def self.open_dialog_xml
-    "<closeDialog id='#{DIALOG_ID}'/><openDialog type='dynamic' id='#{DIALOG_ID}' title='saga-hl' target='#{DIALOG_ID}' scroll='manual' location='main' resident='true'><dialogData id='#{DIALOG_ID}'></dialogData></openDialog>"
+    "<closeDialog id='#{DIALOG_ID}'/><openDialog type='dynamic' id='#{DIALOG_ID}' title='saga-hl' target='#{DIALOG_ID}' scroll='manual' location='main' resident='false'><dialogData id='#{DIALOG_ID}'></dialogData></openDialog>"
   end
 
   def self.widget(tag, attrs)
@@ -1046,42 +1623,372 @@ module SagaHl
     "<#{tag} #{parts.join(' ')} />"
   end
 
-  def self.build_dialog
-    ensure_toggles!
-    self.char_key ||= detect_char_key
-    # Prefer in-memory working set only when it matches the active character.
-    set = if working && working['character'].to_s.downcase == char_key.to_s.downcase
-      working
-    else
-      begin
-        load_set_from_prefs(char_key)
-      rescue StandardError
-        empty_set(char_key)
-      end
-    end
+  def self.mode_button(out, y, w, id, label, mode_name, x)
+    active = mode.to_s == mode_name
+    value = active ? "[#{label}]" : label
+    out << widget('cmdButton', id: id, value: value, cmd: "*hl mode #{mode_name}",
+                  left: x, top: y, width: 110, height: BTN_HEIGHT)
+  end
+
+  def self.build_shell_header(out, y, w, set)
     rules = (set['highlights'] || []).size
     groups = (set['groups'] || []).size
-
-    out = String.new("<dialogData id='#{DIALOG_ID}' clear='t'>")
-    y = 0
-    w = PANEL_WIDTH
-
-    out << widget('label', id: 'hl_title', value: 'saga-hl', left: 2, top: y, width: w, height: ROW_HEIGHT)
-    y += ROW_HEIGHT + 2
-
-    # Working character is always the logged-in one (no top dropdown).
-    keys = list_character_keys
-    out << widget('label', id: 'hl_char_lbl', value: 'Character', left: 2, top: y, width: 64, height: ROW_HEIGHT)
+    out << widget('label', id: 'hl_title', value: 'saga-hl', left: 2, top: y, width: 70, height: ROW_HEIGHT)
     out << widget('label', id: 'hl_char_name',
                   value: pretty_char_label(char_key),
-                  left: 70, top: y, width: w - 72, height: ROW_HEIGHT)
-    y += ROW_HEIGHT
+                  left: 74, top: y, width: 260, height: ROW_HEIGHT)
     out << widget('label', id: 'hl_stats',
                   value: "#{rules} rules  #{groups} groups",
-                  left: 70, top: y, width: w - 72, height: ROW_HEIGHT)
-    y += ROW_HEIGHT + 6
+                  left: 340, top: y, width: 220, height: ROW_HEIGHT)
+    out << widget('closeButton', id: 'hl_close', value: 'Close', cmd: '*hl close',
+                  left: w - 90, top: y, width: 88, height: BTN_HEIGHT)
+    y += BTN_HEIGHT + 4
 
-    # Improvers
+    mode_button(out, y, w, 'hl_mode_browse', 'Browse', 'browse', 2)
+    mode_button(out, y, w, 'hl_mode_diff', 'Diff', 'diff', 118)
+    mode_button(out, y, w, 'hl_mode_backups', 'Backups', 'backups', 234)
+    mode_button(out, y, w, 'hl_mode_tools', 'Tools', 'tools', 350)
+    y += BTN_HEIGHT + 6
+    y
+  end
+
+  def self.build_footer(out, y, w)
+    out << widget('label', id: 'hl_sep', value: '---', left: 2, top: y, width: w, height: ROW_HEIGHT)
+    y += ROW_HEIGHT
+    out << widget('label', id: 'hl_coach', value: coach_line, left: 2, top: y, width: w - 4, height: ROW_HEIGHT)
+    y += ROW_HEIGHT
+    note = last_status.to_s.empty? ? 'Ready.' : last_status.to_s
+    out << widget('label', id: 'hl_note', value: note, left: 2, top: y, width: w - 4, height: ROW_HEIGHT)
+    y
+  end
+
+  def self.build_browse(out, y, w, set)
+    ensure_ui_defaults!
+    # Filter row
+    out << widget('label', id: 'hl_filt_lbl', value: 'Filter', left: 2, top: y + 2, width: 48, height: DROP_HEIGHT)
+    out << widget('editBox', id: 'hl_filter', value: browse_filter.to_s,
+                  cmd: '*hl filter %hl_filter%', maxChars: '120',
+                  left: 52, top: y, width: 280, height: DROP_HEIGHT)
+    out << widget('cmdButton', id: 'hl_filt_btn', value: 'Filter', cmd: '*hl filter %hl_filter%',
+                  left: 338, top: y, width: 70, height: BTN_HEIGHT)
+
+    type_labels = %w[all name general]
+    ti = type_labels.index(browse_type.to_s) || 0
+    out << widget('dropDownBox', id: 'hl_type',
+                  value: type_labels[ti],
+                  content_text: type_labels.join(','),
+                  content_value: type_labels.join(','),
+                  cmd: '*hl type %hl_type%',
+                  left: 420, top: y, width: 110, height: DROP_HEIGHT)
+
+    groups = set['groups'] || []
+    glabels = ['all', '(no group)'] + groups.map { |g| dropdown_safe(ascii_label(g['name'])) }
+    gvalues = ['all', NO_GROUP] + groups.map { |g| dropdown_safe(g['id']) }
+    gi = gvalues.index(browse_group.to_s)
+    gi = 0 if gi.nil?
+    out << widget('dropDownBox', id: 'hl_groupf',
+                  value: glabels[gi],
+                  content_text: glabels.join(','),
+                  content_value: gvalues.join(','),
+                  cmd: '*hl groupf %hl_groupf%',
+                  left: 540, top: y, width: 220, height: DROP_HEIGHT)
+
+    sorts = %w[pattern color group type]
+    si = sorts.index(browse_sort.to_s) || 0
+    out << widget('dropDownBox', id: 'hl_sort',
+                  value: sorts[si],
+                  content_text: sorts.join(','),
+                  content_value: sorts.join(','),
+                  cmd: '*hl sort %hl_sort%',
+                  left: 770, top: y, width: 110, height: DROP_HEIGHT)
+    y += DROP_HEIGHT + 4
+
+    info = browse_page_slice
+    total = info['total']
+    start = info['start']
+    stop = total.zero? ? 0 : [start + info['items'].size, total].min
+    out << widget('cmdButton', id: 'hl_prev', value: 'Prev', cmd: '*hl page -1',
+                  left: 2, top: y, width: 60, height: BTN_HEIGHT)
+    out << widget('cmdButton', id: 'hl_next', value: 'Next', cmd: '*hl page +1',
+                  left: 68, top: y, width: 60, height: BTN_HEIGHT)
+    out << widget('label', id: 'hl_range',
+                  value: total.zero? ? '0 of 0' : "#{start + 1}-#{stop} of #{total}",
+                  left: 140, top: y + 2, width: 160, height: ROW_HEIGHT)
+    out << widget('cmdButton', id: 'hl_en_match', value: 'Enable match', cmd: '*hl enablematch 1',
+                  left: 320, top: y, width: 120, height: BTN_HEIGHT)
+    out << widget('cmdButton', id: 'hl_dis_match', value: 'Disable match', cmd: '*hl enablematch 0',
+                  left: 448, top: y, width: 120, height: BTN_HEIGHT)
+    out << widget('cmdButton', id: 'hl_del_match', value: 'Delete match', cmd: '*hl delmatch',
+                  left: 576, top: y, width: 120, height: BTN_HEIGHT)
+    y += BTN_HEIGHT + 4
+
+    # Rows
+    info['items'].each_with_index do |h, idx|
+      checked = (h.key?('enabled') ? truthy_flag(h, 'enabled') : true) ? '1' : '0'
+      wid = "hl_en_#{idx}"
+      out << widget('checkBox',
+                    id: wid,
+                    text: '',
+                    checked: checked,
+                    checked_value: '1',
+                    unchecked_value: '0',
+                    cmd: "*hl enable #{h['id']} %#{wid}%",
+                    left: 2, top: y, width: 28, height: ROW_HEIGHT)
+      gname = ascii_label(group_name(set, h['groupId']))
+      gname = '-' if gname.empty?
+      typ = h['highlightType'].to_s.empty? ? 'general' : h['highlightType'].to_s
+      row = truncate_text("#{h['color']}  [#{gname}]  #{typ}  #{h['pattern']}", 90)
+      sel_mark = (selected_id.to_s == h['id'].to_s) ? '>' : ' '
+      out << widget('label', id: "hl_row_#{idx}", value: "#{sel_mark}#{row}",
+                    left: 34, top: y, width: w - 160, height: ROW_HEIGHT)
+      out << widget('link', id: "hl_sel_#{idx}", value: 'Sel', cmd: "*hl sel #{h['id']}",
+                    left: w - 120, top: y, width: 40, height: ROW_HEIGHT)
+      out << widget('link', id: "hl_del_#{idx}", value: 'Del', cmd: "*hl del #{h['id']}",
+                    left: w - 70, top: y, width: 40, height: ROW_HEIGHT)
+      y += ROW_HEIGHT
+    end
+    y += 4
+
+    # Detail strip
+    sel = selected_highlight
+    out << widget('label', id: 'hl_det_hdr', value: 'Selected', left: 2, top: y, width: w, height: ROW_HEIGHT)
+    y += ROW_HEIGHT
+    if sel.nil?
+      out << widget('label', id: 'hl_det_none', value: 'Select a rule with Sel (or *hl sel <id>).',
+                    left: 8, top: y, width: w - 10, height: ROW_HEIGHT)
+      y += ROW_HEIGHT
+    else
+      FLAG_NAMES.each_with_index do |fname, i|
+        checked = truthy_flag(sel, fname) ? '1' : '0'
+        wid = "hl_flag_#{fname}"
+        x = 8 + (i % 4) * 180
+        yy = y + (i / 4) * ROW_HEIGHT
+        out << widget('checkBox',
+                      id: wid,
+                      text: fname,
+                      checked: checked,
+                      checked_value: '1',
+                      unchecked_value: '0',
+                      cmd: "*hl flag #{fname} %#{wid}%",
+                      left: x, top: yy, width: 170, height: ROW_HEIGHT)
+      end
+      y += ROW_HEIGHT * 2 + 2
+
+      colors = colors_for_dropdown(set)
+      clabels = colors.map { |c| dropdown_safe(c) }
+      cval = sel['color'].to_s.downcase
+      cval = colors[0] unless colors.include?(cval)
+      out << widget('label', id: 'hl_col_lbl', value: 'Color', left: 2, top: y + 2, width: 48, height: DROP_HEIGHT)
+      out << widget('dropDownBox', id: 'hl_color',
+                    value: dropdown_safe(cval),
+                    content_text: clabels.join(','),
+                    content_value: clabels.join(','),
+                    cmd: '*hl color %hl_color%',
+                    left: 52, top: y, width: 140, height: DROP_HEIGHT)
+
+      out << widget('label', id: 'hl_pat_lbl', value: 'Pattern', left: 210, top: y + 2, width: 56, height: DROP_HEIGHT)
+      out << widget('editBox', id: 'hl_pattern', value: sel['pattern'].to_s,
+                    cmd: '*hl pattern %hl_pattern%', maxChars: '200',
+                    left: 270, top: y, width: 420, height: DROP_HEIGHT)
+      out << widget('cmdButton', id: 'hl_pat_set', value: 'Set', cmd: '*hl pattern %hl_pattern%',
+                    left: 698, top: y, width: 50, height: BTN_HEIGHT)
+
+      g2labels = ['(no group)'] + groups.map { |g| dropdown_safe(ascii_label(g['name'])) }
+      g2values = [NO_GROUP] + groups.map { |g| dropdown_safe(ascii_label(g['name'])) }
+      cur_g = ascii_label(group_name(set, sel['groupId']))
+      cur_g = '(no group)' if cur_g.empty?
+      gi2 = g2labels.index(dropdown_safe(cur_g)) || 0
+      out << widget('dropDownBox', id: 'hl_group',
+                    value: g2labels[gi2],
+                    content_text: g2labels.join(','),
+                    content_value: g2values.join(','),
+                    cmd: '*hl group %hl_group%',
+                    left: 760, top: y, width: 220, height: DROP_HEIGHT)
+      y += DROP_HEIGHT + 4
+    end
+    y
+  end
+
+  def self.build_diff(out, y, w, _set)
+    ensure_ui_defaults!
+    report = diff_cache || refresh_diff!
+    blabel = diff_baseline.to_s == 'live' || diff_baseline.to_s.empty? ? 'live' : "bak:#{diff_baseline}"
+    out << widget('label', id: 'hl_diff_sum', value: diff_summary_line(report, baseline_label: blabel),
+                  left: 2, top: y, width: w - 4, height: ROW_HEIGHT)
+    y += ROW_HEIGHT + 2
+
+    if (report['groupsAdded'] || []).any?
+      out << widget('label', id: 'hl_ga', value: "groups added: #{report['groupsAdded'].map { |g| ascii_label(g) }.join(', ')}",
+                    left: 2, top: y, width: w - 4, height: ROW_HEIGHT)
+      y += ROW_HEIGHT
+    end
+    if (report['groupsRemoved'] || []).any?
+      out << widget('label', id: 'hl_gr', value: "groups removed: #{report['groupsRemoved'].map { |g| ascii_label(g) }.join(', ')}",
+                    left: 2, top: y, width: w - 4, height: ROW_HEIGHT)
+      y += ROW_HEIGHT
+    end
+
+    out << widget('cmdButton', id: 'hl_diff_ref', value: 'Refresh', cmd: '*hl diff',
+                  left: 2, top: y, width: 80, height: BTN_HEIGHT)
+    out << widget('cmdButton', id: 'hl_diff_live', value: 'Vs live', cmd: '*hl diff live',
+                  left: 90, top: y, width: 80, height: BTN_HEIGHT)
+    out << widget('cmdButton', id: 'hl_discard', value: 'Discard working', cmd: '*hl discard',
+                  left: 178, top: y, width: 130, height: BTN_HEIGHT)
+    out << widget('cmdButton', id: 'hl_diff_write', value: 'Write only', cmd: '*hl write',
+                  left: 316, top: y, width: 100, height: BTN_HEIGHT)
+    out << widget('cmdButton', id: 'hl_diff_apply', value: 'Improve+write', cmd: '*hl apply',
+                  left: 424, top: y, width: 120, height: BTN_HEIGHT)
+
+    shows = %w[all added removed changed]
+    svi = shows.index(diff_filter.to_s) || 0
+    out << widget('dropDownBox', id: 'hl_diffshow',
+                  value: shows[svi],
+                  content_text: shows.join(','),
+                  content_value: shows.join(','),
+                  cmd: '*hl diffshow %hl_diffshow%',
+                  left: 560, top: y, width: 120, height: DROP_HEIGHT)
+
+    backups = begin
+      list_backups(char_key).first(20)
+    rescue StandardError
+      []
+    end
+    unless backups.empty?
+      blabels = ['(pick backup baseline)'] + backups.map do |b|
+        dropdown_safe("#{b['id'].to_s[0, 15]} #{b['label']}")
+      end
+      bvalues = ['_'] + backups.map { |b| dropdown_safe(b['id']) }
+      out << widget('dropDownBox', id: 'hl_diffbak',
+                    value: blabels[0],
+                    content_text: blabels.join(','),
+                    content_value: bvalues.join(','),
+                    cmd: '*hl diff backup %hl_diffbak%',
+                    left: 690, top: y, width: 290, height: DROP_HEIGHT)
+    end
+    y += DROP_HEIGHT + 4
+
+    items = diff_items(report)
+    total = items.size
+    pages = total.zero? ? 1 : ((total + DIFF_PAGE_SIZE - 1) / DIFF_PAGE_SIZE)
+    self.diff_page = [[diff_page.to_i, 0].max, pages - 1].min
+    start = diff_page * DIFF_PAGE_SIZE
+    slice = items[start, DIFF_PAGE_SIZE] || []
+    stop = total.zero? ? 0 : [start + slice.size, total].min
+
+    out << widget('cmdButton', id: 'hl_dprev', value: 'Prev', cmd: '*hl page -1',
+                  left: 2, top: y, width: 60, height: BTN_HEIGHT)
+    out << widget('cmdButton', id: 'hl_dnext', value: 'Next', cmd: '*hl page +1',
+                  left: 68, top: y, width: 60, height: BTN_HEIGHT)
+    out << widget('label', id: 'hl_drange',
+                  value: total.zero? ? '0 deltas' : "#{start + 1}-#{stop} of #{total}",
+                  left: 140, top: y + 2, width: 200, height: ROW_HEIGHT)
+    y += BTN_HEIGHT + 4
+
+    slice.each_with_index do |item, idx|
+      kind = item['_kind'] || diff_filter.to_s
+      kind = 'changed' if kind == 'all' && item['changes']
+      kind = 'added' if kind == 'all' && item['color'] && !item['changes'] && diff_filter == 'all' && (report['added'] || []).include?(item)
+      # Prefer explicit marker
+      marker = case
+               when item['changes'] then '~'
+               when (report['removed'] || []).any? { |r| r.equal?(item) || (r['pattern'] == item['pattern'] && r['color'] == item['color'] && !item.key?('changes')) && kind != 'added' && (diff_filter == 'removed' || item['_kind'] == 'removed')
+                 then '-'
+               when item['_kind'] == 'removed' then '-'
+               when item['_kind'] == 'added' then '+'
+               when item['_kind'] == 'changed' then '~'
+               when item['changes'] then '~'
+               else '+'
+               end
+      if item['changes']
+        bits = item['changes'].first(4).map { |ch| "#{ch['field']}:#{ch['before']}->#{ch['after']}" }.join(' ')
+        line = truncate_text("~ #{item['pattern']}  #{bits}", 110)
+      else
+        en = item['enabled'] == false ? 'off' : 'on'
+        g = item['group'] || '-'
+        line = truncate_text("#{marker} [#{ascii_label(g)}] #{en} #{item['color']}  #{item['pattern']}", 110)
+      end
+      out << widget('label', id: "hl_drow_#{idx}", value: line, left: 2, top: y, width: w - 4, height: ROW_HEIGHT)
+      y += ROW_HEIGHT
+    end
+    y
+  end
+
+  def self.build_backups(out, y, w, _set)
+    ensure_ui_defaults!
+    starter = read_starter(char_key)
+    starter_txt = if starter
+      "Starter: #{ascii_label(starter['label'] || starter['backupId'])}"
+    else
+      'Starter: (none)'
+    end
+    out << widget('label', id: 'hl_starter', value: starter_txt, left: 2, top: y, width: w - 200, height: ROW_HEIGHT)
+    out << widget('cmdButton', id: 'hl_load_starter', value: 'Load starter', cmd: '*hl bak load-starter',
+                  left: w - 130, top: y, width: 128, height: BTN_HEIGHT)
+    y += BTN_HEIGHT + 4
+
+    backups = begin
+      list_backups(char_key)
+    rescue StandardError
+      []
+    end
+    total = backups.size
+    pages = total.zero? ? 1 : ((total + BACKUP_PAGE_SIZE - 1) / BACKUP_PAGE_SIZE)
+    self.bak_page = [[bak_page.to_i, 0].max, pages - 1].min
+    start = bak_page * BACKUP_PAGE_SIZE
+    slice = backups[start, BACKUP_PAGE_SIZE] || []
+    stop = total.zero? ? 0 : [start + slice.size, total].min
+
+    out << widget('cmdButton', id: 'hl_bprev', value: 'Prev', cmd: '*hl page -1',
+                  left: 2, top: y, width: 60, height: BTN_HEIGHT)
+    out << widget('cmdButton', id: 'hl_bnext', value: 'Next', cmd: '*hl page +1',
+                  left: 68, top: y, width: 60, height: BTN_HEIGHT)
+    out << widget('label', id: 'hl_brange',
+                  value: total.zero? ? 'No backups' : "#{start + 1}-#{stop} of #{total}",
+                  left: 140, top: y + 2, width: 220, height: ROW_HEIGHT)
+    y += BTN_HEIGHT + 4
+
+    slice.each_with_index do |b, idx|
+      mark = (bak_selected.to_s == b['id'].to_s) ? '>' : ' '
+      lab = ascii_label(b['label'].to_s.empty? ? b['reason'] : b['label'])
+      line = truncate_text("#{mark}#{b['id']}  #{lab}  n=#{b['highlightCount']}", 100)
+      out << widget('label', id: "hl_bak_#{idx}", value: line, left: 2, top: y, width: w - 90, height: ROW_HEIGHT)
+      out << widget('link', id: "hl_baks_#{idx}", value: 'Select', cmd: "*hl bak select #{b['id']}",
+                    left: w - 80, top: y, width: 70, height: ROW_HEIGHT)
+      y += ROW_HEIGHT
+    end
+    y += 4
+
+    sel = bak_selected.to_s
+    out << widget('label', id: 'hl_bsel', value: sel.empty? ? 'Selected: (none)' : "Selected: #{sel}",
+                  left: 2, top: y, width: w - 4, height: ROW_HEIGHT)
+    y += ROW_HEIGHT + 2
+
+    out << widget('cmdButton', id: 'hl_brest', value: 'Restore->import', cmd: '*hl restore %hl_bakid%',
+                  left: 2, top: y, width: 140, height: BTN_HEIGHT)
+    out << widget('cmdButton', id: 'hl_bload', value: 'Load into working', cmd: '*hl bak load %hl_bakid%',
+                  left: 150, top: y, width: 150, height: BTN_HEIGHT)
+    out << widget('cmdButton', id: 'hl_bcmp', value: 'Compare vs working', cmd: '*hl diff backup %hl_bakid%',
+                  left: 308, top: y, width: 160, height: BTN_HEIGHT)
+    out << widget('cmdButton', id: 'hl_bstarter', value: 'Set starter', cmd: '*hl bak starter %hl_bakid%',
+                  left: 476, top: y, width: 110, height: BTN_HEIGHT)
+    # Hidden-ish id carrier via editBox defaulting to selected
+    out << widget('editBox', id: 'hl_bakid', value: sel, cmd: '*hl bak select %hl_bakid%',
+                  maxChars: '80', left: 600, top: y, width: 200, height: DROP_HEIGHT)
+    y += DROP_HEIGHT + 4
+
+    out << widget('label', id: 'hl_ren_lbl', value: 'Rename label', left: 2, top: y + 2, width: 100, height: DROP_HEIGHT)
+    out << widget('editBox', id: 'hl_bakren', value: bak_rename.to_s,
+                  cmd: '*hl bak rename %hl_bakid% %hl_bakren%', maxChars: '60',
+                  left: 110, top: y, width: 300, height: DROP_HEIGHT)
+    out << widget('cmdButton', id: 'hl_renbtn', value: 'Rename',
+                  cmd: '*hl bak rename %hl_bakid% %hl_bakren%',
+                  left: 420, top: y, width: 90, height: BTN_HEIGHT)
+    y += DROP_HEIGHT + 4
+    y
+  end
+
+  def self.build_tools(out, y, w, _set)
+    ensure_toggles!
     out << widget('label', id: 'hl_imp_hdr', value: 'Improve', left: 2, top: y, width: w, height: ROW_HEIGHT)
     y += ROW_HEIGHT
     implemented_improvers.each do |id, label, _, _|
@@ -1093,7 +2000,7 @@ module SagaHl
                     checked_value: '1',
                     unchecked_value: '0',
                     cmd: "*hl set #{id} %hl_imp_#{id}%",
-                    left: 8, top: y, width: w - 10, height: ROW_HEIGHT)
+                    left: 8, top: y, width: 280, height: ROW_HEIGHT)
       y += ROW_HEIGHT
     end
     soon = IMPROVERS.reject { |_, _, _, impl| impl }.map { |_, lab, _, _| lab }
@@ -1104,26 +2011,23 @@ module SagaHl
     end
     y += 4
 
-    # Actions - clarify Improve+write vs Write only
-    out << widget('label', id: 'hl_act_hdr', value: 'Do', left: 2, top: y, width: w, height: ROW_HEIGHT)
-    y += ROW_HEIGHT
     out << widget('label', id: 'hl_act_hint',
                   value: 'Improve+write runs ON improvers then writes import. Write only skips improvers.',
                   left: 2, top: y, width: w, height: ROW_HEIGHT)
     y += ROW_HEIGHT
-    btn_w = 118
     out << widget('cmdButton', id: 'hl_apply', value: 'Improve+write', cmd: '*hl apply',
-                  left: 2, top: y, width: btn_w, height: BTN_HEIGHT)
+                  left: 2, top: y, width: 130, height: BTN_HEIGHT)
     out << widget('cmdButton', id: 'hl_backup', value: 'Backup', cmd: '*hl backup',
-                  left: 2 + btn_w + 6, top: y, width: 90, height: BTN_HEIGHT)
+                  left: 140, top: y, width: 90, height: BTN_HEIGHT)
     out << widget('cmdButton', id: 'hl_write', value: 'Write only', cmd: '*hl write',
-                  left: 2 + btn_w + 6 + 90 + 6, top: y, width: 100, height: BTN_HEIGHT)
-    y += BTN_HEIGHT + 6
+                  left: 238, top: y, width: 100, height: BTN_HEIGHT)
+    out << widget('cmdButton', id: 'hl_to_diff', value: 'Open Diff', cmd: '*hl mode diff',
+                  left: 348, top: y, width: 100, height: BTN_HEIGHT)
+    y += BTN_HEIGHT + 8
 
-    # Copy-from sync
     out << widget('label', id: 'hl_copy_hdr', value: 'Copy from another character', left: 2, top: y, width: w, height: ROW_HEIGHT)
     y += ROW_HEIGHT
-
+    keys = list_character_keys
     others = keys.reject { |k| k.downcase == char_key.to_s.downcase }
     if others.empty?
       out << widget('label', id: 'hl_nosync', value: 'No other characters to copy from.',
@@ -1134,26 +2038,24 @@ module SagaHl
       fvalues = others.map { |k| dropdown_safe(k) }
       want = sync_source.to_s
       fi = others.index { |k| k.downcase == want.downcase }
-      # Prefer remembered source; otherwise leave unset until user picks.
       if fi.nil?
         selected_from = 'Pick a character...'
         flabels = [selected_from] + flabels
         fvalues = ['_'] + fvalues
         fi = 0
       end
-      out << widget('label', id: 'hl_from_lbl', value: 'Copy from', left: 2, top: y + 2, width: 64, height: DROP_HEIGHT)
       out << widget('dropDownBox',
                     id: 'hl_from',
                     value: flabels[fi] || flabels[0],
                     content_text: flabels.join(','),
                     content_value: fvalues.join(','),
                     cmd: '*hl syncsrc %hl_from%',
-                    left: 70, top: y, width: w - 180, height: DROP_HEIGHT)
+                    left: 2, top: y, width: 360, height: DROP_HEIGHT)
       out << widget('cmdButton', id: 'hl_sync', value: 'Sync', cmd: '*hl sync %hl_from%',
-                    left: w - 100, top: y, width: 98, height: BTN_HEIGHT)
+                    left: 370, top: y, width: 90, height: BTN_HEIGHT)
       y += DROP_HEIGHT + 2
       out << widget('label', id: 'hl_sync_hint',
-                    value: 'Check groups below, then Sync. Improve+write can dedupe after.',
+                    value: 'Check groups below, then Sync. Open Diff after Sync to review.',
                     left: 2, top: y, width: w, height: ROW_HEIGHT)
       y += ROW_HEIGHT
 
@@ -1165,12 +2067,15 @@ module SagaHl
                       left: 170, top: y, width: 40, height: ROW_HEIGHT)
         sel_n = sync_group_sel.count { |_, v| v } rescue 0
         out << widget('label', id: 'hl_grp_count', value: "#{sel_n}/#{sync_group_meta.size} selected",
-                      left: 220, top: y, width: w - 222, height: ROW_HEIGHT)
+                      left: 220, top: y, width: 200, height: ROW_HEIGHT)
         y += ROW_HEIGHT
+        # Two columns for large group lists
         sync_group_meta.each_with_index do |m, idx|
           checked = (sync_group_sel || {})[m['id']] ? '1' : '0'
           wid = "hl_sg_#{idx}"
           text = dropdown_safe("#{m['label']} (#{m['count']})")
+          col = idx.even? ? 8 : (w / 2)
+          row_y = y + (idx / 2) * ROW_HEIGHT
           out << widget('checkBox',
                         id: wid,
                         text: text,
@@ -1178,52 +2083,40 @@ module SagaHl
                         checked_value: '1',
                         unchecked_value: '0',
                         cmd: "*hl syncgrp #{idx} %#{wid}%",
-                        left: 8, top: y, width: w - 10, height: ROW_HEIGHT)
-          y += ROW_HEIGHT
+                        left: col, top: row_y, width: (w / 2) - 16, height: ROW_HEIGHT)
         end
+        y += ((sync_group_meta.size + 1) / 2) * ROW_HEIGHT
       end
     end
-    y += 4
+    y
+  end
 
-    # Restore picker
-    out << widget('label', id: 'hl_undo_hdr', value: 'Undo', left: 2, top: y, width: w, height: ROW_HEIGHT)
-    y += ROW_HEIGHT
-    backups = begin
-      list_backups(char_key).first(RESTORE_PICK_LIMIT)
-    rescue StandardError
-      []
-    end
-    if backups.empty?
-      out << widget('label', id: 'hl_nobak', value: 'No backups yet for this character.',
-                    left: 8, top: y, width: w - 10, height: ROW_HEIGHT)
-      y += ROW_HEIGHT
+  def self.build_dialog
+    ensure_toggles!
+    ensure_ui_defaults!
+    self.char_key ||= detect_char_key
+    set = if working && working['character'].to_s.downcase == char_key.to_s.downcase
+      working
     else
-      blabels = backups.map do |b|
-        id = b['id'].to_s
-        short = id.sub(/\A(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2})_/) { "#{Regexp.last_match(2)}-#{Regexp.last_match(3)} " }
-        short = short.split('_').first(2).join(' ')
-        n = b['highlightCount']
-        dropdown_safe(n ? "#{short} (#{n})" : short)
+      begin
+        load_set_from_prefs(char_key)
+      rescue StandardError
+        empty_set(char_key)
       end
-      bvalues = backups.map { |b| dropdown_safe(b['id']) }
-      out << widget('dropDownBox',
-                    id: 'hl_restore',
-                    value: blabels[0],
-                    content_text: blabels.join(','),
-                    content_value: bvalues.join(','),
-                    cmd: '*hl restore %hl_restore%',
-                    left: 2, top: y, width: w - 4, height: DROP_HEIGHT)
-      y += DROP_HEIGHT
     end
-    y += 6
 
-    out << widget('label', id: 'hl_sep', value: '---', left: 2, top: y, width: w, height: ROW_HEIGHT)
-    y += ROW_HEIGHT
-    out << widget('label', id: 'hl_coach', value: coach_line, left: 2, top: y, width: w, height: ROW_HEIGHT)
-    y += ROW_HEIGHT
-    note = last_status.to_s.empty? ? 'Ready.' : last_status.to_s
-    out << widget('label', id: 'hl_note', value: note, left: 2, top: y, width: w, height: ROW_HEIGHT)
+    out = String.new("<dialogData id='#{DIALOG_ID}' clear='t'>")
+    y = 0
+    w = PANEL_WIDTH
 
+    y = build_shell_header(out, y, w, set)
+    y = case mode.to_s
+        when 'diff' then build_diff(out, y, w, set)
+        when 'backups' then build_backups(out, y, w, set)
+        when 'tools' then build_tools(out, y, w, set)
+        else build_browse(out, y, w, set)
+        end
+    build_footer(out, y + 4, w)
     out << '</dialogData>'
     out
   end
@@ -1233,34 +2126,294 @@ end
 # BEGIN saga_hl/commands
 module SagaHl
   # Pure work + message list. No echo/_respond here - boot loop does that.
-  # Sets dirty when the panel should redraw.
+  # Sets dirty when the panel should redraw. Sets quit to exit.
   def self.handle_command(raw)
     cmd = raw.to_s.strip.sub(/\A<c>/i, '')
     cmd = cmd.sub(/\A;?saga[_-]?hl\s+/i, '').sub(/\A\*hl\s+/i, '')
     cmd = 'help' if cmd.empty? || cmd =~ /\Ahelp\z/i
     msgs = []
+    ensure_ui_defaults!
 
     case cmd
     when /\Ahelp\z/i
       msgs.concat([
-        'saga-hl panel:',
-        '  Working character = who you are logged in as (shown as a label)',
-        '  Improve checkboxes, Improve+write / Backup / Write only',
-        '  Copy-from + group checkboxes + Sync, Restore',
-        '  Improve+write: backup, run ON improvers on the working set, write import JSON',
-        '  Write only: write current working set to import JSON (no improvers)',
-        '  Sync then Improve+write keeps the copied rules and dedupes them',
-        '  Names: use saga-hl filter-names / import-hm-names / scan-names (CLI)',
-        '  *hl status',
-        '  *hl char <name|instance> | *hl instance <id>   (CLI only)',
-        '  *hl set <improver> 0|1 | *hl toggle <improver>',
+        'saga-hl workspace:',
+        '  Modes: Browse | Diff | Backups | Tools  (*hl mode <name>)',
+        '  Close / *hl close stops the workspace',
+        '  Working character = logged-in (label only)',
+        '  Browse: filter/type/group/sort, Sel/Del, flags/color/pattern',
+        '  Diff: working vs live prefs or a backup',
+        '  Backups: restore/load/rename/starter',
+        '  Tools: improvers, Improve+write / Write only / Backup / Sync',
+        '  *hl status | *hl discard | *hl diff | *hl diffshow <all|added|removed|changed>',
+        '  *hl filter <text> | *hl page N | *hl sel <id|idx> | *hl del | *hl delmatch',
+        '  *hl enable <id> 0|1 | *hl flag <name> 0|1 | *hl color <hex>',
+        '  *hl pattern <text> | *hl group <name>',
+        '  *hl bak rename <id> <label> | *hl bak starter <id> | *hl bak load-starter',
+        '  *hl bak load <id> | *hl bak select <id>',
         '  *hl apply | *hl package | *hl backup | *hl write',
         '  *hl syncsrc <key> | *hl syncgrp all|N 0|1 | *hl sync <from-key>',
-        '  *hl restore <id>',
+        '  *hl restore <id> | *hl char / *hl instance (CLI only)',
         "  live improvers: #{implemented_improvers.map { |i, _, _, _| i }.join(', ')}"
       ])
     when /\Astatus\z/i
       msgs.concat(status_lines)
+      self.dirty = true
+    when /\Aclose\z/i
+      self.quit = true
+      self.last_status = 'closing workspace'
+      msgs << 'saga-hl: closing workspace'
+    when /\Amode\s+(\S+)\z/i
+      m = Regexp.last_match(1).downcase
+      unless MODES.include?(m)
+        msgs << "saga-hl: unknown mode #{m.inspect} - browse|diff|backups|tools"
+      else
+        self.mode = m
+        refresh_diff! if m == 'diff'
+        self.last_status = "mode #{m}"
+        msgs << "saga-hl: mode #{m}"
+        self.dirty = true
+      end
+    when /\Afilter(?:\s+(.*))?\z/i
+      self.browse_filter = Regexp.last_match(1).to_s
+      self.browse_page = 0
+      self.mode = 'browse'
+      self.last_status = "filter #{browse_filter.empty? ? '(cleared)' : browse_filter.inspect}"
+      msgs << "saga-hl: #{last_status}"
+      self.dirty = true
+    when /\Atype\s+(\S+)\z/i
+      self.browse_type = Regexp.last_match(1).downcase
+      self.browse_page = 0
+      self.mode = 'browse'
+      self.dirty = true
+    when /\Agroupf\s+(\S+)\z/i
+      self.browse_group = Regexp.last_match(1)
+      self.browse_page = 0
+      self.mode = 'browse'
+      self.dirty = true
+    when /\Asort\s+(\S+)\z/i
+      self.browse_sort = Regexp.last_match(1).downcase
+      self.browse_page = 0
+      self.mode = 'browse'
+      self.dirty = true
+    when /\Apage\s+([+-]?\d+)\z/i
+      delta = Regexp.last_match(1)
+      n = delta.to_i
+      case mode.to_s
+      when 'diff'
+        self.diff_page = if delta.start_with?('+') || delta.start_with?('-')
+          diff_page.to_i + n
+        else
+          [n - 1, 0].max
+        end
+      when 'backups'
+        self.bak_page = if delta.start_with?('+') || delta.start_with?('-')
+          bak_page.to_i + n
+        else
+          [n - 1, 0].max
+        end
+      else
+        self.browse_page = if delta.start_with?('+') || delta.start_with?('-')
+          browse_page.to_i + n
+        else
+          [n - 1, 0].max
+        end
+      end
+      self.dirty = true
+    when /\Asel\s+(\S+)\z/i
+      begin
+        select_rule!(Regexp.last_match(1))
+        self.mode = 'browse'
+        self.last_status = "selected #{selected_id}"
+        msgs << "saga-hl: #{last_status}"
+      rescue StandardError => e
+        msgs << "saga-hl sel failed: #{e.message}"
+      end
+      self.dirty = true
+    when /\Adel(?:\s+(\S+))?\z/i
+      begin
+        id = Regexp.last_match(1)
+        n = delete_rule!(id)
+        self.last_status = "deleted #{n} rule(s)"
+        msgs << "saga-hl: #{last_status}"
+      rescue StandardError => e
+        msgs << "saga-hl del failed: #{e.message}"
+      end
+      self.dirty = true
+    when /\Adelmatch\z/i
+      begin
+        n = delete_matching!
+        self.last_status = "deleted #{n} matching rule(s)"
+        msgs << "saga-hl: #{last_status}"
+      rescue StandardError => e
+        msgs << "saga-hl delmatch failed: #{e.message}"
+      end
+      self.dirty = true
+    when /\Aenablematch\s+(\S+)\z/i
+      begin
+        on = %w[1 true on yes].include?(Regexp.last_match(1).downcase)
+        n = bulk_enable_matching!(on)
+        self.last_status = "#{on ? 'enabled' : 'disabled'} #{n} matching"
+        msgs << "saga-hl: #{last_status}"
+      rescue StandardError => e
+        msgs << "saga-hl enablematch failed: #{e.message}"
+      end
+      self.dirty = true
+    when /\Aenable\s+(\S+)\s+(\S+)\z/i
+      begin
+        id = Regexp.last_match(1)
+        on = %w[1 true on yes].include?(Regexp.last_match(2).downcase)
+        set_rule_enabled!(id, on)
+        self.last_status = "enable #{id} -> #{on ? 1 : 0}"
+        msgs << "saga-hl: #{last_status}"
+      rescue StandardError => e
+        msgs << "saga-hl enable failed: #{e.message}"
+      end
+      self.dirty = true
+    when /\Aflag\s+(\S+)\s+(\S+)\z/i
+      begin
+        name = Regexp.last_match(1)
+        on = %w[1 true on yes].include?(Regexp.last_match(2).downcase)
+        set_flag!(name, on)
+        self.last_status = "flag #{name} -> #{on ? 1 : 0}"
+        msgs << "saga-hl: #{last_status}"
+      rescue StandardError => e
+        msgs << "saga-hl flag failed: #{e.message}"
+      end
+      self.dirty = true
+    when /\Acolor\s+(\S+)\z/i
+      begin
+        set_color!(Regexp.last_match(1))
+        self.last_status = "color set"
+        msgs << "saga-hl: #{last_status}"
+      rescue StandardError => e
+        msgs << "saga-hl color failed: #{e.message}"
+      end
+      self.dirty = true
+    when /\Apattern(?:\s+(.*))?\z/i
+      begin
+        set_pattern!(Regexp.last_match(1).to_s)
+        self.last_status = 'pattern set'
+        msgs << "saga-hl: #{last_status}"
+      rescue StandardError => e
+        msgs << "saga-hl pattern failed: #{e.message}"
+      end
+      self.dirty = true
+    when /\Agroup\s+(.+)\z/i
+      begin
+        set_group!(Regexp.last_match(1).to_s.strip)
+        self.last_status = 'group set'
+        msgs << "saga-hl: #{last_status}"
+      rescue StandardError => e
+        msgs << "saga-hl group failed: #{e.message}"
+      end
+      self.dirty = true
+    when /\Adiffshow\s+(\S+)\z/i
+      f = Regexp.last_match(1).downcase
+      unless %w[all added removed changed].include?(f)
+        msgs << 'saga-hl: diffshow all|added|removed|changed'
+      else
+        self.diff_filter = f
+        self.diff_page = 0
+        self.mode = 'diff'
+        self.dirty = true
+      end
+    when /\Adiff(?:\s+live)?\z/i
+      begin
+        self.diff_baseline = 'live'
+        self.mode = 'diff'
+        report = refresh_diff!
+        self.last_status = diff_summary_line(report)
+        msgs << "saga-hl: #{last_status}"
+      rescue StandardError => e
+        msgs << "saga-hl diff failed: #{e.message}"
+      end
+      self.dirty = true
+    when /\Adiff\s+backup\s+(\S+)\z/i
+      begin
+        bid = Regexp.last_match(1)
+        if bid == '_' || bid.empty?
+          msgs << 'saga-hl: pick a backup for baseline'
+        else
+          self.diff_baseline = bid
+          self.bak_selected = bid
+          self.mode = 'diff'
+          report = refresh_diff!
+          self.last_status = diff_summary_line(report, baseline_label: "bak:#{bid}")
+          msgs << "saga-hl: #{last_status}"
+        end
+      rescue StandardError => e
+        msgs << "saga-hl diff backup failed: #{e.message}"
+      end
+      self.dirty = true
+    when /\Adiscard\z/i
+      begin
+        discard_working!
+        self.last_status = "discarded - reloaded #{(working['highlights'] || []).size} rules from prefs"
+        msgs << "saga-hl: #{last_status}"
+      rescue StandardError => e
+        msgs << "saga-hl discard failed: #{e.message}"
+      end
+      self.dirty = true
+    when /\Abak\s+select\s+(\S+)\z/i
+      self.bak_selected = Regexp.last_match(1)
+      self.mode = 'backups'
+      self.last_status = "backup selected #{bak_selected}"
+      msgs << "saga-hl: #{last_status}"
+      self.dirty = true
+    when /\Abak\s+load\s+(\S+)\z/i
+      begin
+        bid = Regexp.last_match(1)
+        bid = bak_selected if bid == '%hl_bakid%' || bid.empty?
+        raise 'select a backup first' if bid.to_s.empty?
+        set = load_backup_set(bid, char_key)
+        set['character'] = char_key
+        self.working = set
+        self.bak_selected = bid
+        self.diff_cache = nil
+        self.last_action = :bak_load
+        self.last_status = "loaded backup #{bid} into working (#{(working['highlights'] || []).size} rules)"
+        msgs << "saga-hl: #{last_status}"
+        msgs << '  Tip: *hl mode diff to review vs live.'
+      rescue StandardError => e
+        msgs << "saga-hl bak load failed: #{e.message}"
+      end
+      self.dirty = true
+    when /\Abak\s+rename\s+(\S+)\s+(.+)\z/i
+      begin
+        bid = Regexp.last_match(1)
+        label = Regexp.last_match(2).to_s.strip
+        bid = bak_selected if bid.empty? || bid == '%hl_bakid%'
+        raise 'select a backup first' if bid.to_s.empty?
+        raise 'label empty' if label.empty? || label == '%hl_bakren%'
+        new_id = rename_backup!(bid, label)
+        self.bak_rename = label
+        self.last_status = "renamed backup -> #{new_id}"
+        msgs << "saga-hl: #{last_status}"
+      rescue StandardError => e
+        msgs << "saga-hl bak rename failed: #{e.message}"
+      end
+      self.dirty = true
+    when /\Abak\s+starter\s+(\S+)\z/i
+      begin
+        bid = Regexp.last_match(1)
+        bid = bak_selected if bid.empty? || bid == '%hl_bakid%'
+        raise 'select a backup first' if bid.to_s.empty?
+        ptr = set_starter!(bid)
+        self.last_status = "starter set to #{ptr['backupId']} (#{ptr['label']})"
+        msgs << "saga-hl: #{last_status}"
+      rescue StandardError => e
+        msgs << "saga-hl bak starter failed: #{e.message}"
+      end
+      self.dirty = true
+    when /\Abak\s+load-starter\z/i
+      begin
+        load_starter_into_working!
+        self.last_status = "loaded starter into working (#{(working['highlights'] || []).size} rules)"
+        msgs << "saga-hl: #{last_status}"
+      rescue StandardError => e
+        msgs << "saga-hl bak load-starter failed: #{e.message}"
+      end
       self.dirty = true
     when /\Achar\s+(\S+)\z/i
       begin
@@ -1354,6 +2507,7 @@ module SagaHl
           n = (sync_group_meta || []).size
           msgs << "saga-hl: copy-from #{pretty_char_label(sync_source)} - #{n} group buckets (all selected)"
           self.last_status = "copy-from #{pretty_char_label(sync_source)}"
+          self.mode = 'tools'
         end
       rescue StandardError => e
         msgs << "saga-hl syncsrc failed: #{e.message}"
@@ -1382,7 +2536,7 @@ module SagaHl
         info = sync_from!(src)
         self.last_action = :sync
         msgs << "saga-hl: #{last_status}"
-        msgs << '  Tip: Improve+write next to dedupe, then Saga Import Settings.'
+        msgs << '  Tip: Open Diff to review, or Improve+write to dedupe, then Import Settings.'
         msgs.concat(import_restore_lines(info))
       rescue StandardError => e
         msgs << "saga-hl sync failed: #{e.message}"
@@ -1391,7 +2545,10 @@ module SagaHl
     when /\Arestore\s+(\S+)\z/i
       begin
         bid = Regexp.last_match(1)
+        bid = bak_selected if bid == '%hl_bakid%' || bid.empty?
+        raise 'select a backup first' if bid.to_s.empty?
         path = restore_backup_to_import(bid)
+        self.bak_selected = bid
         self.last_action = :restore
         self.last_status = "restored #{bid}"
         msgs << "saga-hl: #{last_status} -> #{path}"
@@ -1413,12 +2570,15 @@ end
 # main loop (same pattern as exp_sagapanel's heavy *exp refresh / importlogs).
 # If the hook raises, Lich removes it - so keep the hook trivial.
 SagaHl.ensure_toggles!
+SagaHl.ensure_ui_defaults!
 SagaHl.dirty = false
 SagaHl.pending_cmd = nil
 SagaHl.last_action = nil
 SagaHl.sync_source = nil
 SagaHl.sync_group_sel = nil
 SagaHl.sync_group_meta = nil
+SagaHl.quit = false
+SagaHl.mode = 'browse'
 begin
   # Panel always targets the logged-in character.
   SagaHl.char_key = SagaHl.detect_char_key
@@ -1454,10 +2614,11 @@ before_dying do
   _respond("<closeDialog id='#{SagaHl::DIALOG_ID}'/>")
 end
 
-SagaHl.story_echo('saga-hl panel active. Improve+write / Write only / Sync, or *hl help.')
+SagaHl.story_echo('saga-hl workspace open (Browse/Diff/Backups/Tools). Close or *hl close to exit. *hl help.')
 SagaHl.status_lines.each { |l| SagaHl.story_echo(l) }
 
 loop do
+  break if SagaHl.quit
   if SagaHl.pending_cmd
     raw = SagaHl.pending_cmd
     SagaHl.pending_cmd = nil
@@ -1467,9 +2628,14 @@ loop do
       SagaHl.story_echo("saga-hl error: #{e.message}")
     end
   end
+  break if SagaHl.quit
   if SagaHl.dirty
     SagaHl.dirty = false
-    _respond(SagaHl.build_dialog)
+    _respond(SagaHl.build_dialog) unless SagaHl.quit
   end
   pause 0.2
 end
+
+UpstreamHook.remove(hl_upstream_hook_id) rescue nil
+_respond("<closeDialog id='#{SagaHl::DIALOG_ID}'/>")
+SagaHl.story_echo('saga-hl workspace closed.')
