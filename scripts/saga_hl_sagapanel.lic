@@ -13,7 +13,7 @@
   In-game:
     ;saga-hl / ;saga_hl_sagapanel - Start the panel
     Panel: logged-in character (fixed), Improve toggles, Improve+write / Backup / Write only,
-           Name pack, Copy-from + Sync, Restore
+           Copy-from + Sync, Restore
     *hl help                    - Commands
     *hl status                  - Counts / paths
     *hl char <name|instance>    - CLI only: switch working character (panel stays logged-in)
@@ -24,11 +24,13 @@
     *hl package                 - Enable standard package, then apply
     *hl backup                  - Snapshot only
     *hl write                   - Write import JSON from working set (no improvers)
-    *hl namepack                - HM roster + Saga log names (skip existing) -> write import
     *hl syncsrc <from-key>      - Set copy-from character and load group checkboxes
     *hl syncgrp all|N 0|1       - Toggle groups to copy (N = checkbox index)
     *hl sync <from-key>         - Copy selected groups (skip existing) -> write import
     *hl restore <backup-id>     - Rewrite import JSON from that backup
+
+  Name pack / profession name filtering stay on the CLI (saga-hl import-hm-names,
+  scan-names, filter-names) — not on the panel.
 
   Improve+write vs Write only:
     Improve+write (Apply): backup, run every ON improver, then write the import file.
@@ -39,14 +41,16 @@
     Improve one # BEGIN saga_hl/... block at a time; bump Version + changelog.
 
   Windows-first: prefs/backups/logs under %APPDATA%\saga\; import JSON under %USERPROFILE%.
-  Name pack uses saga-hl CLI (import-hm-names + scan-names); logs are Saga config/logs.
 
   Author: loraque (loraque@gmail.com)
   Required: Lich >= 5.12.0
   Tags: saga, frontend, panel, highlights, import
-  Version: 0.4.3
+  Version: 0.4.4
 
   Recently changed:
+    0.4.4 (2026-10-19)
+      - Remove Name pack from the panel (CLI/backend only: saga-hl import-hm-names /
+        scan-names / filter-names).
     0.4.3 (2026-10-19)
       - Panel always uses the logged-in character (name + counts label only).
         Removed top Character dropdown so Copy-from cannot steal the selection.
@@ -85,7 +89,7 @@
       saga_hl/io          prefs read, import JSON write, JSON helpers
       saga_hl/backup      versioned backups + restore-to-import
       saga_hl/improve_dedupe
-      saga_hl/pipeline    apply selected / standard package / namepack / sync
+      saga_hl/pipeline    apply selected / standard package / sync
       saga_hl/messaging   Import Settings + restore user copy
       saga_hl/panel       dialog XML + toggle state
       saga_hl/commands    *hl / ;saga-hl routing
