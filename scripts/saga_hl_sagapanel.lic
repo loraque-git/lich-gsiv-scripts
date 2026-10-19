@@ -188,16 +188,6 @@ module SagaHl
     File.join(user_home, IMPORT_BASENAME)
   end
 
-  def self.lich_dir
-    if defined?(LICH_DIR) && LICH_DIR.to_s != ''
-      LICH_DIR.to_s
-    elsif ENV['LICH_DIR'].to_s != ''
-      ENV['LICH_DIR']
-    else
-      File.join(user_home, 'Lich5')
-    end
-  end
-
   def self.char_name
     if defined?(Char) && Char.respond_to?(:name) && !Char.name.to_s.strip.empty?
       Char.name.to_s.strip
@@ -415,16 +405,6 @@ module SagaHl
     end
 
     { 'mode' => mode, 'added' => added, 'updated' => updated, 'removed' => removed, 'skipped' => skipped }
-  end
-
-  def self.set_from_import_json(data, key = nil)
-    key ||= data['character'] || char_key || detect_char_key
-    cs = data['characterSettings'] || {}
-    {
-      'character' => key,
-      'highlights' => (cs['customHighlights'] || []).map { |h| stringify_keys(h) },
-      'groups' => (cs['highlightGroups'] || []).map { |g| stringify_keys(g) }
-    }
   end
 end
 # END saga_hl/model
