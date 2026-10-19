@@ -1542,7 +1542,7 @@ module SagaHl
       '--- saga-hl: next steps ---',
       "1. Wrote #{path}",
       '2. Saga -> Import Settings -> Custom highlights -> that file',
-      "3. Undo: Backups mode or *hl restore #{bak}",
+      "3. Undo: pick a backup in Undo (or *hl restore #{bak})",
       '---------------------------'
     ]
   end
@@ -1557,7 +1557,7 @@ module SagaHl
     when :write
       "Next: Saga -> Import Settings -> #{IMPORT_BASENAME} (no improvers ran)"
     when :sync
-      'Synced into working set. Open Diff, or Improve+write to dedupe, then Import Settings.'
+      'Synced into working set. Review Changes above, then Improve+write or Write only.'
     when :backup
       'Snapshot saved. Improve+write when you want a new import file.'
     when :restore
@@ -1572,16 +1572,7 @@ module SagaHl
       elsif n.zero?
         'Empty set - Sync from another character, or use saga-hl CLI for names.'
       else
-        case mode.to_s
-        when 'browse'
-          'Browse edits working only. Diff -> Write/Improve+write -> Import Settings.'
-        when 'diff'
-          'Diff is working vs baseline. Discard reloads prefs. Write exports import JSON.'
-        when 'backups'
-          'Rename / Set starter / Load into working. Restore writes import JSON only.'
-        else
-          'Ready. Improve+write = improvers then file. Write only = file only.'
-        end
+        'Ready. Changes shows working vs live. Improve+write = improvers then file.'
       end
     end
   end
@@ -1592,11 +1583,17 @@ module SagaHl
     self.char_key ||= detect_char_key
     set = working_for(char_key)
     lines = [
-      "saga-hl  #{pretty_char_label(char_key)}  #{(set['highlights'] || []).size} rules  mode=#{mode}",
+      "saga-hl  #{pretty_char_label(char_key)}  #{(set['highlights'] || []).size} rules",
       "  key: #{char_key}",
       "  import: #{last_import_path || import_path}",
       "  last backup: #{last_backup_id || '(none)'}"
     ]
+    begin
+      report = diff_cache || refresh_diff!
+      lines << "  changes: #{diff_summary_line(report)}"
+    rescue StandardError
+      # ignore
+    end
     implemented_improvers.each do |id, label, _, _|
       on = toggles[id] ? 'ON' : 'off'
       lines << "  [#{on}] #{label}"
