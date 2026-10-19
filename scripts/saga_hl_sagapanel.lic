@@ -31,9 +31,12 @@
   Author: loraque (loraque@gmail.com)
   Required: Lich >= 5.12.0
   Tags: saga, frontend, panel, highlights, import
-  Version: 0.2.0
+  Version: 0.2.1
 
   Recently changed:
+    0.2.1 (2026-10-18)
+      - Fix *hl never matching UpstreamHook: FE sends <c>*hl … and working
+        panels match /\*cmd/ without \A. Strip <c> and match like *exp/*ah.
     0.2.0 (2026-10-18)
       - Fix dead panel clicks: queue *hl work on the script main loop
         (UpstreamHook only sets a flag; echo/_respond stay top-level).
@@ -518,7 +521,8 @@ module SagaHl
   # Pure work + message list. No echo/_respond here — boot loop does that.
   # Sets dirty when the panel should redraw.
   def self.handle_command(raw)
-    cmd = raw.to_s.strip.sub(/\A;?saga[_-]?hl\s+/i, '').sub(/\A\*hl\s+/i, '')
+    cmd = raw.to_s.strip.sub(/\A<c>/i, '')
+    cmd = cmd.sub(/\A;?saga[_-]?hl\s+/i, '').sub(/\A\*hl\s+/i, '')
     cmd = 'help' if cmd.empty? || cmd =~ /\Ahelp\z/i
     msgs = []
 
@@ -616,17 +620,18 @@ rescue StandardError => e
   SagaHl.working = SagaHl.empty_set(SagaHl.detect_char_key)
 end
 
+# Match like exp/alsohere/timers: no \A anchor. Saga/FE often prefixes <c>.
 hl_upstream_hook_id = "#{Script.current.name}_upstream"
 UpstreamHook.remove(hl_upstream_hook_id) rescue nil
 UpstreamHook.add(hl_upstream_hook_id, proc do |command|
-  c = command.to_s.strip
-  if c =~ /\A\*hl\b/i || c =~ /\A;?saga[_-]?hl\b/i
+  c = command.to_s.strip.sub(/\A<c>/i, '')
+  if c =~ /\*hl\b/i || c =~ /;?saga[_-]?hl\b/i
     SagaHl.pending_cmd = c
     nil
   else
     command
   end
-end)
+end), persist: false)
 
 _respond(SagaHl.open_dialog_xml)
 pause 0.2
