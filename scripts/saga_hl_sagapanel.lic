@@ -2,49 +2,37 @@
 
   saga_hl_sagapanel.lic
 
-  Saga-only floating workspace to improve Saga custom text highlights safely
-  while the client is running. Reads prefs, never writes prefs live; always
-  backs up, then writes an Import Settings JSON you load in Saga.
+  Saga-only panel to improve Saga custom text highlights safely while the
+  client is running. One screen: improvers, Copy-from + groups, a Changes
+  summary (working vs live prefs), Backup / Write / Restore. Never writes
+  prefs live; writes Import Settings JSON you load in Saga.
 
   Pair with saga-hl.lic if you want the short ;saga-hl start command.
 
   Safe flow:
     1. Read highlights from Saga prefs.json (no live prefs writes)
-    2. Edit the in-memory working set (Browse / Diff / Backups / Tools)
-    3. Snapshot under saga-hl-backups/<char>/
-    4. Optionally run enabled improvers and/or Sync from another character
-    5. Write saga-highlights.json (home directory)
+    2. Optionally Sync selected groups from another character
+    3. Review Changes (working vs live)
+    4. Snapshot under saga-hl-backups/<char>/
+    5. Improve+write or Write only -> saga-highlights.json
     6. Saga -> Import Settings -> Custom highlights -> that file
-    7. Undo via Backups mode (or *hl restore <backup-id>)
+    7. Undo via Restore dropdown (or *hl restore <backup-id>)
 
   In-game start:
     ;saga-hl                 - via saga-hl.lic launcher (optional)
     ;saga_hl_sagapanel       - this script directly
 
-  Workspace (logged-in character only):
-    Modes: Browse | Diff | Backups | Tools
-    Close button / *hl close stops the workspace
+  Panel (logged-in character only):
+    Improve toggles, Improve+write / Backup / Write only,
+    Copy-from + group checkboxes + Sync,
+    Changes summary vs live prefs, Restore, Close
 
   Commands:
     *hl help                 - This command list (story window)
-    *hl status               - Counts / paths
-    *hl close                - Close workspace and stop script
-    *hl mode browse|diff|backups|tools
-    *hl filter <text>        - Browse filter
-    *hl page <n>             - Browse/diff/backup page
-    *hl sel <id|idx>         - Select rule
-    *hl del | *hl delmatch   - Delete selected / filtered
-    *hl enable <id> 0|1      - Enable/disable rule
-    *hl flag <name> 0|1      - Flag on selected
-    *hl color <hex>          - Color on selected
-    *hl pattern <text>       - Pattern on selected
-    *hl group <name>         - Group on selected
-    *hl diff | *hl diff backup <id>
-    *hl diffshow all|added|removed|changed
-    *hl discard              - Reload working from prefs
-    *hl bak rename <id> <label...>
-    *hl bak starter <id> | *hl bak load-starter
-    *hl bak load <id> | *hl bak select <id>
+    *hl status               - Counts / paths / change summary
+    *hl close                - Close panel and stop script
+    *hl diff | *hl diffshow all|added|removed|changed
+    *hl page N | *hl discard
     *hl set <improver> 0|1 | *hl toggle <name>
     *hl apply | *hl package | *hl backup | *hl write
     *hl syncsrc <from-key> | *hl syncgrp all|N 0|1 | *hl sync <from-key>
@@ -80,11 +68,15 @@
        creator: loraque (loraque@gmail.com)
         author: loraque (loraque@gmail.com)
           game: Gemstone
-          tags: saga, frontend, panel, highlights, import, workspace
+          tags: saga, frontend, panel, highlights, import
       required: Lich >= 5.12.0
-       version: 0.5.0
+       version: 0.6.0
 
   changelog:
+    0.6.0 (2026-10-19)
+      simplify to one screen (~560px): no Browse/Diff/Backups/Tools tabs
+      Changes summary (working vs live) replaces highlight browser
+      keep Copy-from + group picker, Improve+write / Write / Backup / Restore
     0.5.0 (2026-10-19)
       floating workspace redesign (resident=false): Browse / Diff / Backups /
         Tools modes; Close / *hl close exits cleanly
@@ -136,10 +128,10 @@
       saga_hl/backup          versioned backups, rename, starter, restore
       saga_hl/compare         working vs live/backup diff
       saga_hl/improve_dedupe  exact + close-color dedupe
-      saga_hl/editor          browse filter/sort/page/select/mutate
+      saga_hl/editor          helpers (CLI; not shown on simplified panel)
       saga_hl/pipeline        apply / package / sync
       saga_hl/messaging       story echoes, Import Settings copy, coach
-      saga_hl/panel           dialog XML + mode layouts
+      saga_hl/panel           single-screen dialog XML
       saga_hl/commands        *hl routing
 
 =end
@@ -1904,20 +1896,15 @@ module SagaHl
     case cmd
     when /\Ahelp\z/i
       msgs.concat([
-        'saga-hl workspace:',
-        '  Modes: Browse | Diff | Backups | Tools  (*hl mode <name>)',
-        '  Close / *hl close stops the workspace',
-        '  Working character = logged-in (label only)',
-        '  Browse: filter/type/group/sort, Sel/Del, flags/color/pattern',
-        '  Diff: working vs live prefs or a backup',
-        '  Backups: restore/load/rename/starter',
-        '  Tools: improvers, Improve+write / Write only / Backup / Sync',
-        '  *hl status | *hl discard | *hl diff | *hl diffshow <all|added|removed|changed>',
-        '  *hl filter <text> | *hl page N | *hl sel <id|idx> | *hl del | *hl delmatch',
-        '  *hl enable <id> 0|1 | *hl flag <name> 0|1 | *hl color <hex>',
-        '  *hl pattern <text> | *hl group <name>',
-        '  *hl bak rename <id> <label> | *hl bak starter <id> | *hl bak load-starter',
-        '  *hl bak load <id> | *hl bak select <id>',
+        'saga-hl panel (one screen):',
+        '  Working character = who you are logged in as',
+        '  Improve checkboxes, Improve+write / Backup / Write only',
+        '  Copy-from + group checkboxes + Sync',
+        '  Changes: summary of working set vs live prefs (+ / - / ~)',
+        '  Undo: restore backup to import file',
+        '  Close / *hl close stops the panel',
+        '  *hl status | *hl discard | *hl diff | *hl diffshow all|added|removed|changed',
+        '  *hl page N | *hl set <improver> 0|1 | *hl toggle <improver>',
         '  *hl apply | *hl package | *hl backup | *hl write',
         '  *hl syncsrc <key> | *hl syncgrp all|N 0|1 | *hl sync <from-key>',
         '  *hl restore <id> | *hl char / *hl instance (CLI only)',
@@ -1966,25 +1953,10 @@ module SagaHl
     when /\Apage\s+([+-]?\d+)\z/i
       delta = Regexp.last_match(1)
       n = delta.to_i
-      case mode.to_s
-      when 'diff'
-        self.diff_page = if delta.start_with?('+') || delta.start_with?('-')
-          diff_page.to_i + n
-        else
-          [n - 1, 0].max
-        end
-      when 'backups'
-        self.bak_page = if delta.start_with?('+') || delta.start_with?('-')
-          bak_page.to_i + n
-        else
-          [n - 1, 0].max
-        end
+      self.diff_page = if delta.start_with?('+') || delta.start_with?('-')
+        diff_page.to_i + n
       else
-        self.browse_page = if delta.start_with?('+') || delta.start_with?('-')
-          browse_page.to_i + n
-        else
-          [n - 1, 0].max
-        end
+        [n - 1, 0].max
       end
       self.dirty = true
     when /\Asel\s+(\S+)\z/i
@@ -2274,7 +2246,6 @@ module SagaHl
           n = (sync_group_meta || []).size
           msgs << "saga-hl: copy-from #{pretty_char_label(sync_source)} - #{n} group buckets (all selected)"
           self.last_status = "copy-from #{pretty_char_label(sync_source)}"
-          self.mode = 'tools'
         end
       rescue StandardError => e
         msgs << "saga-hl syncsrc failed: #{e.message}"
@@ -2381,7 +2352,7 @@ before_dying do
   _respond("<closeDialog id='#{SagaHl::DIALOG_ID}'/>")
 end
 
-SagaHl.story_echo('saga-hl workspace open (Browse/Diff/Backups/Tools). Close or *hl close to exit. *hl help.')
+SagaHl.story_echo('saga-hl panel open. Review Changes, Sync/Improve/Write, then Import Settings. Close or *hl close to exit.')
 SagaHl.status_lines.each { |l| SagaHl.story_echo(l) }
 
 loop do
