@@ -1,6 +1,6 @@
 =begin
 
-  Combat maneuver: Thrash (weapon thrash). Stances offensive first.
+  Combat maneuver: Twinhammer (weapon thrash). Stances offensive first.
 
   Usage:
     ;tth                     - weapon thrash current/best target
@@ -39,7 +39,7 @@
 =end
 
 # BEGIN config
-COMBAT_COMMAND = "weapon thrash"
+COMBAT_COMMAND = "weapon twinhammer"
 STANCE_DANCE = true
 # END config
 
