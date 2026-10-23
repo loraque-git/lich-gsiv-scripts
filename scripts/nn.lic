@@ -1,6 +1,7 @@
 =begin
 
   Aimed attack at the neck. Stances offensive first.
+  Empty/non-melee right hand punches at the aim location; melee weapon attacks.
 
   Usage:
     ;nn                     - attack current/best target in the neck
@@ -11,9 +12,13 @@
           game: Gemstone
           tags: attack, combat, aim, stance
       required: Lich >= 5.12.0
-       version: 0.8.0
+       version: 0.9.0
 
   changelog:
+    0.9.0 (2026-10-22)
+      action: empty/non-melee right hand punches; melee weapon attacks as before
+      bows/crossbows/runestaff treated as non-melee for this check
+      revert: copy from scripts/_backups/attack-handcheck-20261022-204404
     0.8.0 (2026-10-16)
       targeting: prefer oldest living foe (min gameobj id) over newest
     0.7.0 (2026-09-09)
@@ -160,5 +165,17 @@ if target_obj.nil? || !target_obj.id ||
   exit
 end
 
-fput "attack ##{target_obj.id} #{AIM_LOCATION}"
+# Empty / non-melee right hand → UCS punch at AIM_LOCATION; melee → attack.
+rh = GameObj.right_hand
+empty_right = rh.nil? || rh.id.nil? || rh.name.to_s =~ /\Aempty\z/i
+melee = !empty_right &&
+  rh.type.to_s.split(',').include?('weapon') &&
+  rh.noun.to_s !~ /\A(?:bow|crossbow|yumi|arbalest|runestaff)\z/i &&
+  rh.name.to_s !~ /\bbow\b/i
+
+if melee
+  fput "attack ##{target_obj.id} #{AIM_LOCATION}"
+else
+  fput "punch ##{target_obj.id} #{AIM_LOCATION}"
+end
 # END action
