@@ -1,0 +1,145 @@
+=begin
+
+  Combat maneuver: Vault Kick (cman vaultkick). Stances offensive first.
+
+  Usage:
+    ;vvk                     - cman vaultkick current/best target
+    ;vvk <name>              - prefer a living NPC whose name matches
+
+       creator: loraque (loraque@gmail.com)
+        author: loraque (loraque@gmail.com)
+          game: Gemstone
+          tags: maneuver, combat, cman
+      required: Lich >= 5.12.0
+       version: 0.1.0
+
+  changelog:
+    0.1.0 (2026-10-22)
+      initial clone from ssk (shared lock/targeting/waitrt/stance)
+
+=end
+
+# BEGIN config
+COMBAT_COMMAND = "cman vaultkick"
+STANCE_DANCE = true
+# END config
+
+# BEGIN lock
+LOCK_TIMEOUT = 5.0
+
+elapsed = 0.0
+while (stale = Script.list.find { |s| s.name == Script.current.name && s != Script.current })
+  pause 0.1
+  elapsed += 0.1
+  if elapsed >= LOCK_TIMEOUT
+    stale.kill
+    break
+  end
+end
+# END lock
+
+# BEGIN targeting
+living_foe = lambda { |obj|
+  obj && obj.id &&
+    obj.status !~ /dead|gone/ &&
+    obj.name !~ /^animated /
+}
+
+# Oldest living foe first (lowest gameobj id). FE dropdown / Array#find
+# surface newest-first; numeric ids track arrival order more reliably.
+oldest_living = lambda { |list|
+  list.min_by { |obj| obj.id.to_i }
+}
+
+if dead? || checkstunned || checkwebbed
+  echo "Cannot choose a target right now."
+  exit
+end
+
+manual_input = Script.current.vars[0].to_s.strip
+target_obj = nil
+
+living = []
+seen = {}
+(GameObj.npcs + GameObj.targets).each do |obj|
+  next unless living_foe.call(obj)
+  next if seen[obj.id]
+  seen[obj.id] = true
+  living << obj
+end
+
+if !manual_input.empty?
+  name_re = /#{Regexp.escape(manual_input)}/i
+  matches = living.select { |obj| obj.name =~ name_re }
+  target_obj = oldest_living.call(matches)
+  unless target_obj
+    echo "No living NPC matching #{manual_input.inspect}."
+    exit
+  end
+else
+  current_target = GameObj.target
+  if living_foe.call(current_target)
+    room_npc = GameObj.npcs.find { |npc| npc.id == current_target.id }
+    target_obj = current_target if room_npc.nil? || living_foe.call(room_npc)
+  end
+  unless target_obj
+    aggro = living.select { |obj| obj.type.to_s =~ /aggro|monster/ }
+    target_obj = oldest_living.call(aggro)
+  end
+  target_obj ||= oldest_living.call(GameObj.targets.select { |obj| living_foe.call(obj) })
+end
+
+unless living_foe.call(target_obj)
+  echo "No valid living targets found."
+  exit
+end
+
+put "target ##{target_obj.id}" unless GameObj.target&.id == target_obj.id
+# END targeting
+
+# BEGIN waitrt
+waitrt?
+waitcastrt?
+if target_obj.nil? || !target_obj.id ||
+    target_obj.status =~ /dead|gone/ ||
+    target_obj.name =~ /^animated /
+  echo "Target is no longer valid."
+  exit
+end
+# END waitrt
+
+# BEGIN stance
+if STANCE_DANCE
+  stance_tries = 0
+  while Char.stance !~ /^offensive$/i
+    if dead? || checkstunned || checkwebbed
+      echo "Cannot change stance right now."
+      exit
+    end
+    stance_tries += 1
+    if stance_tries > 8
+      echo "Could not reach offensive stance."
+      exit
+    end
+    fput "stance offensive"
+  end
+end
+
+if target_obj.nil? || !target_obj.id ||
+    target_obj.status =~ /dead|gone/ ||
+    target_obj.name =~ /^animated /
+  echo "Target is no longer valid."
+  exit
+end
+# END stance
+
+# BEGIN action
+if target_obj.nil? || !target_obj.id ||
+    target_obj.status =~ /dead|gone/ ||
+    target_obj.name =~ /^animated /
+  echo "Target is no longer valid."
+  exit
+end
+
+fput "#{COMBAT_COMMAND} ##{target_obj.id}"
+# END action
