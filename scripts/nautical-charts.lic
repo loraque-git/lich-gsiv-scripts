@@ -66,7 +66,7 @@ def stop_audio
 end
 
 =begin
-	   Nautical-Charts Version: 1.2.6 (October 12, 2026)
+	   Nautical-Charts Version: 1.2.7 (October 28, 2026)
 	
 	   Usage: 
 	
@@ -124,6 +124,9 @@ end
                                     world_map.png downloads with the sea maps (;nautical-charts update) and is kept
                                     out of the Select Map list. The combat alert border now shows on both tabs.
                                     The highlight stays on the map when the window is larger than the map.
+                 October 28, 2026 - The ShowRoomID check now works with any spacing in the FLAG output (the ON
+                                    check never matched before). sail2 and osacommander no longer turn
+                                    ShowRoomID off while the charts are open, so the map keeps its room numbers.
 =end
 
 i_stand_alone
@@ -412,7 +415,6 @@ $ship_image = nil
 $layout = nil
 $scroller = nil
 $status = nil
-$roomflagon = nil
 $ocean_watch_started = false
 $charts_notebook = nil
 $world_tab_active = false
@@ -451,12 +453,10 @@ end
 
 def charts_flag_settings
 	flagset = Lich::Util.quiet_command("flag", /You may also access these settings through/, end_pattern = /war in towns with active justice./, include_end = true ,timeout = 3, silent = true)
-		if flagset.to_s =~ /ShowRoomID         OFF/
+		if flagset.to_s =~ /ShowRoomID\s+OFF/
 			Lich::Util.quiet_command("flag showroomid on", /You will now display the room ID./, end_pattern = /You will now display the room ID./, include_end = true ,timeout = 3, silent = true)
-			$roomflagon = true
-		end
-		if flagset.to_s =~ /ShowRoomID           ON/
-			$roomflagon = false
+			# Shared by the OSA scripts: set when one of them turned ShowRoomID on
+			$osa_showroomid_by_osa = true
 		end
 end
 
