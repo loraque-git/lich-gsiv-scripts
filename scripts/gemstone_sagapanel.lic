@@ -81,6 +81,7 @@ module GemstonePanel
   REMOVE_ICON = "&#x1F53B;".freeze
   FIND_RATE = 1500
   SECOND_THIRD_RATE = 3500
+  DEFAULT_IDLE_PAUSE_SECONDS = 120
   DIALOG_ID = "GemstonePanel"
   SECTION_IDS = %w[hunt char critters roster].freeze
 
@@ -95,6 +96,7 @@ module GemstonePanel
   class << self
     attr_accessor :ignored, :value_width, :hide_arrows, :selected_char, :data, :file_mtime, :collapsed
     attr_accessor :gem_eligible, :gem_fixated, :status_requested
+    attr_accessor :idle_pause_seconds, :last_hunt_kills, :last_kill_at, :last_hunt_start
   end
 
   def self.remove_left
@@ -133,6 +135,8 @@ module GemstonePanel
     gs["hide_arrows"] = !!gs["hide_arrows"]
     gs["selected_char"] = gs["selected_char"].to_s
     gs["collapsed"] = Array(gs["collapsed"]).map(&:to_s) & SECTION_IDS
+    idle = gs.key?("idle_pause_seconds") ? gs["idle_pause_seconds"].to_i : DEFAULT_IDLE_PAUSE_SECONDS
+    gs["idle_pause_seconds"] = idle.negative? ? 0 : idle
     settings_hash
   end
 
@@ -147,7 +151,17 @@ module GemstonePanel
     settings["gemstone"]["hide_arrows"] = hide_arrows
     settings["gemstone"]["selected_char"] = selected_char.to_s
     settings["gemstone"]["collapsed"] = collapsed
+    settings["gemstone"]["idle_pause_seconds"] = idle_pause_seconds.to_i
     save_settings(settings)
+  end
+
+  def self.set_idle_pause_seconds!(seconds)
+    seconds = seconds.to_i
+    return false if seconds.negative?
+
+    self.idle_pause_seconds = seconds
+    persist!
+    true
   end
 
   def self.set_value_width!(width)
@@ -383,11 +397,74 @@ module GemstonePanel
       pause = $gemstone_tracker_info["Pause Seconds"].to_f
     end
     seconds = (now - $gemstone_tracker_start_time) - pause
+    paused = defined?($gemstone_tracker_pause_timer) && !$gemstone_tracker_pause_timer.nil?
+    if paused && defined?($gemstone_tracker_pause_start) && $gemstone_tracker_pause_start
+      seconds -= (now - $gemstone_tracker_pause_start).to_f
+    end
     seconds = 0 if seconds.negative?
     kills = defined?($gemstone_tracker_kills_this_hunt) ? $gemstone_tracker_kills_this_hunt.to_i : 0
-    paused = defined?($gemstone_tracker_pause_timer) && !$gemstone_tracker_pause_timer.nil?
     kps = seconds > 1 && kills.positive? ? kills / seconds.to_f : 0.0
     { seconds: seconds, kills: kills, kpm: (kps * 60).round(2), kps: kps, paused: paused }
+  end
+
+  def self.idle_auto_paused?
+    defined?($gemstone_tracker_idle_auto_paused) && $gemstone_tracker_idle_auto_paused
+  end
+
+  def self.clear_idle_auto_paused!
+    $gemstone_tracker_idle_auto_paused = nil
+  end
+
+  def self.mark_idle_auto_paused!
+    $gemstone_tracker_idle_auto_paused = true
+  end
+
+  # Auto-pause after idle_pause_seconds with no kill; resume same hunt on next kill.
+  # Manual *gs pause does not auto-resume on kill.
+  def self.tick_idle_auto_pause!
+    unless tracker_running?
+      self.last_hunt_kills = nil
+      self.last_kill_at = nil
+      self.last_hunt_start = nil
+      return nil
+    end
+
+    threshold = idle_pause_seconds.to_i
+    return nil if threshold <= 0
+
+    kills = defined?($gemstone_tracker_kills_this_hunt) ? $gemstone_tracker_kills_this_hunt.to_i : 0
+    start_time = $gemstone_tracker_start_time
+    paused = defined?($gemstone_tracker_pause_timer) && !$gemstone_tracker_pause_timer.nil?
+    t = now
+
+    if last_hunt_start != start_time || last_hunt_kills.nil? || kills < last_hunt_kills.to_i
+      self.last_hunt_start = start_time
+      self.last_hunt_kills = kills
+      self.last_kill_at = t
+      clear_idle_auto_paused! if !paused
+      return nil
+    end
+
+    if kills > last_hunt_kills.to_i
+      self.last_hunt_kills = kills
+      self.last_kill_at = t
+      if idle_auto_paused? && paused
+        $gemstone_tracker_pause_timer = nil
+        clear_idle_auto_paused!
+        return :resumed
+      end
+      return nil
+    end
+
+    return nil if paused
+    return nil if last_kill_at.nil?
+
+    idle_for = (t - last_kill_at).to_f
+    return nil if idle_for < threshold
+
+    $gemstone_tracker_pause_timer = true
+    mark_idle_auto_paused!
+    :paused
   end
 
   def self.looter_name
