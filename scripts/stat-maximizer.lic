@@ -1,0 +1,1011 @@
+=begin
+
+	This script calculates the highest stat total you can achieve at cap. It is very similar to the calculator found online, but this one you can use from the comfort of your own FE!
+	
+	By default it will use the growth intervals of the race+profession combination you select to calculate the most total stat points you can get at cap and tell you how to assign your stats at level 0/reassinging your stats at an inn to achieve this stat total.
+	
+	You also have the option of telling the script you want a minimum value in each stat. For example if the script gives you the highest stat total but it has your strength at 90, you can tell the script to recalculate everything but make strength 100 by cap.
+	
+	If you enter a combination of minimums that is impossible to achieve then the script will tell you your stat request isn't possible.
+	
+	Once you have found the stat totals you like you can tell the script to auto assign the starting values of each stat while you are checked in at the inn. Keep in mind you MUST start the script BEFORE you check in and you must already be at the stat reassignment screen.
+	
+	Changelog:
+	
+	Version 2: Added a button that lightens up the window when clicked.
+	Version 3: Changed the "Lighten Window" button to a "Cycle Text Color" button. Text colors start at default (some text is red, some text is black, GIs are color coded), click the button to change ALL text to black, click button again to change ALL text to white, click again to set text back to default.
+	Version 4: Script should no longer crash your FE if you start ;stat-maximizer while the Stat Maximizer window is already open.
+	Version 4: There were a few race/profession combiniations where the script recommended starting values that did not provide the highest stat total at cap. These recommendations were only off by 1-3 points and it was typically when no stat minimums were requested. This error has been fixed and script should be more accurate now. Please let me know if you notice anything off with calculations.
+	Version 5: Fixed bugs with Gtk.
+	
+
+	########################################################
+	Ways to contact me:
+	In game: Dreaven
+	Player's Corner: Tgo01
+	Discord: Dreaven#6436
+	Email: LordDreaven@gmail.com
+	If you like my scripts feel free to send me a tip via Paypal at: LordDreaven@gmail.com
+	########################################################
+	
+	Author: Dreaven
+	Version: 5
+
+=end
+
+require 'gtk3'
+
+@stat_professions = {
+	"Bard" => {
+		"Strength" 		=> 25,
+		"Constitution" 	=> 20,
+		"Dexterity" 	=> 25,
+		"Agility" 		=> 20,
+		"Discipline" 	=> 15,
+		"Aura" 			=> 25,
+		"Logic" 		=> 10,
+		"Intuition" 	=> 15,
+		"Wisdom" 		=> 20,
+		"Influence" 	=> 30,
+		"Prime 1"		=> "Influence",
+		"Prime 2"		=> "Aura",
+	},
+	
+	"Cleric" => {
+		"Strength" 		=> 20,
+		"Constitution" 	=> 20,
+		"Dexterity" 	=> 10,
+		"Agility" 		=> 15,
+		"Discipline" 	=> 25,
+		"Aura" 			=> 15,
+		"Logic" 		=> 25,
+		"Intuition" 	=> 25,
+		"Wisdom" 		=> 30,
+		"Influence" 	=> 20,
+		"Prime 1"		=> "Wisdom",
+		"Prime 2"		=> "Intuition",
+	},
+
+	"Empath" => {
+		"Strength" 		=> 10,
+		"Constitution" 	=> 20,
+		"Dexterity" 	=> 15,
+		"Agility" 		=> 15,
+		"Discipline"	=> 25,
+		"Aura" 			=> 20,
+		"Logic" 		=> 25,
+		"Intuition" 	=> 20,
+		"Wisdom" 		=> 30,
+		"Influence" 	=> 25,
+		"Prime 1"		=> "Wisdom",
+		"Prime 2"		=> "Influence",
+	},
+
+	"Monk" => {
+		"Strength" 		=> 25,
+		"Constitution" 	=> 25,
+		"Dexterity" 	=> 20,
+		"Agility" 		=> 30,
+		"Discipline" 	=> 25,
+		"Aura" 			=> 15,
+		"Logic" 		=> 20,
+		"Intuition" 	=> 20,
+		"Wisdom" 		=> 15,
+		"Influence" 	=> 10,
+		"Prime 1"		=> "Agility",
+		"Prime 2"		=> "Strength",
+	},
+
+	"Paladin" => {
+		"Strength" 		=> 30,
+		"Constitution" 	=> 25,
+		"Dexterity" 	=> 20,
+		"Agility" 		=> 20,
+		"Discipline" 	=> 25,
+		"Aura" 			=> 15,
+		"Logic" 		=> 10,
+		"Intuition" 	=> 15,
+		"Wisdom" 		=> 25,
+		"Influence" 	=> 20,
+		"Prime 1"		=> "Wisdom",
+		"Prime 2"		=> "Strength",
+	},
+
+	"Ranger" => {
+		"Strength"		=> 25,
+		"Constitution" 	=> 20,
+		"Dexterity" 	=> 30,
+		"Agility" 		=> 20,
+		"Discipline" 	=> 20,
+		"Aura" 			=> 15,
+		"Logic" 		=> 15,
+		"Intuition" 	=> 25,
+		"Wisdom" 		=> 25,
+		"Influence" 	=> 10,
+		"Prime 1"		=> "Dexterity",
+		"Prime 2"		=> "Intuition",
+	},
+
+	"Rogue" => {
+		"Strength" 		=> 25,
+		"Constitution" 	=> 20,
+		"Dexterity" 	=> 25,
+		"Agility" 		=> 30,
+		"Discipline" 	=> 20,
+		"Aura" 			=> 15,
+		"Logic" 		=> 20,
+		"Intuition" 	=> 25,
+		"Wisdom" 		=> 10,
+		"Influence" 	=> 15,
+		"Prime 1"		=> "Dexterity",
+		"Prime 2"		=> "Agility",
+	},
+
+	"Sorcerer" => {
+		"Strength"		=> 10,
+		"Constitution" 	=> 15,
+		"Dexterity" 	=> 20,
+		"Agility" 		=> 15,
+		"Discipline" 	=> 25,
+		"Aura"		 	=> 30,
+		"Logic" 		=> 25,
+		"Intuition" 	=> 20,
+		"Wisdom" 		=> 25,
+		"Influence" 	=> 20,
+		"Prime 1"		=> "Aura",
+		"Prime 2"		=> "Wisdom",
+	},
+
+	"Warrior" => {
+		"Strength" 		=> 30,
+		"Constitution" 	=> 25,
+		"Dexterity" 	=> 25,
+		"Agility" 		=> 25,
+		"Discipline" 	=> 20,
+		"Aura" 			=> 15,
+		"Logic" 		=> 10,
+		"Intuition" 	=> 20,
+		"Wisdom" 		=> 15,
+		"Influence" 	=> 20,
+		"Prime 1"		=> "Constitution",
+		"Prime 2"		=> "Strength",
+	},
+
+	"Wizard" => {
+		"Strength" 		=> 10,
+		"Constitution" 	=> 15,
+		"Dexterity" 	=> 25,
+		"Agility" 		=> 15,
+		"Discipline" 	=> 20,
+		"Aura" 			=> 30,
+		"Logic" 		=> 25,
+		"Intuition" 	=> 25,
+		"Wisdom" 		=> 20,
+		"Influence" 	=> 20,
+		"Prime 1"		=> "Aura",
+		"Prime 2"		=> "Logic",
+	},
+}
+
+@stat_races = {
+	"Aelotoi" => {
+		"Strength" 		=> 0,
+		"Constitution" 	=> -2,
+		"Dexterity" 	=> 3,
+		"Agility" 		=> 3,
+		"Discipline" 	=> 2,
+		"Aura" 			=> 0,
+		"Logic" 		=> 0,
+		"Intuition" 	=> 2,
+		"Wisdom" 		=> 0,
+		"Influence" 	=> -2
+	},
+
+	"Burghal Gnome" => {
+		"Strength" 		=> -5,
+		"Constitution" 	=> 0,
+		"Dexterity" 	=> 3,
+		"Agility" 		=> 3,
+		"Discipline" 	=> -3,
+		"Aura" 			=> -2,
+		"Logic" 		=> 5,
+		"Intuition" 	=> 5,
+		"Wisdom" 		=> 0,
+		"Influence" 	=> 0		
+	},
+
+	"Dark Elf" => {
+		"Strength" 		=> 0,
+		"Constitution" 	=> -2,
+		"Dexterity" 	=> 5,
+		"Agility" 		=> 5,
+		"Discipline" 	=> -2,
+		"Aura" 			=> 0,
+		"Logic" 		=> 0,
+		"Intuition" 	=> 0,
+		"Wisdom" 		=> 0,
+		"Influence" 	=> 0
+	},
+
+	"Dwarf" => {
+		"Strength" 		=> 5,
+		"Constitution" 	=> 5,
+		"Dexterity" 	=> -3,	
+		"Agility" 		=> -5,
+		"Discipline" 	=> 3,
+		"Aura" 			=> 0,
+		"Logic" 		=> 0,
+		"Intuition" 	=> 0,
+		"Wisdom" 		=> 3,
+		"Influence" 	=> -2 
+	},
+
+	"Elf" => {
+		"Strength" 		=> 0,
+		"Constitution" 	=> -5,
+		"Dexterity" 	=> 5,
+		"Agility" 		=> 3,
+		"Discipline" 	=> -5,
+		"Aura" 			=> 5,
+		"Logic" 		=> 0,
+		"Intuition" 	=> 0,
+		"Wisdom" 		=> 0,
+		"Influence" 	=> 3
+	},
+
+	"Erithian" => {
+		"Strength" 		=> -2,
+		"Constitution" 	=> 0,
+		"Dexterity" 	=> 0,
+		"Agility" 		=> 0,
+		"Discipline" 	=> 3,
+		"Aura" 			=> 0,
+		"Logic" 		=> 2,
+		"Intuition" 	=> 0,
+		"Wisdom" 		=> 0,
+		"Influence" 	=> 3
+	},
+
+	"Forest Gnome" => {
+		"Strength" 		=> -3,
+		"Constitution" 	=> 2,
+		"Dexterity" 	=> 2,
+		"Agility" 		=> 3,
+		"Discipline" 	=> 2,
+		"Aura" 			=> 0,
+		"Logic" 		=> 0,
+		"Intuition" 	=> 0,
+		"Wisdom" 		=> 0,
+		"Influence" 	=> 0
+	},
+
+	"Giantman" => {
+		"Strength" 		=> 5,
+		"Constitution" 	=> 3,
+		"Dexterity" 	=> -2,
+		"Agility" 		=> -2,
+		"Discipline" 	=> 0,
+		"Aura" 			=> 0,
+		"Logic" 		=> 0,
+		"Intuition" 	=> 2,
+		"Wisdom" 		=> 0,
+		"Influence" 	=> 0
+	},
+
+	"Half-Elf" => {
+		"Strength" 		=> 2,
+		"Constitution" 	=> 0,
+		"Dexterity" 	=> 2,
+		"Agility" 		=> 2,
+		"Discipline" 	=> -2,
+		"Aura" 			=> 0,
+		"Logic" 		=> 0,
+		"Intuition" 	=> 0,
+		"Wisdom" 		=> 0,
+		"Influence" 	=> 2
+	},
+
+	"Half-Krolvin" => {
+		"Strength" 		=> 3,
+		"Constitution" 	=> 5,
+		"Dexterity" 	=> 2,
+		"Agility" 		=> 2,
+		"Discipline" 	=> 0,
+		"Aura" 			=> -2,
+		"Logic" 		=> -2,
+		"Intuition" 	=> 0,
+		"Wisdom" 		=> 0,
+		"Influence" 	=> -2
+	},
+
+	"Halfling" => {
+		"Strength" 		=> -5,
+		"Constitution" 	=> 5,
+		"Dexterity" 	=> 5,
+		"Agility" 		=> 5,
+		"Discipline" 	=> -2,
+		"Aura" 			=> 0,
+		"Logic" 		=> -2,
+		"Intuition" 	=> 0,
+		"Wisdom" 		=> 0,
+		"Influence" 	=> 0
+	},
+
+	"Human" => {
+		"Strength" 		=> 2,
+		"Constitution" 	=> 2,
+		"Dexterity" 	=> 0,
+		"Agility" 		=> 0,
+		"Discipline" 	=> 0,
+		"Aura" 			=> 0,
+		"Logic" 		=> 0,
+		"Intuition" 	=> 2,
+		"Wisdom" 		=> 0,
+		"Influence" 	=> 0
+	},
+
+	"Sylvankind" => {
+		"Strength" 		=> -3,
+		"Constitution" 	=> -2,
+		"Dexterity" 	=> 5,
+		"Agility" 		=> 5,
+		"Discipline" 	=> -5,
+		"Aura" 			=> 3,
+		"Logic" 		=> 0,
+		"Intuition" 	=> 0,
+		"Wisdom" 		=> 0,
+		"Influence" 	=> 3
+	},
+	
+}
+
+def create_stat_main_window
+	@stat_stat_maximizer_window = Gtk::Window.new(:toplevel)
+		.set_title("Stat Maximizer")
+		.set_border_width(10)
+		.set_default_size(300, 300)
+		.set_type_hint(Gdk::WindowTypeHint::UTILITY)
+		.set_keep_above(true)
+		.set_position(Gtk::WindowPosition::CENTER)
+		
+	grid = Gtk::Grid.new
+	grid.set_row_spacing(0)
+	grid.set_column_spacing(10)
+	
+	headline_info_grid = Gtk::Grid.new
+	headline_info_grid.set_row_spacing(0)
+	headline_info_grid.set_column_spacing(10)
+	
+	@stat_stat_name_grid = Gtk::Grid.new
+	@stat_stat_name_grid.set_row_spacing(0)
+	@stat_stat_name_grid.set_column_spacing(10)
+	
+	reset_and_other_button_grid = Gtk::Grid.new
+	reset_and_other_button_grid.set_row_spacing(0)
+	reset_and_other_button_grid.set_column_spacing(10)
+	
+	impossible_success_grid = Gtk::Grid.new
+	impossible_success_grid.set_row_spacing(0)
+	impossible_success_grid.set_column_spacing(10)
+	
+	main_grid = Gtk::Grid.new
+	main_grid.set_row_spacing(10)
+	main_grid.set_column_spacing(10)
+	
+	main_grid.attach(grid, 0, 0, 1, 1)
+	main_grid.attach(headline_info_grid, 0, 1, 1, 1)
+	main_grid.attach(@stat_stat_name_grid, 0, 2, 1, 1)
+	main_grid.attach(reset_and_other_button_grid, 0, 3, 1, 1)
+	main_grid.attach(impossible_success_grid, 0, 4, 1, 1)
+	
+	@impossible_success_label = Gtk::Label.new("")
+	impossible_success_grid.attach(@impossible_success_label, 0, 0, 1, 1)
+	@impossible_success_label.override_color(Gtk::StateFlags::NORMAL, Gdk::RGBA.new(1, 0, 0, 1.0))
+	
+	assign_button_label = Gtk::Label.new("Click \"Assign\" to have script auto assign values in \"Starting stats\".\nMust already be at the stat reassignment screen.\nStart script BEFORE you check in at the inn.\nScript won't auto confirm stats, check stats before confirming.")
+	impossible_success_grid.attach(assign_button_label, 0, 1, 1, 1)
+	
+	@stat_profession_chosen = "Bard"
+	@stat_race_chosen = "Halfling"
+	
+	profession_menu = Gtk::ComboBoxText.new
+	profession_menu.append_text("Bard")
+	profession_menu.append_text("Cleric")
+	profession_menu.append_text("Empath")
+	profession_menu.append_text("Monk")
+	profession_menu.append_text("Paladin")
+	profession_menu.append_text("Ranger")
+	profession_menu.append_text("Rogue")
+	profession_menu.append_text("Sorcerer")
+	profession_menu.append_text("Warrior")
+	profession_menu.append_text("Wizard")
+
+	profession_menu.model.each do |model, path, iter|
+		if iter[0] == @stat_this_character_profession
+			profession_menu.set_active_iter(iter)
+			break
+		end
+	end
+	
+	@stat_profession_chosen = @stat_this_character_profession
+
+	race_menu = Gtk::ComboBoxText.new
+	race_menu.append_text("Aelotoi")
+	race_menu.append_text("Burghal Gnome")
+	race_menu.append_text("Dark Elf")
+	race_menu.append_text("Dwarf")
+	race_menu.append_text("Elf")
+	race_menu.append_text("Erithian")
+	race_menu.append_text("Forest Gnome")
+	race_menu.append_text("Giantman")
+	race_menu.append_text("Half-Elf")
+	race_menu.append_text("Half-Krolvin")
+	race_menu.append_text("Halfling")
+	race_menu.append_text("Human")
+	race_menu.append_text("Sylvankind")
+	
+	race_menu.model.each do |model, path, iter|
+		if iter[0] == @stat_this_character_race
+			race_menu.set_active_iter(iter)
+			break
+		end
+	end
+	
+	@stat_race_chosen = @stat_this_character_race
+	
+	race_menu.signal_connect("changed") do |widget|
+		@stat_race_chosen = widget.active_text
+		stats_update_all_growth_intervals
+	end
+	
+	stats_update_all_growth_intervals
+	
+	profession_menu.set_size_request(175, 25)
+	race_menu.set_size_request(175, 25)
+	
+
+	grid.attach(profession_menu, 0, 1, 1, 1)
+	grid.attach(race_menu, 1, 1, 1, 1)
+	
+	minimum_stats_wanted_label = Gtk::Label.new("Minimum stats at level 100")
+	minimum_stats_wanted_label.set_tooltip_text("Enter the minimum you want each stat to be at level 100. If you don't care what a stat will be at cap then leave it blank.")
+	headline_info_grid.attach(minimum_stats_wanted_label, 0, 0, 1, 1)
+	
+	gi_label = Gtk::Label.new("  GI")
+	gi_label.set_tooltip_text("The Growth Interval of each stat.")
+	headline_info_grid.attach(gi_label, 1, 0, 1, 1)
+	
+	starting_stats_needed_label = Gtk::Label.new("       Starting stats")
+	starting_stats_needed_label.set_tooltip_text("The starting stats needed to achieve the desired cap stats.")
+	headline_info_grid.attach(starting_stats_needed_label, 2, 0, 1, 1)
+	
+	stats_at_cap_label = Gtk::Label.new("       Stats at cap")
+	stats_at_cap_label.set_tooltip_text("What stats will be at cap.")
+	headline_info_grid.attach(stats_at_cap_label, 3, 0, 1, 1)
+	
+	all_stat_labels = [ "Strength", "Constitution", "Dexterity", "Agility", "Discipline", "Aura", "Logic", "Intuition", "Wisdom", "Influence" ]
+	@stat_all_requested_minimum_stats = {}
+	
+	row_number = -1
+	
+	@stat_stat_name_labels = {}
+	
+	all_stat_labels.each{ |stat_name|
+		if stat_name == @stat_professions[@stat_profession_chosen]["Prime 1"] || stat_name == @stat_professions[@stat_profession_chosen]["Prime 2"]
+			label = Gtk::Label.new("#{stat_name}*")
+		else
+			label = Gtk::Label.new(stat_name)
+		end
+		@stat_stat_name_labels[stat_name] = label
+		@stat_stat_name_grid.attach(label, 0, row_number += 1, 1, 1)
+		
+		entry = Gtk::Entry.new
+		entry.set_width_chars(3)
+		entry.set_max_length(3)
+		@stat_stat_name_grid.attach(entry, 1, row_number, 1, 1)
+		
+		entry.text = ""
+		
+		entry.signal_connect("changed") do
+			text = entry.text
+			text.gsub!(/\D/, '')
+			text.chop! if text.length > 2 && text != "100"
+			entry.text = text
+			@stat_all_requested_minimum_stats[stat_name] = text.to_i
+			@stat_all_requested_minimum_stats.delete(stat_name) if text.to_i == 0
+		end
+	}
+	
+	blank_label = Gtk::Label.new("")
+	@stat_stat_name_grid.attach(blank_label, 0, row_number += 1, 1, 1)
+	blank_label = Gtk::Label.new("")
+	@stat_stat_name_grid.attach(blank_label, 0, row_number += 1, 1, 1)
+	
+	total_stats_label = Gtk::Label.new("Total")
+	@stat_stat_name_grid.attach(total_stats_label, 0, row_number += 2, 1, 1)
+	
+	list_of_growth_intervals = [ @stat_strength_growth_interval, @stat_constitution_growth_interval, @stat_dexterity_growth_interval, @stat_agility_growth_interval, @stat_discipline_growth_interval, @stat_aura_growth_interval, @stat_logic_growth_interval, @stat_intuition_growth_interval, @stat_wisdom_growth_interval, @stat_influence_growth_interval ]
+	
+	color_for_gi_labels = [ "green", "blue", "red", "purple", "orange" ]
+	gi_labels_and_their_colors = {}
+	
+	grouped_intervals = list_of_growth_intervals.group_by(&:itself)
+
+	grouped_intervals.each do |value, intervals|
+		if intervals.count == 1
+			gi_labels_and_their_colors[value] = "black"
+		else
+			gi_labels_and_their_colors[value] = color_for_gi_labels.shift
+		end
+	end
+	
+	row_number = -1
+	@stat_stat_gi_labels = []
+	
+	list_of_growth_intervals.each{ |stat|
+		stat_gi = Gtk::Label.new("         #{stat}")
+		@stat_stat_name_grid.attach(stat_gi, 2, row_number += 1, 1, 1)
+		if gi_labels_and_their_colors[stat] == "green"
+			stat_gi.override_color(Gtk::StateFlags::NORMAL, Gdk::RGBA.new(0, 1, 0, 1))
+		elsif gi_labels_and_their_colors[stat] == "blue"
+			stat_gi.override_color(Gtk::StateFlags::NORMAL, Gdk::RGBA.new(0, 0, 1, 1))
+		elsif gi_labels_and_their_colors[stat] == "red"
+			stat_gi.override_color(Gtk::StateFlags::NORMAL, Gdk::RGBA.new(1, 0, 0, 1))
+		elsif gi_labels_and_their_colors[stat] == "purple"
+			stat_gi.override_color(Gtk::StateFlags::NORMAL, Gdk::RGBA.new(1, 0, 1, 1))
+		elsif gi_labels_and_their_colors[stat] == "orange"
+			stat_gi.override_color(Gtk::StateFlags::NORMAL, Gdk::RGBA.new(1, 0.5, 0, 1))
+		else
+			stat_gi.override_color(Gtk::StateFlags::NORMAL, Gdk::RGBA.new(0.25, 0.25, 0.25, 1))
+		end
+		@stat_stat_gi_labels.push(stat_gi)
+	}
+
+	row_number = -1
+	@stat_starting_stats_labels = []
+	
+	10.times{
+		temp_label = Gtk::Label.new("                 0")
+		@stat_stat_name_grid.attach(temp_label, 3, row_number += 1, 1, 1)
+		@stat_starting_stats_labels.push(temp_label)
+	}
+	
+	total_starting_stats_label = Gtk::Label.new("                 0")
+	@stat_stat_name_grid.attach(total_starting_stats_label, 3, row_number += 4, 1, 1)
+	@stat_starting_stats_labels.push(total_starting_stats_label)
+	
+	row_number = -1
+	@stat_stats_at_cap_labels = []
+	
+	10.times{
+		temp_label = Gtk::Label.new("                       0")
+		@stat_stat_name_grid.attach(temp_label, 4, row_number += 1, 1, 1)
+		@stat_stats_at_cap_labels.push(temp_label)
+	}
+	
+	total_stats_at_cap_label = Gtk::Label.new("                       0")
+	@stat_stat_name_grid.attach(total_stats_at_cap_label, 4, row_number += 4, 1, 1)
+	@stat_stats_at_cap_labels.push(total_stats_at_cap_label)
+	
+	reset_button = Gtk::Button.new(:label => "Reset")
+	reset_and_other_button_grid.attach(reset_button, 0, 0, 1, 1)
+	reset_button.set_size_request(110, 30)
+	
+	reset_button.signal_connect("clicked") do
+		@stat_stat_name_grid.each{ |child| child.text = '' if child.is_a?(Gtk::Entry) }
+		@stat_all_requested_minimum_stats = {}
+	
+		stat_reset_all_information
+		
+		@impossible_success_label.set_text("")
+	end
+	
+	calculate_button = Gtk::Button.new(:label => "Calculate")
+	reset_and_other_button_grid.attach(calculate_button, 1, 0, 1, 1)
+	calculate_button.set_size_request(110, 30)
+	
+	calculate_button.signal_connect("clicked") do
+		@impossible_success_label.set_text("")
+		
+		strength_value = 20
+		constitution_value = 20
+		dexterity_value = 20
+		agility_value = 20
+		discipline_value = 20
+		aura_value = 20
+		logic_value = 20
+		intuition_value = 20
+		wisdom_value = 20
+		influence_value = 20
+		
+		all_stat_current_values = [ strength_value, constitution_value, dexterity_value, agility_value, discipline_value, aura_value, logic_value, intuition_value, wisdom_value, influence_value ]
+		
+		all_stat_names = [ "Strength", "Constitution", "Dexterity", "Agility", "Discipline", "Aura", "Logic", "Intuition", "Wisdom", "Influence" ]
+		
+		all_stat_names.each_with_index do |stat_name, index|
+			all_stat_current_values[index] = 30 if stat_name == @stat_professions[@stat_profession_chosen]["Prime 1"] || stat_name == @stat_professions[@stat_profession_chosen]["Prime 2"]
+		end
+
+		list_of_growth_intervals = [ @stat_strength_growth_interval, @stat_constitution_growth_interval, @stat_dexterity_growth_interval, @stat_agility_growth_interval, @stat_discipline_growth_interval, @stat_aura_growth_interval, @stat_logic_growth_interval, @stat_intuition_growth_interval, @stat_wisdom_growth_interval, @stat_influence_growth_interval ]
+		
+		@stat_stat_name_value_growth = {}
+		
+		all_stat_names.each_with_index do |name, index|
+			current_value = all_stat_current_values[index]
+			growth_interval = list_of_growth_intervals[index]
+			@stat_stat_name_value_growth[name] = { current_value: current_value, growth_interval: growth_interval, original_value: current_value, ending_value: 0, points_to_add: 0 }
+		end
+		
+		@stat_total_added_points_available = 440
+		@stat_stats_above_90 = nil
+		@stat_stats_above_70 = Array.new
+		@stat_stats_impossible_stat_limits = nil
+		@stat_stats_impossible_bonus_point_limit = nil
+
+		def stat_lowest_stat_number_needed(stat_name, stat_current_value, stat_growth, level, current_hash)
+			grow_stat_interval = [stat_current_value / stat_growth, 1].max
+			new_current_value = stat_current_value
+			new_current_value += 1 if level % grow_stat_interval == 0
+			new_current_value = 100 if new_current_value > 100
+			current_hash.assoc(stat_name)[1][:current_value] = new_current_value
+			current_hash.assoc(stat_name)[1][:ending_value] = new_current_value
+		end
+		
+		def stats_check_70_and_above(current_key, current_hash)
+			if current_key == @stat_professions[@stat_profession_chosen]["Prime 1"] || current_key == @stat_professions[@stat_profession_chosen]["Prime 2"]
+				if (current_hash.assoc(current_key)[1][:original_value] + current_hash.assoc(current_key)[1][:points_to_add]) > 80
+					@stat_stats_above_70.push(current_key) unless @stat_stats_above_70.include?(current_key)
+				end
+			else
+				if (current_hash.assoc(current_key)[1][:original_value] + current_hash.assoc(current_key)[1][:points_to_add]) > 90
+					@stat_stats_above_90 = true
+					@stat_stats_above_70.push(current_key) unless @stat_stats_above_70.include?(current_key)
+				elsif (current_hash.assoc(current_key)[1][:original_value] + current_hash.assoc(current_key)[1][:points_to_add]) > 70
+					@stat_stats_above_70.push(current_key) unless @stat_stats_above_70.include?(current_key)
+				end
+			end
+		end
+		
+		if @stat_all_requested_minimum_stats.count > 0
+			@stat_all_requested_minimum_stats.each{ |current_key,minimum_stat_value|
+				break if @stat_stats_impossible_stat_limits
+				break if minimum_stat_value == 0
+				starting_base_value = @stat_stat_name_value_growth.assoc(current_key)[1][:current_value].dup
+				loop{
+					for level in 1..100 do
+						stat_lowest_stat_number_needed(current_key, @stat_stat_name_value_growth.assoc(current_key)[1][:current_value], @stat_stat_name_value_growth.assoc(current_key)[1][:growth_interval], level, @stat_stat_name_value_growth)
+						break if @stat_stat_name_value_growth.assoc(current_key)[1][:current_value] == 100
+					end
+					break if @stat_stat_name_value_growth.assoc(current_key)[1][:current_value] == 100
+					break if @stat_stat_name_value_growth.assoc(current_key)[1][:current_value] >= minimum_stat_value
+					total_value_current = (@stat_stat_name_value_growth.assoc(current_key)[1][:original_value] + @stat_stat_name_value_growth.assoc(current_key)[1][:points_to_add])
+					if current_key == @stat_professions[@stat_profession_chosen]["Prime 1"] || current_key == @stat_professions[@stat_profession_chosen]["Prime 2"]
+						if total_value_current >= 80 && @stat_stats_above_70.count >= 4
+							@stat_stats_impossible_stat_limits = true
+							break
+						end
+					else
+						if total_value_current >= 70 && @stat_stats_above_70.count >= 4
+							@stat_stats_impossible_stat_limits = true
+							break
+						end
+						if total_value_current >= 90 && @stat_stats_above_90
+							@stat_stats_impossible_stat_limits = true
+							break
+						end
+					end
+					@stat_total_added_points_available -= 1
+					break if @stat_total_added_points_available < 0
+					@stat_stat_name_value_growth.assoc(current_key)[1][:points_to_add] += 1
+					@stat_stat_name_value_growth.assoc(current_key)[1][:current_value] = starting_base_value.dup
+					@stat_stat_name_value_growth.assoc(current_key)[1][:current_value] += @stat_stat_name_value_growth.assoc(current_key)[1][:points_to_add]
+				}
+				stats_check_70_and_above(current_key, @stat_stat_name_value_growth)
+				@stat_stat_name_value_growth.assoc(current_key)[1][:current_value] = starting_base_value.dup
+				@stat_stat_name_value_growth.assoc(current_key)[1][:current_value] += @stat_stat_name_value_growth.assoc(current_key)[1][:points_to_add]
+			}
+		end
+
+		@stat_first_set_sorted = @stat_stat_name_value_growth.sort_by { |_, v| v[:growth_interval] }
+		
+		
+		@stat_copy_of_70 = @stat_stats_above_70.dup
+		@stat_copy_of_90 = @stat_stats_above_90.dup
+		@stat_copy_of_total_points = @stat_total_added_points_available.dup
+		
+		def stat_deep_dup
+			duplicate = {}
+			each do |key, value|
+				duplicate[key] = value.is_a?(Hash) ? value.stat_deep_dup : value.dup
+			end
+			duplicate
+		end
+
+		@stat_all_stats_second = @stat_stat_name_value_growth.stat_deep_dup
+		@stat_second_set_sorted = @stat_all_stats_second.sort_by { |_, v| v[:growth_interval] }
+		
+		def stat_go_through_all_stats(hash_sorted, hash_stats, current_set)
+			if current_set == "first"
+				current_entry = hash_sorted.shift
+			else
+				if hash_sorted.count == 2
+					current_entry = hash_sorted.pop
+				else
+					current_entry = hash_sorted.shift
+				end
+			end
+			current_key, current_value = current_entry
+			loop{
+				for level in 1..100 do
+					stat_lowest_stat_number_needed(current_key, current_value[:current_value], current_value[:growth_interval], level, hash_stats)
+					break if hash_stats.assoc(current_key)[1][:current_value] == 100
+				end
+				stats_check_70_and_above(current_key, hash_stats)
+				total_value_current = (hash_stats.assoc(current_key)[1][:original_value] + hash_stats.assoc(current_key)[1][:points_to_add])
+				if current_key == @stat_professions[@stat_profession_chosen]["Prime 1"] || current_key == @stat_professions[@stat_profession_chosen]["Prime 2"]
+					break if total_value_current == 80 && (@stat_stats_above_70.count >= 4)
+				else
+					break if total_value_current == 70 && (@stat_stats_above_70.count >= 4)
+					break if total_value_current == 90 && (@stat_stats_above_90)
+				end
+				break if hash_stats.assoc(current_key)[1][:current_value] == 100
+				@stat_total_added_points_available -= 1
+				break if @stat_total_added_points_available < 0
+				hash_stats.assoc(current_key)[1][:points_to_add] += 1
+				hash_stats.assoc(current_key)[1][:current_value] = hash_stats.assoc(current_key)[1][:original_value].dup
+				hash_stats.assoc(current_key)[1][:current_value] += hash_stats.assoc(current_key)[1][:points_to_add]
+			}
+			hash_stats.assoc(current_key)[1][:current_value] = hash_stats.assoc(current_key)[1][:original_value] += hash_stats.assoc(current_key)[1][:points_to_add]
+			@stat_stats_impossible_bonus_point_limit = true if @stat_all_requested_minimum_stats[current_key] && hash_stats.assoc(current_key)[1][:ending_value] < @stat_all_requested_minimum_stats[current_key]
+		end
+		
+		current_set = "first"
+		while @stat_first_set_sorted.count > 0
+			break if @stat_stats_impossible_stat_limits
+			break if @stat_stats_impossible_bonus_point_limit
+			stat_go_through_all_stats(@stat_first_set_sorted, @stat_stat_name_value_growth, current_set)
+		end
+		
+		@stat_stats_above_70 = @stat_copy_of_70.dup
+		@stat_stats_above_90 = @stat_copy_of_90.dup
+		@stat_total_added_points_available = @stat_copy_of_total_points.dup
+		current_set = "second"
+		
+		while @stat_second_set_sorted.count > 0
+			break if @stat_stats_impossible_stat_limits
+			break if @stat_stats_impossible_bonus_point_limit
+			stat_go_through_all_stats(@stat_second_set_sorted, @stat_all_stats_second, current_set)
+		end
+
+		total_ending_value_1 = @stat_stat_name_value_growth.values.sum { |stat| stat[:ending_value].to_i }
+		total_ending_value_2 = @stat_all_stats_second.values.sum { |stat| stat[:ending_value].to_i }
+		
+		if total_ending_value_1 > total_ending_value_2
+			@stat_highest_stat_totals = @stat_stat_name_value_growth
+		else
+			@stat_highest_stat_totals = @stat_all_stats_second
+		end
+
+		if @stat_stats_impossible_stat_limits
+			stat_reset_all_information
+			@impossible_success_label.set_text("These stats are impossible to achieve.\nOnly 1 starting stat can be above 90 and only 4 stats in total can be above 70.\nThese limits do not include the +10 points that prime stats receive.")
+		elsif @stat_stats_impossible_bonus_point_limit
+			stat_reset_all_information
+			@impossible_success_label.set_text("These stats are impossible to achieve.\nOnly 440 points are available to add to the base of all stats.\n")
+		else
+			@impossible_success_label.set_text("Prime stats are marked with an *.\nStarting/capped stats of GI's with same value/color (except black) are interchangeable.\nNote that prime stats start with +10 to the base stat.")
+
+			total_starting_value = @stat_highest_stat_totals.values.sum { |stat| stat[:current_value].to_i }
+		
+			update_all_starting_stats = [ @stat_highest_stat_totals.assoc("Strength")[1][:current_value], @stat_highest_stat_totals.assoc("Constitution")[1][:current_value], @stat_highest_stat_totals.assoc("Dexterity")[1][:current_value], @stat_highest_stat_totals.assoc("Agility")[1][:current_value], @stat_highest_stat_totals.assoc("Discipline")[1][:current_value], @stat_highest_stat_totals.assoc("Aura")[1][:current_value], @stat_highest_stat_totals.assoc("Logic")[1][:current_value], @stat_highest_stat_totals.assoc("Intuition")[1][:current_value], @stat_highest_stat_totals.assoc("Wisdom")[1][:current_value], @stat_highest_stat_totals.assoc("Influence")[1][:current_value], total_starting_value ]
+			
+			@stat_starting_stats_labels.each_with_index do |stat_label, index|
+				if !stat_label.destroyed?
+					label_text = stat_label.text
+					starting_stat = update_all_starting_stats[index]
+					spaces = label_text.match(/^\s+/).to_s
+					stat_label.set_text("#{spaces}#{starting_stat}")
+				end
+			end
+			
+			total_ending_value = @stat_highest_stat_totals.values.sum { |stat| stat[:ending_value].to_i }
+			
+			update_all_capped_stats = [ @stat_highest_stat_totals.assoc("Strength")[1][:ending_value], @stat_highest_stat_totals.assoc("Constitution")[1][:ending_value], @stat_highest_stat_totals.assoc("Dexterity")[1][:ending_value], @stat_highest_stat_totals.assoc("Agility")[1][:ending_value], @stat_highest_stat_totals.assoc("Discipline")[1][:ending_value], @stat_highest_stat_totals.assoc("Aura")[1][:ending_value], @stat_highest_stat_totals.assoc("Logic")[1][:ending_value], @stat_highest_stat_totals.assoc("Intuition")[1][:ending_value], @stat_highest_stat_totals.assoc("Wisdom")[1][:ending_value], @stat_highest_stat_totals.assoc("Influence")[1][:ending_value], total_ending_value ]
+			
+			@stat_stats_at_cap_labels.each_with_index do |stat_label, index|
+				if !stat_label.destroyed?
+					label_text = stat_label.text
+					starting_stat = update_all_capped_stats[index]
+					spaces = label_text.match(/^\s+/).to_s
+					stat_label.set_text("#{spaces}#{starting_stat}")
+				end
+			end
+		end
+	end
+	
+	calculate_button = Gtk::Button.new(:label => "Assign")
+	reset_and_other_button_grid.attach(calculate_button, 2, 0, 1, 1)
+	calculate_button.set_size_request(110, 30)
+	
+	calculate_button.signal_connect("clicked") do
+		if Room.current.nil?
+			put "m"
+			sleep 0.5
+			@stat_highest_stat_totals.each{ |key,value|
+				put "#{key} +#{value[:points_to_add]}"
+				sleep 0.5
+			}
+		end
+	end
+	
+	@stat_all_labels = [ @impossible_success_label, assign_button_label, minimum_stats_wanted_label, gi_label, starting_stats_needed_label, stats_at_cap_label, total_stats_label, total_starting_stats_label, total_stats_at_cap_label ]
+	
+	@stat_color_black = [0, 0, 0, 1]
+	@stat_color_white = [1, 1, 1, 1]
+	text_color_options = [ "black", "white", "default" ]
+	current_text_color_option = "default"
+	
+	def stat_change_all_text_colors(color_option)
+		if color_option == "white" || color_option == "black"
+			if color_option == "white"
+				rgba_color = Gdk::RGBA.new(*@stat_color_white)
+				@stat_gi_text_color = "white"
+			elsif color_option == "black"
+				rgba_color = Gdk::RGBA.new(*@stat_color_black)
+				@stat_gi_text_color = "black"
+			end
+
+			@stat_all_labels.each{ |label| label.override_color(Gtk::StateFlags::NORMAL, rgba_color) }
+			@stat_stat_name_labels.each{ |stat_name, stat_label| stat_label.override_color(Gtk::StateFlags::NORMAL, rgba_color) if !stat_label.destroyed? }
+			@stat_stat_gi_labels.each_with_index.each{ |stat_label, index| stat_label.override_color(Gtk::StateFlags::NORMAL, rgba_color) if !stat_label.destroyed? }
+			@stat_starting_stats_labels.each_with_index.each{|stat_label, index| stat_label.override_color(Gtk::StateFlags::NORMAL, rgba_color) if !stat_label.destroyed? }
+			@stat_stats_at_cap_labels.each_with_index.each{ |stat_label, index| stat_label.override_color(Gtk::StateFlags::NORMAL, rgba_color) if !stat_label.destroyed? }
+		else
+			@stat_gi_text_color = nil
+			rgba_color = Gdk::RGBA.new(*@stat_color_black)
+			@stat_all_labels.each{ |label| label.override_color(Gtk::StateFlags::NORMAL, rgba_color) }
+			@impossible_success_label.override_color(Gtk::StateFlags::NORMAL, Gdk::RGBA.new(1, 0, 0, 1.0))
+			@stat_stat_name_labels.each{ |stat_name, stat_label| stat_label.override_color(Gtk::StateFlags::NORMAL, rgba_color) if !stat_label.destroyed? }
+			@stat_starting_stats_labels.each_with_index.each{|stat_label, index| stat_label.override_color(Gtk::StateFlags::NORMAL, rgba_color) if !stat_label.destroyed? }
+			@stat_stats_at_cap_labels.each_with_index.each{ |stat_label, index| stat_label.override_color(Gtk::StateFlags::NORMAL, rgba_color) if !stat_label.destroyed? }
+			
+			stat_change_gi_text_labels
+		end
+	end
+	
+	change_text_color_button = Gtk::Button.new(:label => "Cycle Text Color")
+	reset_and_other_button_grid.attach(change_text_color_button, 3, 0, 1, 1)
+	change_text_color_button.set_size_request(110, 30)
+	
+	change_text_color_button.set_tooltip_text("Click to cycle through text color options.")
+	
+	change_text_color_button.signal_connect("clicked") do
+		text_color_options.push(text_color_options[0])
+		current_text_color_option = text_color_options.shift
+		
+		stat_change_all_text_colors(current_text_color_option)
+	end
+	
+	profession_menu.signal_connect("changed") do |widget|
+		@stat_profession_chosen = widget.active_text
+		stats_update_all_growth_intervals
+		@stat_stat_name_labels.each do |stat_name, stat_label|
+			if !stat_label.destroyed?
+				if stat_name == @stat_professions[@stat_profession_chosen]["Prime 1"] || stat_name == @stat_professions[@stat_profession_chosen]["Prime 2"]
+					stat_label.set_text("#{stat_name}*")
+				else
+					stat_label.set_text(stat_name)
+				end
+			end
+		end
+	end
+
+	@stat_stat_maximizer_window.add(main_grid)
+	@stat_stat_maximizer_window.show_all
+end
+
+def stat_reset_all_information			
+	@stat_stats_at_cap_labels.each_with_index do |stat_label, index|
+		if !stat_label.destroyed?
+			label_text = stat_label.text
+			spaces = label_text.match(/^\s+/).to_s
+			stat_label.set_text("#{spaces}0")
+		end
+	end
+
+	@stat_starting_stats_labels.each_with_index do |stat_label, index|
+		if !stat_label.destroyed?
+			label_text = stat_label.text
+			spaces = label_text.match(/^\s+/).to_s
+			stat_label.set_text("#{spaces}0")
+		end
+	end
+end
+
+def stat_change_gi_text_labels
+	list_of_growth_intervals = [ @stat_strength_growth_interval, @stat_constitution_growth_interval, @stat_dexterity_growth_interval, @stat_agility_growth_interval, @stat_discipline_growth_interval, @stat_aura_growth_interval, @stat_logic_growth_interval, @stat_intuition_growth_interval, @stat_wisdom_growth_interval, @stat_influence_growth_interval ]
+	
+	color_for_gi_labels = [ "green", "blue", "red", "purple", "orange" ]
+	gi_labels_and_their_colors = {}
+	
+	grouped_intervals = list_of_growth_intervals.group_by(&:itself)
+
+	grouped_intervals.each do |value, intervals|
+		if intervals.count == 1
+			gi_labels_and_their_colors[value] = "black"
+		else
+			gi_labels_and_their_colors[value] = color_for_gi_labels.shift
+		end
+	end
+	
+	if @stat_gi_text_color == "black" || @stat_gi_text_color == "white"
+		if @stat_gi_text_color == "black"
+			rgba_color = Gdk::RGBA.new(*@stat_color_black)
+		elsif @stat_gi_text_color == "white"
+			rgba_color = Gdk::RGBA.new(*@stat_color_white)
+		end
+		
+		@stat_stat_gi_labels.each_with_index do |stat_label, index|
+			if !stat_label.destroyed?
+				label_text = stat_label.text
+				growth_interval = list_of_growth_intervals[index]
+				spaces = label_text.match(/^\s+/).to_s
+				stat_label.set_text("#{spaces}#{growth_interval}")
+				stat_label.override_color(Gtk::StateFlags::NORMAL, rgba_color)
+			end
+		end
+	else
+		@stat_stat_gi_labels.each_with_index do |stat_label, index|
+			if !stat_label.destroyed?
+				label_text = stat_label.text
+				growth_interval = list_of_growth_intervals[index]
+				spaces = label_text.match(/^\s+/).to_s
+				stat_label.set_text("#{spaces}#{growth_interval}")
+				if gi_labels_and_their_colors[list_of_growth_intervals[index]] == "green"
+					stat_label.override_color(Gtk::StateFlags::NORMAL, Gdk::RGBA.new(0, 1, 0, 1))
+				elsif gi_labels_and_their_colors[list_of_growth_intervals[index]] == "blue"
+					stat_label.override_color(Gtk::StateFlags::NORMAL, Gdk::RGBA.new(0, 0, 1, 1))
+				elsif gi_labels_and_their_colors[list_of_growth_intervals[index]] == "red"
+					stat_label.override_color(Gtk::StateFlags::NORMAL, Gdk::RGBA.new(1, 0, 0, 1))
+				elsif gi_labels_and_their_colors[list_of_growth_intervals[index]] == "purple"
+					stat_label.override_color(Gtk::StateFlags::NORMAL, Gdk::RGBA.new(1, 0, 1, 1))
+				elsif gi_labels_and_their_colors[list_of_growth_intervals[index]] == "orange"
+					stat_label.override_color(Gtk::StateFlags::NORMAL, Gdk::RGBA.new(1, 0.5, 0, 1))
+				else
+					stat_label.override_color(Gtk::StateFlags::NORMAL, Gdk::RGBA.new(0.25, 0.25, 0.25, 1))
+				end
+			end
+		end
+	end
+end
+
+def stats_update_all_growth_intervals
+	@stat_strength_growth_interval = @stat_professions[@stat_profession_chosen]["Strength"] + @stat_races[@stat_race_chosen]["Strength"]
+	@stat_constitution_growth_interval = @stat_professions[@stat_profession_chosen]["Constitution"] + @stat_races[@stat_race_chosen]["Constitution"]
+	@stat_dexterity_growth_interval = @stat_professions[@stat_profession_chosen]["Dexterity"] + @stat_races[@stat_race_chosen]["Dexterity"]
+	@stat_agility_growth_interval = @stat_professions[@stat_profession_chosen]["Agility"] + @stat_races[@stat_race_chosen]["Agility"]
+	@stat_discipline_growth_interval = @stat_professions[@stat_profession_chosen]["Discipline"] + @stat_races[@stat_race_chosen]["Discipline"]
+	@stat_aura_growth_interval = @stat_professions[@stat_profession_chosen]["Aura"] + @stat_races[@stat_race_chosen]["Aura"]
+	@stat_logic_growth_interval = @stat_professions[@stat_profession_chosen]["Logic"] + @stat_races[@stat_race_chosen]["Logic"]
+	@stat_intuition_growth_interval = @stat_professions[@stat_profession_chosen]["Intuition"] + @stat_races[@stat_race_chosen]["Intuition"]
+	@stat_wisdom_growth_interval = @stat_professions[@stat_profession_chosen]["Wisdom"] + @stat_races[@stat_race_chosen]["Wisdom"]
+	@stat_influence_growth_interval = @stat_professions[@stat_profession_chosen]["Influence"] + @stat_races[@stat_race_chosen]["Influence"]
+	
+	list_of_growth_intervals = [ @stat_strength_growth_interval, @stat_constitution_growth_interval, @stat_dexterity_growth_interval, @stat_agility_growth_interval, @stat_discipline_growth_interval, @stat_aura_growth_interval, @stat_logic_growth_interval, @stat_intuition_growth_interval, @stat_wisdom_growth_interval, @stat_influence_growth_interval ]
+	
+	stat_change_gi_text_labels
+end
+
+result = Lich::Util.quiet_command_xml("info start", /Level .* Stats for|This character was created/)
+result.each{ |info|
+	info = strip_xml(info)
+	if info =~ /Level (\d+) Stats for .*, (.*) (.*)/
+		@stat_this_character_level = $1.to_i
+		@stat_this_character_race = $2
+		@stat_this_character_profession = $3
+	end
+}
+
+if @stat_stat_maximizer_window.nil? || @stat_stat_maximizer_window.destroyed?
+	Gtk.queue { create_stat_main_window }
+end
