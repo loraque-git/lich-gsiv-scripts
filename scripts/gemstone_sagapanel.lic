@@ -26,7 +26,7 @@
                                 be running). Also the Hunt "Restart" row.
     *gs pause                - Toggle the tracker hunt timer pause
     *gs idle [seconds|off]   - Auto-pause hunt timer after this many seconds
-                                with no kill (default 120). Next kill resumes
+                                with no kill (default 60). Next kill resumes
                                 the same hunt. *gs idle off disables.
     *gs status               - Send GEM STATUS and refresh Available/Fixate
                                 lights (also runs on *gs refresh)
@@ -46,8 +46,9 @@
   Credits: gemstone-tracker by Dreaven
   Creator: loraque (loraque@gmail.com)
   Author: loraque (loraque@gmail.com)
-  Version: 0.4.0
+  Version: 0.4.1
   Recently changed:
+    0.4.1 - Default idle auto-pause 60s (was 120)
     0.4.0 - Auto-pause hunt timer after idle (default 120s no kill); resume same hunt on next kill (*gs idle)
     0.3.3 - No red hide-triangles; Available/Fixate/Tracker are labels
     0.3.2 - Available TRUE/FALSE; Fixate ON/OFF; parse "GEM FIXATE is active until..."
@@ -81,7 +82,7 @@ module GemstonePanel
   REMOVE_ICON = "&#x1F53B;".freeze
   FIND_RATE = 1500
   SECOND_THIRD_RATE = 3500
-  DEFAULT_IDLE_PAUSE_SECONDS = 120
+  DEFAULT_IDLE_PAUSE_SECONDS = 60
   DIALOG_ID = "GemstonePanel"
   SECTION_IDS = %w[hunt char critters roster].freeze
 
