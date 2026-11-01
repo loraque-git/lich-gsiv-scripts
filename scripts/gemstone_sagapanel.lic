@@ -694,12 +694,15 @@ module GemstonePanel
   end
 
   def self.help_text
+    idle = idle_pause_seconds.to_i
+    idle_line = idle.positive? ? "auto-pause after #{idle}s with no kill (resume on next kill)" : "auto-pause OFF"
     [
       "Gemstone Panel commands:",
       "  *gs char <name>     show that character (*gs char main for roster)",
       "  *gs refresh         reload Gemstone Info.json",
       "  *gs restart         reset hunt timer (or click Restart hunt)",
-      "  *gs pause           toggle hunt timer pause",
+      "  *gs pause           toggle hunt timer pause (manual; does not auto-resume)",
+      "  *gs idle [N|off]    #{idle_line}",
       "  *gs status          GEM STATUS -> Available/Fixate lights",
       "  *gs ignore <field>  hide a row",
       "  *gs unignore <field>|all",
@@ -716,6 +719,10 @@ GemstonePanel.ignored = @gs_settings["gemstone"]["ignored"]
 GemstonePanel.value_width = @gs_settings["gemstone"]["value_width"]
 GemstonePanel.hide_arrows = @gs_settings["gemstone"]["hide_arrows"]
 GemstonePanel.collapsed = @gs_settings["gemstone"]["collapsed"]
+GemstonePanel.idle_pause_seconds = @gs_settings["gemstone"]["idle_pause_seconds"]
+GemstonePanel.last_hunt_kills = nil
+GemstonePanel.last_kill_at = nil
+GemstonePanel.last_hunt_start = nil
 GemstonePanel.gem_eligible = nil
 GemstonePanel.gem_fixated = nil
 GemstonePanel.status_requested = true
@@ -766,6 +773,7 @@ UpstreamHook.add(gs_upstream_hook_id, proc do |command|
       respond "Gemstone Panel: ;gemstone-tracker is not running"
       next(nil)
     end
+    GemstonePanel.clear_idle_auto_paused!
     $gemstone_tracker_restart_timer = true
     respond "Gemstone Panel: hunt timer restart requested"
     nil
@@ -776,10 +784,36 @@ UpstreamHook.add(gs_upstream_hook_id, proc do |command|
     end
     if $gemstone_tracker_pause_timer
       $gemstone_tracker_pause_timer = nil
+      GemstonePanel.clear_idle_auto_paused!
       respond "Gemstone Panel: hunt timer resumed"
     else
+      GemstonePanel.clear_idle_auto_paused!
       $gemstone_tracker_pause_timer = true
-      respond "Gemstone Panel: hunt timer paused"
+      respond "Gemstone Panel: hunt timer paused (manual)"
+    end
+    nil
+  when /\*gs\s+idle\s*\z/i
+    secs = GemstonePanel.idle_pause_seconds.to_i
+    if secs.positive?
+      respond "Gemstone Panel: idle auto-pause is #{secs}s (resume same hunt on next kill). *gs idle off to disable."
+    else
+      respond "Gemstone Panel: idle auto-pause is OFF. *gs idle 120 to enable."
+    end
+    nil
+  when /\*gs\s+idle\s+off\s*\z/i
+    GemstonePanel.set_idle_pause_seconds!(0)
+    respond "Gemstone Panel: idle auto-pause disabled"
+    nil
+  when /\*gs\s+idle\s+(\d+)\s*\z/i
+    secs = Regexp.last_match(1).to_i
+    if GemstonePanel.set_idle_pause_seconds!(secs)
+      if secs.positive?
+        respond "Gemstone Panel: idle auto-pause set to #{secs}s with no kill"
+      else
+        respond "Gemstone Panel: idle auto-pause disabled"
+      end
+    else
+      respond "Gemstone Panel: idle seconds must be 0 or greater"
     end
     nil
   when /\*gs\s+ignore\s+(\S+)\s*\z/i
@@ -861,6 +895,12 @@ echo "Gemstone Panel is active. Companion to Dreaven's ;gemstone-tracker. *gs he
 unless GemstonePanel.tracker_running?
   echo "Gemstone Panel: ;gemstone-tracker is not running. Start it for live hunt stats (required)."
 end
+idle_secs = GemstonePanel.idle_pause_seconds.to_i
+if idle_secs.positive?
+  echo "Gemstone Panel: idle auto-pause after #{idle_secs}s with no kill; next kill resumes."
+else
+  echo "Gemstone Panel: idle auto-pause is OFF (*gs idle 120 to enable)."
+end
 
 @gs_last_snapshot = GemstonePanel.snapshot
 
@@ -868,6 +908,13 @@ loop do
   if GemstonePanel.status_requested
     GemstonePanel.status_requested = false
     put "gem status"
+  end
+
+  case GemstonePanel.tick_idle_auto_pause!
+  when :paused
+    respond "Gemstone Panel: hunt timer auto-paused (#{GemstonePanel.idle_pause_seconds}s with no kill)"
+  when :resumed
+    respond "Gemstone Panel: hunt timer resumed (kill after idle pause)"
   end
 
   snapshot = GemstonePanel.snapshot
