@@ -798,7 +798,7 @@ UpstreamHook.add(gs_upstream_hook_id, proc do |command|
     if secs.positive?
       respond "Gemstone Panel: idle auto-pause is #{secs}s (resume same hunt on next kill). *gs idle off to disable."
     else
-      respond "Gemstone Panel: idle auto-pause is OFF. *gs idle 120 to enable."
+      respond "Gemstone Panel: idle auto-pause is OFF. *gs idle 60 to enable."
     end
     nil
   when /\*gs\s+idle\s+off\s*\z/i
@@ -900,7 +900,7 @@ idle_secs = GemstonePanel.idle_pause_seconds.to_i
 if idle_secs.positive?
   echo "Gemstone Panel: idle auto-pause after #{idle_secs}s with no kill; next kill resumes."
 else
-  echo "Gemstone Panel: idle auto-pause is OFF (*gs idle 120 to enable)."
+  echo "Gemstone Panel: idle auto-pause is OFF (*gs idle 60 to enable)."
 end
 
 @gs_last_snapshot = GemstonePanel.snapshot
