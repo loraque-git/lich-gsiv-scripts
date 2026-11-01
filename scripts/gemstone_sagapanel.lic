@@ -25,6 +25,9 @@
     *gs restart              - Reset the tracker hunt timer (tracker must
                                 be running). Also the Hunt "Restart" row.
     *gs pause                - Toggle the tracker hunt timer pause
+    *gs idle [seconds|off]   - Auto-pause hunt timer after this many seconds
+                                with no kill (default 120). Next kill resumes
+                                the same hunt. *gs idle off disables.
     *gs status               - Send GEM STATUS and refresh Available/Fixate
                                 lights (also runs on *gs refresh)
     *gs ignore <field>       - Hide a row
@@ -43,8 +46,9 @@
   Credits: gemstone-tracker by Dreaven
   Creator: loraque (loraque@gmail.com)
   Author: loraque (loraque@gmail.com)
-  Version: 0.3.3
+  Version: 0.4.0
   Recently changed:
+    0.4.0 - Auto-pause hunt timer after idle (default 120s no kill); resume same hunt on next kill (*gs idle)
     0.3.3 - No red hide-triangles; Available/Fixate/Tracker are labels
     0.3.2 - Available TRUE/FALSE; Fixate ON/OFF; parse "GEM FIXATE is active until..."
     0.3.1 - Header credits Dreaven / gemstone-tracker; tracker required
