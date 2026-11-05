@@ -1,0 +1,57 @@
+# quiet
+=begin
+  saga-scripts.lic  (managed by Saga - it is rewritten on each Via-Lich launch)
+
+  Feeds Saga's Lich Scripts panel. Once a second it reads Lich's list of running
+  scripts and, when the list changes, sends it to Saga as one protocol tag:
+
+    <sagaLichScripts char="%3B" list="bigshot:0,go2:1"/>
+
+  Each entry is name:paused, percent-encoded so a name can never break the tag.
+  Saga's parser consumes the tag, so nothing from this script reaches Story. The
+  first line of this file keeps Lich's own active and exited notices quiet too.
+
+  The list is sent again on every new client attach and every 30 seconds, so a
+  reconnect or a Saga window reload relearns it. Hidden scripts are left out,
+  matching ;list. Saga starts this via --start-scripts on every Via-Lich login.
+=end
+
+hide_me
+no_kill_all
+no_pause_all
+
+def saga_scripts_encode(text)
+  text.to_s.gsub(/[^A-Za-z0-9_.\/-]/) { |c| c.bytes.map { |b| format('%%%02X', b) }.join }
+end
+
+def saga_scripts_tag
+  me = Script.current
+  entries = Script.running.reject { |s| s.equal?(me) || s.name == 'shard-origin' }.map do |s|
+    "#{saga_scripts_encode(s.name)}:#{s.paused? ? 1 : 0}"
+  end
+  "<sagaLichScripts char=\"#{saga_scripts_encode($clean_lich_char)}\" list=\"#{entries.join(',')}\"/>"
+end
+
+# Every attach wraps a new socket in a new object, so its identity marks one
+# attach (the same test shard-origin uses for its playerID re-emit).
+def saga_scripts_client
+  return nil unless defined?($_DETACHABLE_CLIENT_) && $_DETACHABLE_CLIENT_
+  $_DETACHABLE_CLIENT_.alive? ? $_DETACHABLE_CLIENT_.object_id : nil
+end
+
+before_dying { _respond('<sagaLichScripts stopped="1"/>') }
+
+saga_scripts_sent = nil
+saga_scripts_served = nil
+saga_scripts_sent_at = Time.at(0)
+loop do
+  tag = saga_scripts_tag
+  client = saga_scripts_client
+  if tag != saga_scripts_sent || client != saga_scripts_served || Time.now - saga_scripts_sent_at >= 30
+    _respond(tag)
+    saga_scripts_sent = tag
+    saga_scripts_served = client
+    saga_scripts_sent_at = Time.now
+  end
+  sleep 1
+end
