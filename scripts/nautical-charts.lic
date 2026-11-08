@@ -66,7 +66,7 @@ def stop_audio
 end
 
 =begin
-	   Nautical-Charts Version: 1.2.7 (October 28, 2026)
+	   Nautical-Charts Version: 1.2.8 (November 7, 2026)
 	
 	   Usage: 
 	
@@ -102,6 +102,8 @@ end
                                     positions come from oceandb.json. The combat alert shows on both tabs.
                  October 28, 2026 - The ShowRoomID check handles any spacing, and sail2 and osacommander no longer
                                     turn ShowRoomID off while the charts are open.
+                 November 7, 2026 - Constants are no longer redefined on every run (no more "already initialized
+                                    constant" warnings); they only change when the script does.
 =end
 
 i_stand_alone
@@ -127,36 +129,54 @@ rescue LoadError => e
 end
 
 # ---------- CONFIG ----------
-JSON_PATH = File.join(MAP_DIR, 'OSAMaps', 'Database', 'oceandb.json')
-PNG_DIR   = File.join(MAP_DIR, 'OSAMaps', 'Maps')
-BG_DIR    = File.join(MAP_DIR, 'OSAMaps', 'Backgrounds')
-ICON_DIR  = File.join(MAP_DIR, 'OSAMaps', 'Icons')
+_osa_const = File.join(MAP_DIR, 'OSAMaps', 'Database', 'oceandb.json')
+JSON_PATH = _osa_const unless defined?(JSON_PATH) && JSON_PATH == _osa_const
+_osa_const   = File.join(MAP_DIR, 'OSAMaps', 'Maps')
+PNG_DIR = _osa_const unless defined?(PNG_DIR) && PNG_DIR == _osa_const
+_osa_const    = File.join(MAP_DIR, 'OSAMaps', 'Backgrounds')
+BG_DIR = _osa_const unless defined?(BG_DIR) && BG_DIR == _osa_const
+_osa_const  = File.join(MAP_DIR, 'OSAMaps', 'Icons')
+ICON_DIR = _osa_const unless defined?(ICON_DIR) && ICON_DIR == _osa_const
 
 # --- WORLD MAP CONFIG ---
 # world_map.png lives with the sea maps. Every ocean room sits on one square of its grid.
 # The grid was measured on the full-size (2951 px wide) image; it scales with whatever width
 # the downloaded file actually has, as long as the proportions are kept and nothing is cropped.
-WORLD_MAP_FILE    = 'world_map.png'
-WORLD_REF_WIDTH   = 2951.0
-WORLD_REF_ORIGIN  = [50.0, 25.0]   # pixel position of grid square (0,0) at that width
-WORLD_REF_CELL    = 25.0           # square size at that width
-WORLD_ANCHOR_ROOM = '7116900'      # northernmost room of The Frostmain...
-WORLD_ANCHOR_CELL = [17, 0]        # ...and the grid square it sits on
-WORLD_DIRS = { 'n' => [0, -1], 's' => [0, 1], 'e' => [1, 0], 'w' => [-1, 0],
+_osa_const    = 'world_map.png'
+WORLD_MAP_FILE = _osa_const unless defined?(WORLD_MAP_FILE) && WORLD_MAP_FILE == _osa_const
+_osa_const   = 2951.0
+WORLD_REF_WIDTH = _osa_const unless defined?(WORLD_REF_WIDTH) && WORLD_REF_WIDTH == _osa_const
+_osa_const  = [50.0, 25.0]   # pixel position of grid square (0,0) at that width
+WORLD_REF_ORIGIN = _osa_const unless defined?(WORLD_REF_ORIGIN) && WORLD_REF_ORIGIN == _osa_const
+_osa_const    = 25.0           # square size at that width
+WORLD_REF_CELL = _osa_const unless defined?(WORLD_REF_CELL) && WORLD_REF_CELL == _osa_const
+_osa_const = '7116900'      # northernmost room of The Frostmain...
+WORLD_ANCHOR_ROOM = _osa_const unless defined?(WORLD_ANCHOR_ROOM) && WORLD_ANCHOR_ROOM == _osa_const
+_osa_const = [17, 0]        # ...and the grid square it sits on
+WORLD_ANCHOR_CELL = _osa_const unless defined?(WORLD_ANCHOR_CELL) && WORLD_ANCHOR_CELL == _osa_const
+_osa_const = { 'n' => [0, -1], 's' => [0, 1], 'e' => [1, 0], 'w' => [-1, 0],
                'ne' => [1, -1], 'nw' => [-1, -1], 'se' => [1, 1], 'sw' => [-1, 1] }
-WORLD_SCALE_MIN = 0.25
-WORLD_SCALE_MAX = 2.0
+WORLD_DIRS = _osa_const unless defined?(WORLD_DIRS) && WORLD_DIRS == _osa_const
+_osa_const = 0.25
+WORLD_SCALE_MIN = _osa_const unless defined?(WORLD_SCALE_MIN) && WORLD_SCALE_MIN == _osa_const
+_osa_const = 2.0
+WORLD_SCALE_MAX = _osa_const unless defined?(WORLD_SCALE_MAX) && WORLD_SCALE_MAX == _osa_const
 
 # --- AUDIO CONFIG ---
-SAILING_SOUND  = File.join(DATA_DIR, 'Sounds', 'ocean_waves.mp3')
-PORT_SOUND     = File.join(DATA_DIR, 'Sounds', 'seagulls.mp3')
-COMBAT_SOUND   = File.join(DATA_DIR, 'Sounds', 'combat_alert.mp3')
+_osa_const  = File.join(DATA_DIR, 'Sounds', 'ocean_waves.mp3')
+SAILING_SOUND = _osa_const unless defined?(SAILING_SOUND) && SAILING_SOUND == _osa_const
+_osa_const     = File.join(DATA_DIR, 'Sounds', 'seagulls.mp3')
+PORT_SOUND = _osa_const unless defined?(PORT_SOUND) && PORT_SOUND == _osa_const
+_osa_const   = File.join(DATA_DIR, 'Sounds', 'combat_alert.mp3')
+COMBAT_SOUND = _osa_const unless defined?(COMBAT_SOUND) && COMBAT_SOUND == _osa_const
 $current_audio_pid = nil
 $last_audio_state = nil
 
 # --- COMBAT ALERT CONFIG ---
-COMBAT_REGEX = /A distant thudding of the drums of war acts as a harbinger for .* ripping|As the water falls,\ .*\ materializes next to your ship!|.*carves through the ocean toward your .*|A sudden booming of cannon fire erupts from the enemy/
-COMBAT_COOLDOWN = 300 # 5 minutes in seconds
+_osa_const = /A distant thudding of the drums of war acts as a harbinger for .* ripping|As the water falls,\ .*\ materializes next to your ship!|.*carves through the ocean toward your .*|A sudden booming of cannon fire erupts from the enemy/
+COMBAT_REGEX = _osa_const unless defined?(COMBAT_REGEX) && COMBAT_REGEX == _osa_const
+_osa_const = 300 # 5 minutes in seconds
+COMBAT_COOLDOWN = _osa_const unless defined?(COMBAT_COOLDOWN) && COMBAT_COOLDOWN == _osa_const
 $combat_flash_active = false
 $combat_draw = nil
 $combat_gtk_overlay = nil
@@ -164,18 +184,23 @@ $combat_pulse = 0.0
 $combat_pulse_dir = 1
 $combat_last_dismissed = nil
 $mac_settings_win = nil
-PORT_SCALE = 0.25  
-SEA_SCALE  = 0.50  
+_osa_const = 0.25  
+PORT_SCALE = _osa_const unless defined?(PORT_SCALE) && PORT_SCALE == _osa_const
+_osa_const  = 0.50  
+SEA_SCALE = _osa_const unless defined?(SEA_SCALE) && SEA_SCALE == _osa_const
 
 # ----------------------
-SHIP_BASE_PX = 40
-CLICK_THRESHOLD = 15 
+_osa_const = 40
+SHIP_BASE_PX = _osa_const unless defined?(SHIP_BASE_PX) && SHIP_BASE_PX == _osa_const
+_osa_const = 15 
+CLICK_THRESHOLD = _osa_const unless defined?(CLICK_THRESHOLD) && CLICK_THRESHOLD == _osa_const
 
 # --- PORT CONFIGURATION ---
-PORT_BG_DIR = File.join(MAP_DIR, 'OSAMaps', 'Ports')
+_osa_const = File.join(MAP_DIR, 'OSAMaps', 'Ports')
+PORT_BG_DIR = _osa_const unless defined?(PORT_BG_DIR) && PORT_BG_DIR == _osa_const
 FileUtils.mkdir_p(PORT_BG_DIR) unless Dir.exist?(PORT_BG_DIR)
 
-PORT_RANGES = {
+_osa_const = {
   (7122001..7122025) => "wehnimers-landing-port.png",
   (7124001..7124025) => "solhaven-port.png",
   (7125001..7125025) => "rivers-rest-port.png",
@@ -189,43 +214,73 @@ PORT_RANGES = {
   (14150001..14150025) => "nielira-harbor-port.png",
   (7136002..7136026) => "ta-vaalor-port.png"
 }
+PORT_RANGES = _osa_const unless defined?(PORT_RANGES) && PORT_RANGES == _osa_const
 
 # ---------- UPDATE CONFIG ----------
-MAP_GIT_USER  = 'jmbreitfeld'
-MAP_GIT_REPO  = 'OSAMaps'
-MAP_GIT_PATH  = '' 
-LOCAL_MAP_DIR = File.join(MAP_DIR, 'OSAMaps', 'Maps')
+_osa_const  = 'jmbreitfeld'
+MAP_GIT_USER = _osa_const unless defined?(MAP_GIT_USER) && MAP_GIT_USER == _osa_const
+_osa_const  = 'OSAMaps'
+MAP_GIT_REPO = _osa_const unless defined?(MAP_GIT_REPO) && MAP_GIT_REPO == _osa_const
+_osa_const  = '' 
+MAP_GIT_PATH = _osa_const unless defined?(MAP_GIT_PATH) && MAP_GIT_PATH == _osa_const
+_osa_const = File.join(MAP_DIR, 'OSAMaps', 'Maps')
+LOCAL_MAP_DIR = _osa_const unless defined?(LOCAL_MAP_DIR) && LOCAL_MAP_DIR == _osa_const
 
-BG_GIT_USER  = 'jmbreitfeld'
-BG_GIT_REPO  = 'OSA-Backgrounds'
-BG_GIT_PATH  = ''
-LOCAL_BG_DIR = File.join(MAP_DIR, 'OSAMaps', 'Backgrounds')
+_osa_const  = 'jmbreitfeld'
+BG_GIT_USER = _osa_const unless defined?(BG_GIT_USER) && BG_GIT_USER == _osa_const
+_osa_const  = 'OSA-Backgrounds'
+BG_GIT_REPO = _osa_const unless defined?(BG_GIT_REPO) && BG_GIT_REPO == _osa_const
+_osa_const  = ''
+BG_GIT_PATH = _osa_const unless defined?(BG_GIT_PATH) && BG_GIT_PATH == _osa_const
+_osa_const = File.join(MAP_DIR, 'OSAMaps', 'Backgrounds')
+LOCAL_BG_DIR = _osa_const unless defined?(LOCAL_BG_DIR) && LOCAL_BG_DIR == _osa_const
 
-JSON_GIT_USER  = 'jmbreitfeld'
-JSON_GIT_REPO  = 'OSA-Ocean-Database'
-JSON_GIT_PATH  = ''
-LOCAL_JSON_DIR = File.join(MAP_DIR, 'OSAMaps', 'Database')
+_osa_const  = 'jmbreitfeld'
+JSON_GIT_USER = _osa_const unless defined?(JSON_GIT_USER) && JSON_GIT_USER == _osa_const
+_osa_const  = 'OSA-Ocean-Database'
+JSON_GIT_REPO = _osa_const unless defined?(JSON_GIT_REPO) && JSON_GIT_REPO == _osa_const
+_osa_const  = ''
+JSON_GIT_PATH = _osa_const unless defined?(JSON_GIT_PATH) && JSON_GIT_PATH == _osa_const
+_osa_const = File.join(MAP_DIR, 'OSAMaps', 'Database')
+LOCAL_JSON_DIR = _osa_const unless defined?(LOCAL_JSON_DIR) && LOCAL_JSON_DIR == _osa_const
 
-ICONS_GIT_USER  = 'jmbreitfeld'
-ICONS_GIT_REPO  = 'OSA-Ship-Icons'
-ICONS_GIT_PATH  = ''
-LOCAL_ICONS_DIR = File.join(MAP_DIR, 'OSAMaps', 'Icons')
+_osa_const  = 'jmbreitfeld'
+ICONS_GIT_USER = _osa_const unless defined?(ICONS_GIT_USER) && ICONS_GIT_USER == _osa_const
+_osa_const  = 'OSA-Ship-Icons'
+ICONS_GIT_REPO = _osa_const unless defined?(ICONS_GIT_REPO) && ICONS_GIT_REPO == _osa_const
+_osa_const  = ''
+ICONS_GIT_PATH = _osa_const unless defined?(ICONS_GIT_PATH) && ICONS_GIT_PATH == _osa_const
+_osa_const = File.join(MAP_DIR, 'OSAMaps', 'Icons')
+LOCAL_ICONS_DIR = _osa_const unless defined?(LOCAL_ICONS_DIR) && LOCAL_ICONS_DIR == _osa_const
 
-PORTS_GIT_USER  = 'jmbreitfeld'
-PORTS_GIT_REPO  = 'OSA-Ports'
-PORTS_GIT_PATH  = ''
-LOCAL_PORTS_DIR = File.join(MAP_DIR, 'OSAMaps', 'Ports')
+_osa_const  = 'jmbreitfeld'
+PORTS_GIT_USER = _osa_const unless defined?(PORTS_GIT_USER) && PORTS_GIT_USER == _osa_const
+_osa_const  = 'OSA-Ports'
+PORTS_GIT_REPO = _osa_const unless defined?(PORTS_GIT_REPO) && PORTS_GIT_REPO == _osa_const
+_osa_const  = ''
+PORTS_GIT_PATH = _osa_const unless defined?(PORTS_GIT_PATH) && PORTS_GIT_PATH == _osa_const
+_osa_const = File.join(MAP_DIR, 'OSAMaps', 'Ports')
+LOCAL_PORTS_DIR = _osa_const unless defined?(LOCAL_PORTS_DIR) && LOCAL_PORTS_DIR == _osa_const
 
-APPICON_GIT_USER  = 'jmbreitfeld'
-APPICON_GIT_REPO  = 'OSA-Script-Icons'
-APPICON_GIT_PATH  = ''
-LOCAL_APPICON_DIR = File.join(MAP_DIR, 'OSAMaps', 'ScriptIcons')
-APPICON_FILE      = File.join(LOCAL_APPICON_DIR, 'nautical_charts.png')
+_osa_const  = 'jmbreitfeld'
+APPICON_GIT_USER = _osa_const unless defined?(APPICON_GIT_USER) && APPICON_GIT_USER == _osa_const
+_osa_const  = 'OSA-Script-Icons'
+APPICON_GIT_REPO = _osa_const unless defined?(APPICON_GIT_REPO) && APPICON_GIT_REPO == _osa_const
+_osa_const  = ''
+APPICON_GIT_PATH = _osa_const unless defined?(APPICON_GIT_PATH) && APPICON_GIT_PATH == _osa_const
+_osa_const = File.join(MAP_DIR, 'OSAMaps', 'ScriptIcons')
+LOCAL_APPICON_DIR = _osa_const unless defined?(LOCAL_APPICON_DIR) && LOCAL_APPICON_DIR == _osa_const
+_osa_const      = File.join(LOCAL_APPICON_DIR, 'nautical_charts.png')
+APPICON_FILE = _osa_const unless defined?(APPICON_FILE) && APPICON_FILE == _osa_const
 
-SOUNDS_GIT_USER  = 'jmbreitfeld'
-SOUNDS_GIT_REPO  = 'OSA-Ocean-Sounds'
-SOUNDS_GIT_PATH  = ''
-LOCAL_SOUNDS_DIR = File.join(DATA_DIR, 'Sounds')
+_osa_const  = 'jmbreitfeld'
+SOUNDS_GIT_USER = _osa_const unless defined?(SOUNDS_GIT_USER) && SOUNDS_GIT_USER == _osa_const
+_osa_const  = 'OSA-Ocean-Sounds'
+SOUNDS_GIT_REPO = _osa_const unless defined?(SOUNDS_GIT_REPO) && SOUNDS_GIT_REPO == _osa_const
+_osa_const  = ''
+SOUNDS_GIT_PATH = _osa_const unless defined?(SOUNDS_GIT_PATH) && SOUNDS_GIT_PATH == _osa_const
+_osa_const = File.join(DATA_DIR, 'Sounds')
+LOCAL_SOUNDS_DIR = _osa_const unless defined?(LOCAL_SOUNDS_DIR) && LOCAL_SOUNDS_DIR == _osa_const
 # --- PERSISTENT SETTINGS ---
 UserVars.sea_charts ||= {}
 $show_background = UserVars.sea_charts[:show_bg].nil? ? true : UserVars.sea_charts[:show_bg]
