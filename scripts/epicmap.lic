@@ -1,0 +1,215 @@
+=begin
+  epicmap.lic - character tracking and local server for Elanthia Epic Map
+
+  Usage:
+    ;epicmap              Start tracking and open the map
+    ;epicmap noopen       Start tracking without opening a browser
+    ;epicmap port=7444    Use a different local port
+    ;epicmap dir=C:\path  Use a different map directory
+    ;kill epicmap         Stop tracking
+
+  First character hosts the map on 127.0.0.1. The others write
+  their positions to data/epicmap. This reads your room; it does not move you.
+
+      author: Vaelzhar
+        game: Gemstone
+        tags: mapping, map, live, tracking, utility
+     version: 1.2.1
+=end
+
+require 'json'
+require 'socket'
+require 'fileutils'
+require 'uri'
+
+module EpicMap
+  VERSION   = '1.2.1'
+  TRAIL_MAX = 60
+  STALE_SEC = 180
+
+  def self.lich_root
+    defined?(LICH_DIR) ? LICH_DIR : Dir.pwd
+  end
+
+  def self.data_root
+    defined?(DATA_DIR) ? DATA_DIR : File.join(lich_root, 'data')
+  end
+
+  def self.char_name
+    n = (defined?(XMLData) && XMLData.respond_to?(:name)) ? XMLData.name.to_s : ''
+    n = Char.name.to_s if n.empty? && defined?(Char)
+    n.empty? ? 'Unknown' : n
+  end
+
+  MIME = {
+    '.html' => 'text/html; charset=utf-8', '.js' => 'application/javascript; charset=utf-8',
+    '.css' => 'text/css; charset=utf-8', '.json' => 'application/json; charset=utf-8',
+    '.png' => 'image/png', '.jpg' => 'image/jpeg', '.jpeg' => 'image/jpeg', '.gif' => 'image/gif',
+    '.webp' => 'image/webp', '.svg' => 'image/svg+xml', '.ico' => 'image/x-icon', '.txt' => 'text/plain; charset=utf-8'
+  }.freeze
+
+  class Tracker
+    attr_reader :file
+
+    def initialize(dir, name)
+      FileUtils.mkdir_p(dir)
+      @file  = File.join(dir, "pos_#{name.gsub(/[^A-Za-z0-9_-]/, '_')}.json")
+      @name  = name
+      @trail = []
+      @last  = nil
+    end
+
+    # Called every tick; writes only when the room changes (or every 30 s as a heartbeat).
+    def update(room, force = false)
+      return if room.nil?
+      id = room.id
+      return unless force || id != @last
+      @trail << @last if @last && id != @last
+      @trail.shift while @trail.size > TRAIL_MAX
+      @last = id
+      title = Array(room.title).first.to_s
+      data = { 'name' => @name, 'id' => id, 'title' => title, 'ts' => Time.now.to_i, 'trail' => @trail }
+      tmp = "#{@file}.tmp"
+      File.write(tmp, JSON.generate(data))
+      File.rename(tmp, @file) rescue (File.write(@file, JSON.generate(data)); File.delete(tmp) rescue nil)
+    end
+
+    def remove
+      File.delete(@file) if File.exist?(@file)
+    rescue StandardError
+      nil
+    end
+  end
+
+  class Server
+    def initialize(root, posdir, port, host = nil)
+      @host   = host
+      @root   = File.expand_path(root)
+      @posdir = posdir
+      @port   = port
+    end
+
+    def start
+      @srv = TCPServer.new('127.0.0.1', @port)
+      @thread = Thread.new do
+        loop do
+          client = @srv.accept
+          Thread.new(client) { |c| handle(c) }
+        rescue IOError, Errno::EBADF
+          break
+        rescue StandardError
+          next
+        end
+      end
+      true
+    rescue Errno::EADDRINUSE, Errno::EACCES
+      false
+    end
+
+    def stop
+      @srv&.close
+      @thread&.kill
+    rescue StandardError
+      nil
+    end
+
+    def positions
+      now = Time.now.to_i
+      Dir.glob(File.join(@posdir, 'pos_*.json')).map do |f|
+        d = JSON.parse(File.read(f)) rescue nil
+        d if d && (now - d['ts'].to_i) < STALE_SEC
+      end.compact
+    end
+
+    def handle(c)
+      line = c.gets.to_s
+      method, target = line.split(' ')
+      while (h = c.gets) && h != "\r\n"; end
+      return reply(c, 405, 'text/plain', 'GET only') unless method == 'GET'
+      path = URI.decode_www_form_component(target.to_s.split('?').first.to_s)
+      if path == '/api/pos'
+        body = JSON.generate('chars' => positions, 'host' => @host, 'server' => "epicmap #{VERSION}", 'ts' => Time.now.to_i)
+        return reply(c, 200, MIME['.json'], body, 'Cache-Control' => 'no-store')
+      end
+      path = '/index.html' if path == '/' || path.empty?
+      full = File.expand_path(File.join(@root, path))
+      unless full.start_with?(@root + File::SEPARATOR) && File.file?(full)
+        return reply(c, 404, 'text/plain', 'not found')
+      end
+      reply(c, 200, MIME[File.extname(full).downcase] || 'application/octet-stream', File.binread(full))
+    rescue StandardError
+      nil
+    ensure
+      c.close rescue nil
+    end
+
+    def reply(c, code, type, body, extra = {})
+      msg = { 200 => 'OK', 404 => 'Not Found', 405 => 'Method Not Allowed' }[code]
+      head = "HTTP/1.1 #{code} #{msg}\r\nContent-Type: #{type}\r\nContent-Length: #{body.bytesize}\r\nConnection: close\r\n"
+      extra.each { |k, v| head << "#{k}: #{v}\r\n" }
+      c.write(head + "\r\n")
+      c.write(body)
+    end
+  end
+
+  def self.parse_args(vars)
+    opts = { port: 7337, dir: File.join(lich_root, 'EpicMap'), open: true }
+    Array(vars).drop(1).each do |a|
+      case a.to_s
+      when /^port=(\d+)$/i then opts[:port] = $1.to_i
+      when /^dir=(.+)$/i   then opts[:dir] = $1
+      when /^open$/i       then opts[:open] = true
+      when /^noopen$/i     then opts[:open] = false
+      end
+    end
+    opts
+  end
+
+  def self.run(vars)
+    opts   = parse_args(vars)
+    posdir = File.join(data_root, 'epicmap')
+    name   = char_name
+    tracker = Tracker.new(posdir, name)
+    server  = Server.new(opts[:dir], posdir, opts[:port], name)
+    hosting = File.exist?(File.join(opts[:dir], 'index.html')) && server.start
+    url = "http://localhost:#{opts[:port]}"
+    if hosting
+      respond "[epicmap] Live map ready: #{url}  (tracking #{name})"
+    elsif !File.exist?(File.join(opts[:dir], 'index.html'))
+      respond "[epicmap] No index.html in #{opts[:dir]} - copy the Epic Map folder there (or use dir=...). Tracking #{name} anyway."
+    else
+      respond "[epicmap] Port #{opts[:port]} already hosted (another character?). Tracking #{name} - it will show on that map."
+    end
+    if opts[:open] && hosting
+      Thread.new do
+        begin
+          if RUBY_PLATFORM =~ /mswin|mingw|cygwin/i
+            system('cmd', '/c', 'start', '', url)
+          elsif RUBY_PLATFORM =~ /darwin/i
+            system('open', url)
+          else
+            system('xdg-open', url)
+          end
+        rescue StandardError
+          nil
+        end
+      end
+      respond "[epicmap] Opening the map in your browser... (use ;epicmap noopen to skip)"
+    end
+    before_dying { server.stop; tracker.remove }
+    last_count = -1
+    last_beat  = Time.now
+    loop do
+      count = (XMLData.room_count rescue nil)
+      if count != last_count || (Time.now - last_beat) > 30
+        room = (Room.current rescue nil)
+        tracker.update(room, (Time.now - last_beat) > 30)
+        last_beat = Time.now if (Time.now - last_beat) > 30
+        last_count = count
+      end
+      sleep 0.25
+    end
+  end
+end
+
+EpicMap.run(defined?(Script) && Script.current ? Script.current.vars : []) unless defined?(EPICMAP_TEST)
